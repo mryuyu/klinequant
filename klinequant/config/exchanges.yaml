@@ -1,0 +1,55 @@
+# 交易所连接配置
+# 支持多交易所同时连接
+
+exchanges:
+  binance:
+    enabled: true
+    name: "Binance"
+    # API 密钥（生产环境使用环境变量覆盖）
+    api_key: "${BINANCE_API_KEY}"
+    api_secret: "${BINANCE_API_SECRET}"
+    # 网络配置
+    rest_base: "https://api.binance.com"
+    ws_base: "wss://stream.binance.com:9443/ws"
+    # 请求限制
+    rate_limit: 1200  # 请求/分钟
+    recv_window: 5000  # 毫秒
+    # 测试网（开发环境）
+    testnet:
+      enabled: true
+      rest_base: "https://testnet.binance.vision"
+      ws_base: "wss://testnet.binance.vision/ws"
+
+  okx:
+    enabled: false
+    name: "OKX"
+    api_key: "${OKX_API_KEY}"
+    api_secret: "${OKX_API_SECRET}"
+    passphrase: "${OKX_PASSPHRASE}"
+    rest_base: "https://www.okx.com"
+    ws_base: "wss://ws.okx.com:8443/ws/v5/public"
+    testnet:
+      enabled: true
+      rest_base: "https://www.okx.com"
+      ws_base: "wss://wspap.okx.com:8443/ws/v5/public"
+
+# ─── 订阅品种 ───
+subscriptions:
+  binance:
+    symbols:
+      - "BTCUSDT"
+      - "ETHUSDT"
+      - "BNBUSDT"
+      - "SOLUSDT"
+      - "ARBUSDT"
+    # 订阅数据类型
+    streams:
+      - "kline_1m"
+      - "kline_5m"
+      - "kline_1h"
+      - "ticker"
+      - "depth"
+
+  okx:
+    symbols: []
+    streams: []

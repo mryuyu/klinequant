@@ -1,0 +1,43 @@
+# ─── Python ───
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ─── Node ───
+node_modules/
+dist/
+
+# ─── 密钥与环境变量（严禁提交）───
+.env
+.env.local
+*.pem
+*.key
+secrets/
+
+# ─── 数据与运行时 ───
+*.duckdb
+*.duckdb.wal
+logs/
+*.log
+*.pid
+
+# ─── 发布产物（由 build_release.ps1 生成）───
+release/
+
+# ─── 测试产物 ───
+test-results/
+playwright-report/
+playwright/.cache/
+
+# ─── IDE / 工具 ───
+.idea/
+.vscode/
+.qoder/
+
+# ─── OS ───
+Thumbs.db
+.DS_Store
+desktop.ini
