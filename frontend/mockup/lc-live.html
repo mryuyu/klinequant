@@ -101,6 +101,7 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .ctx-row { display:flex; justify-content:space-between; align-items:center; gap:14px; padding:5px 10px; color:var(--text-sub); }
 .ctx-input { width:70px; background:var(--bg-base); border:1px solid var(--border); color:var(--text); border-radius:4px; font-size:12px; padding:3px 6px; outline:none; font-family:var(--font-ui); }
 .ctx-input:focus { border-color:var(--accent); }
+.ctx-row input[type="checkbox"] { width:14px; height:14px; accent-color:var(--accent); cursor:pointer; }
 .watermark { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:40px; font-weight:800; color:rgba(209,212,220,0.05); pointer-events:none; letter-spacing:4px; z-index:0; }
 
 /* 底部持仓（高度可拖拽 + 可折叠隐藏） */
@@ -187,6 +188,15 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .modal-btns button { flex:1; padding:8px 0; border-radius:6px; border:none; cursor:pointer; font-size:13px; }
 .m-cancel { background:var(--bg-elevated); color:var(--text); }
 .m-ok { background:var(--accent); color:#0b0e14; font-weight:700; }
+.m-remove { background:rgba(246,70,93,0.10); color:var(--down); border:1px solid rgba(246,70,93,0.35); }
+.m-remove:hover { background:rgba(246,70,93,0.22); }
+/* 添加指标选择面板 */
+.pick-row { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-radius:6px; cursor:pointer; }
+.pick-row:hover { background:var(--bg-elevated); }
+.pick-row .pk-name { font-weight:600; font-size:13px; }
+.pick-row .pk-desc { font-size:11px; color:var(--text-sub); margin-top:1px; }
+.pick-row .pk-add { color:var(--accent); font-size:15px; flex:none; margin-left:10px; }
+.pk-group { font-size:11px; color:var(--text-sub); padding:6px 2px 4px; }
 
 /* 状态栏 */
 .statusbar { display:flex; align-items:center; gap:16px; background:var(--bg-panel); border-top:1px solid var(--border); padding:0 16px; font-size:11px; color:var(--text-sub); }
@@ -239,7 +249,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
         <button class="tf-btn" data-tf="1d">日线</button>
         <div class="toolbar-sep"></div>
         <button class="tool-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20L20 4"/></svg>画线</button>
-        <button class="tool-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>指标</button>
+        <button class="tool-btn" id="ind-btn" title="添加指标"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>指标</button>
         <div style="flex:1"></div>
         <button class="tool-btn" id="fit-btn" title="右键图表可设置 K 线数量 / 右侧留白">自动适配</button>
       </div>
@@ -251,40 +261,12 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
             <span class="muted">O</span><span id="lg-o">--</span><span class="muted">H</span><span id="lg-h">--</span>
             <span class="muted">L</span><span id="lg-l">--</span><span class="muted">C</span><span id="lg-c">--</span>
           </div>
-          <div class="legend-row">
-            <span style="color:var(--ma7)"><span id="lg-ma7-label">MA7:</span> <b id="lg-ma7">--</b></span>
-            <span style="color:var(--ma25)"><span id="lg-ma25-label">MA25:</span> <b id="lg-ma25">--</b></span>
-            <button class="gear-btn" data-ind="ma" title="调整 MA 参数"></button>
-            <span style="color:#e57373"><span id="lg-boll-label">BOLL(20,2)</span> U <b id="lg-bu">--</b></span>
-            <span style="color:#90a4ae">M <b id="lg-bm">--</b></span>
-            <span style="color:#4dd0e1">L <b id="lg-bl">--</b></span>
-            <button class="gear-btn" data-ind="boll" title="调整 BOLL 参数"></button>
+          <div class="legend-row" id="lg-main-row">
+            <span id="lg-main-items"></span>
             <span class="muted" id="lg-vol">VOL: --</span>
           </div>
         </div>
-        <div class="legend mono" id="macd-legend">
-          <div class="legend-row">
-            <span class="muted" id="lg-macd-label">MACD(12,26,9)</span>
-            <span style="color:#b39ddb">DIF <b id="lg-dif">--</b></span>
-            <span style="color:#f5c542">DEA <b id="lg-dea">--</b></span>
-            <button class="gear-btn" data-ind="macd" title="调整 MACD 参数"></button>
-          </div>
-        </div>
-        <div class="legend mono" id="kd-legend">
-          <div class="legend-row">
-            <span class="muted" id="lg-kd-label">KD(9,3)</span>
-            <span style="color:#42a5f5">K <b id="lg-k">--</b></span>
-            <span style="color:#ff9800">D <b id="lg-d">--</b></span>
-            <button class="gear-btn" data-ind="kd" title="调整 KD 参数"></button>
-          </div>
-        </div>
-        <div class="legend mono" id="rsi-legend">
-          <div class="legend-row">
-            <span class="muted" id="lg-rsi-label">RSI(14)</span>
-            <span style="color:#26c6da">RSI <b id="lg-rsi">--</b></span>
-            <button class="gear-btn" data-ind="rsi" title="调整 RSI 参数"></button>
-          </div>
-        </div>
+        <div id="ind-legends"></div>
         <div id="chart"></div>
       </div>
 
@@ -387,8 +369,20 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
       <h3 id="ind-modal-title">指标参数</h3>
       <div id="ind-fields"></div>
       <div class="modal-btns">
+        <button class="m-remove" id="ind-remove">移除</button>
         <button class="m-cancel" id="ind-cancel">取消</button>
         <button class="m-ok" id="ind-ok">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 添加指标选择面板（工具栏"指标"按钮触发） -->
+  <div class="modal-mask" id="ind-picker">
+    <div class="modal" style="width:300px">
+      <h3>添加指标</h3>
+      <div id="ind-pick-list"></div>
+      <div class="modal-btns">
+        <button class="m-cancel" id="pick-cancel">关闭</button>
       </div>
     </div>
   </div>
@@ -403,6 +397,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
   <div class="ctx-title">图表设置</div>
   <div class="ctx-row"><span>K线总量上限</span><input id="ctx-kc" class="ctx-input" type="number" min="100" max="5000" step="100"></div>
   <div class="ctx-row"><span>右侧留白</span><input id="ctx-ro" class="ctx-input" type="number" min="0" max="100"></div>
+  <div class="ctx-row"><span>成交量</span><input id="ctx-vol" type="checkbox" checked></div>
 </div>
 
 <script src="lwc.js"></script>
@@ -418,6 +413,7 @@ let klineCount = 1000;          // K 线总量上限：可自定义，默认 100
 const INIT_BARS = 300;          // 首屏加载根数（懒加载分页）
 const PAGE_SIZE = 1000;         // 每次翻页拉取根数（币安单次上限）
 let curRightOffset = 20;        // 图表右侧预留空 K 线数：可调，默认 20
+let showVol = true;             // 成交量显示开关（右键菜单切换，持久化）
 const lastPrices = {};          // symbol -> 最新价（供持仓表/品种列表用）
 function setSb(txt) { document.getElementById('sb-status').textContent = txt; }
 
@@ -436,6 +432,7 @@ if (savedLayout) {
   if (savedLayout.tf && TF_VALID.includes(savedLayout.tf)) curTf = savedLayout.tf;
   if (savedLayout.symbol) curSymbol = savedLayout.symbol;
   if (savedLayout.posCollapsed) document.getElementById('pos-bar')?.classList.add('collapsed');
+  if (typeof savedLayout.showVol === 'boolean') showVol = savedLayout.showVol;
 }
 function saveLayout() {
   try {
@@ -449,7 +446,8 @@ function saveLayout() {
       klineCount,
       tf: curTf,
       symbol: curSymbol,
-      indParams,
+      indLayout,
+      showVol,
     }));
   } catch (e) {}
 }
@@ -460,18 +458,14 @@ function saveLayout() {
   document.querySelector('.watermark').textContent = curSymbol;
 }
 
-/* ═══ 指标参数（结构化配置，随布局持久化，确认后重算全量指标） ═══ */
-const IND_DEFAULTS = {
-  ma:   { short: 7, long: 25 },
-  boll: { period: 20, mult: 2 },
-  macd: { fast: 12, slow: 26, signal: 9 },
-  kd:   { n: 9, m: 3 },
-  rsi:  { period: 14 },
+/* ═══ 指标目录 + indLayout（有序实例列表：布局持久化/渲染/参数弹窗同源，对齐后端 display_meta 契约） ═══ */
+const IND_CATALOG = {
+  ma:   { title: 'MA 均线',        pane: 'main', desc: '双均线（短/长周期）',        defaults: { short: 7, long: 25 } },
+  boll: { title: 'BOLL 布林带',    pane: 'main', desc: '中轨 ± N 倍标准差',          defaults: { period: 20, mult: 2 } },
+  macd: { title: 'MACD',           pane: 'sub',  desc: 'DIF/DEA 与柱状图', h: 120, defaults: { fast: 12, slow: 26, signal: 9 } },
+  kd:   { title: 'KD 随机指标',    pane: 'sub',  desc: 'K/D 超买超卖',       h: 100, defaults: { n: 9, m: 3 } },
+  rsi:  { title: 'RSI 相对强弱',   pane: 'sub',  desc: 'Wilder 平滑 RSI',    h: 100, defaults: { period: 14 } },
 };
-let indParams = JSON.parse(JSON.stringify(IND_DEFAULTS));
-if (savedLayout && savedLayout.indParams) {
-  for (const k in IND_DEFAULTS) Object.assign(indParams[k], savedLayout.indParams[k] || {});
-}
 const IND_META = {
   ma:   { title: 'MA 均线参数', fields: [
     { key: 'short', label: '短周期', min: 2, max: 'kline' },
@@ -491,6 +485,30 @@ const IND_META = {
 };
 /* 周期类参数上限动态跟随 K 线总量上限（klineCount，右键菜单可调 100~5000） */
 function fieldMax(f) { return f.max === 'kline' ? klineCount : f.max; }
+/* 默认布局（与旧版固定集合一致） */
+const IND_LAYOUT_DEFAULT = [
+  { type: 'ma',   params: { short: 7, long: 25 } },
+  { type: 'boll', params: { period: 20, mult: 2 } },
+  { type: 'macd', params: { fast: 12, slow: 26, signal: 9 } },
+  { type: 'kd',   params: { n: 9, m: 3 } },
+  { type: 'rsi',  params: { period: 14 } },
+];
+/* 加载 indLayout：新格式直接用；旧格式 indParams（固定键集合）迁移为实例列表 */
+let indLayout = [];
+if (savedLayout && Array.isArray(savedLayout.indLayout) && savedLayout.indLayout.every(x => IND_CATALOG[x.type])) {
+  indLayout = savedLayout.indLayout.map(x => ({ type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params } }));
+} else {
+  indLayout = IND_LAYOUT_DEFAULT.map(x => ({ type: x.type, params: { ...x.params } }));
+  if (savedLayout && savedLayout.indParams) {
+    for (const it of indLayout) Object.assign(it.params, savedLayout.indParams[it.type] || {});
+  }
+}
+let indSeq = 0;
+function nextIndId(type) {
+  let id;
+  do { id = type + '-' + (++indSeq); } while (document.getElementById('lg-row-' + id));
+  return id;
+}
 function maSeries(klines, period) {
   const out = [];
   for (let i = period - 1; i < klines.length; i++) {
@@ -612,56 +630,163 @@ const volumeSeries = chart.addSeries(HistogramSeries, {
   priceFormat: { type: 'volume' }, priceScaleId: 'vol', priceLineVisible: false, lastValueVisible: false,
 }, 0);
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-const ma7Series = chart.addSeries(LineSeries, { color: '#f0b90b', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0);
-const ma25Series = chart.addSeries(LineSeries, { color: '#2962ff', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0);
-/* BOLL 布林带（主图叠加） */
-const bollUp = chart.addSeries(LineSeries, { color: '#e57373', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0);
-const bollMid = chart.addSeries(LineSeries, { color: '#90a4ae', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0);
-const bollLow = chart.addSeries(LineSeries, { color: '#4dd0e1', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0);
+/* 成交量显示/隐藏：隐藏时释放底部 18% 空间给主图，图例 VOL 同步隐藏 */
+function applyVolVisibility() {
+  volumeSeries.applyOptions({ visible: showVol });
+  chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: showVol ? 0.22 : 0.05 } });
+  document.getElementById('lg-vol').style.display = showVol ? '' : 'none';
+  document.getElementById('ctx-vol').checked = showVol;
+}
+applyVolVisibility();
 
-/* MACD 副图（pane 1） */
-const macdHist = chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, 1);
-const macdDif = chart.addSeries(LineSeries, { color: '#b39ddb', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, 1);
-const macdDea = chart.addSeries(LineSeries, { color: '#f5c542', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, 1);
-
-/* KD 副图（pane 2） */
-const kdK = chart.addSeries(LineSeries, { color: '#42a5f5', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, 2);
-const kdD = chart.addSeries(LineSeries, { color: '#ff9800', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, 2);
-
-/* RSI 副图（pane 3） */
-const rsiLine = chart.addSeries(LineSeries, { color: '#26c6da', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, 3);
+/* ═══ 指标实例动态管理（indLayout 驱动：series/图例/窗格随增删重建） ═══ */
+const MA_COLORS = ['#f0b90b', '#2962ff', '#e91e63', '#9ccc65', '#ba68c8', '#4dd0e1', '#ff8a65', '#aed581'];
+let maColorIdx = 0;
+let indInstances = [];   // [{id, type, params, series:[...], legendEl, legendVals:{}, pane}]
+const LINE_BASE = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+function indName(it) {
+  const p = it.params;
+  if (it.type === 'ma') return `MA(${p.short},${p.long})`;
+  if (it.type === 'boll') return `BOLL(${p.period},${p.mult})`;
+  if (it.type === 'macd') return `MACD(${p.fast},${p.slow},${p.signal})`;
+  if (it.type === 'kd') return `KD(${p.n},${p.m})`;
+  if (it.type === 'rsi') return `RSI(${p.period})`;
+  return it.type;
+}
+/* 构建单个实例的 series 与图例行；主图指标进 lg-main-items，副图指标独占一行 */
+function buildInstance(it) {
+  const id = nextIndId(it.type);
+  const cat = IND_CATALOG[it.type];
+  const inst = { id, type: it.type, params: { ...it.params }, series: [], legendVals: {}, pane: 0 };
+  const parts = [];   // 图例片段 [{label, color}]
+  if (it.type === 'ma') {
+    const c1 = MA_COLORS[maColorIdx++ % MA_COLORS.length];
+    const c2 = MA_COLORS[maColorIdx++ % MA_COLORS.length];
+    inst.series = [
+      chart.addSeries(LineSeries, { color: c1, ...LINE_BASE }, 0),
+      chart.addSeries(LineSeries, { color: c2, ...LINE_BASE }, 0),
+    ];
+    parts.push({ key: 's', label: `MA${it.params.short}:`, color: c1 }, { key: 'l', label: `MA${it.params.long}:`, color: c2 });
+  } else if (it.type === 'boll') {
+    inst.series = [
+      chart.addSeries(LineSeries, { color: '#e57373', ...LINE_BASE }, 0),
+      chart.addSeries(LineSeries, { color: '#90a4ae', lineStyle: 2, ...LINE_BASE }, 0),
+      chart.addSeries(LineSeries, { color: '#4dd0e1', ...LINE_BASE }, 0),
+    ];
+    parts.push({ key: 'u', label: 'U', color: '#e57373' }, { key: 'm', label: 'M', color: '#90a4ae' }, { key: 'l', label: 'L', color: '#4dd0e1' });
+  } else if (it.type === 'macd') {
+    const pane = chart.panes().length;
+    inst.pane = pane;
+    inst.series = [
+      chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, pane),
+      chart.addSeries(LineSeries, { color: '#b39ddb', ...LINE_BASE }, pane),
+      chart.addSeries(LineSeries, { color: '#f5c542', ...LINE_BASE }, pane),
+    ];
+    parts.push({ key: 'h', label: 'HIST', color: '#787b86' }, { key: 'd', label: 'DIF', color: '#b39ddb' }, { key: 'e', label: 'DEA', color: '#f5c542' });
+  } else if (it.type === 'kd') {
+    const pane = chart.panes().length;
+    inst.pane = pane;
+    inst.series = [
+      chart.addSeries(LineSeries, { color: '#42a5f5', ...LINE_BASE }, pane),
+      chart.addSeries(LineSeries, { color: '#ff9800', ...LINE_BASE }, pane),
+    ];
+    parts.push({ key: 'k', label: 'K', color: '#42a5f5' }, { key: 'd', label: 'D', color: '#ff9800' });
+  } else if (it.type === 'rsi') {
+    const pane = chart.panes().length;
+    inst.pane = pane;
+    inst.series = [chart.addSeries(LineSeries, { color: '#26c6da', ...LINE_BASE }, pane)];
+    parts.push({ key: 'r', label: 'RSI', color: '#26c6da' });
+  }
+  /* 图例 DOM */
+  const rowHtml = `<span class="muted" id="lg-label-${id}">${indName(it)}</span>` +
+    parts.map(p => `<span style="color:${p.color}">${p.label} <b id="lg-${id}-${p.key}">--</b></span>`).join(' ') +
+    ` <button class="gear-btn" data-ind-id="${id}" title="调整参数"></button>`;
+  if (cat.pane === 'main') {
+    const wrap = document.createElement('span');
+    wrap.className = 'ind-main-wrap';
+    wrap.dataset.indId = id;
+    wrap.style.display = 'inline-flex'; wrap.style.gap = '10px'; wrap.style.alignItems = 'center';
+    wrap.innerHTML = rowHtml;
+    document.getElementById('lg-main-items').appendChild(wrap);
+    inst.legendEl = wrap;
+  } else {
+    const div = document.createElement('div');
+    div.className = 'legend mono';
+    div.dataset.indId = id;
+    div.innerHTML = `<div class="legend-row" id="lg-row-${id}">${rowHtml}</div>`;
+    document.getElementById('ind-legends').appendChild(div);
+    inst.legendEl = div;
+  }
+  inst.legendEl.querySelector('.gear-btn').innerHTML = GEAR_SVG;
+  parts.forEach(p => { inst.legendVals[p.key] = document.getElementById(`lg-${id}-${p.key}`); });
+  /* 悬停冻结（与静态图例行同机制） */
+  const rowEl = inst.legendEl.querySelector('.legend-row') || inst.legendEl;
+  rowEl.addEventListener('pointerenter', () => { legendFrozen = true; });
+  rowEl.addEventListener('pointerleave', () => { legendFrozen = false; if (legendDirty) { legendDirty = false; refreshLegend(); } });
+  return inst;
+}
+function destroyInstance(inst) {
+  inst.series.forEach(s => { try { chart.removeSeries(s); } catch (e) {} });
+  inst.legendEl.remove();
+}
+/* 副图窗格清理：移除后变空的 pane 需显式删除（否则残留空白分隔条） */
+function cleanupEmptyPanes() {
+  const used = new Set([0]);
+  indInstances.forEach(i => { if (i.pane > 0) used.add(i.pane); });
+  const panes = chart.panes();
+  for (let i = panes.length - 1; i >= 1; i--) {
+    if (!used.has(i)) { try { chart.removePane(i); } catch (e) {} }
+  }
+}
+/* 全量重建：销毁全部指标实例后按 indLayout 重建（增删/改参后调用） */
+function rebuildIndicators() {
+  indInstances.forEach(destroyInstance);
+  indInstances = [];
+  maColorIdx = 0;
+  document.getElementById('lg-main-items').innerHTML = '';
+  document.getElementById('ind-legends').innerHTML = '';
+  cleanupEmptyPanes();   // 先清理旧空窗格，再建新实例（否则新 pane 索引错位）
+  const subPending = [];
+  for (const it of indLayout) {
+    const inst = buildInstance(it);
+    indInstances.push(inst);
+    if (inst.pane > 0) subPending.push({ pane: inst.pane, h: IND_CATALOG[inst.type].h || 100 });
+  }
+  /* 新副图窗格应用目标高度（首屏未就绪时留给 applyPaneHeights 统一处理） */
+  subPaneTargets = subPending;
+  if (panesSized && subPending.length) setTimeout(() => applyPaneHeights(), 50);
+  if (klines.length) renderIndData();
+  layoutPaneLegends();
+}
 
 /* 副图窗格高度：首屏数据就绪后统一应用。
    注：v5 setHeight 布局异步生效且会把差值按比例分摊给其他窗格，
    同步连续设置会读到旧值/互相干扰 → 逐帧修正误差最大的窗格直至收敛 */
-const PANE_HEIGHTS = { 1: 120, 2: 100, 3: 100 };
+let subPaneTargets = [];   // [{pane, h}] 由 rebuildIndicators 按 indLayout 动态生成
 let panesSized = false;
 function applyPaneHeights(round = 0) {
-  if (round >= 24) return;
+  if (round >= 24 || !subPaneTargets.length) return;
   const panes = chart.panes();
   let idx = -1, maxErr = 0;
-  for (const i in PANE_HEIGHTS) {
-    const err = panes[i].getHeight() - PANE_HEIGHTS[i];
-    if (Math.abs(err) > Math.abs(maxErr)) { maxErr = err; idx = +i; }
+  for (const t of subPaneTargets) {
+    if (t.pane >= panes.length) continue;
+    const err = panes[t.pane].getHeight() - t.h;
+    if (Math.abs(err) > Math.abs(maxErr)) { maxErr = err; idx = t.pane; }
   }
   if (idx < 0 || Math.abs(maxErr) < 2) return;
   panes[idx].setHeight(panes[idx].getHeight() - maxErr);
   requestAnimationFrame(() => applyPaneHeights(round + 1));   // 等布局生效后再修正下一个
 }
 
-/* 副图图例定位：各图例锚定到所属窗格顶部（跟随窗格高度/尺寸/顺序变化） */
-const paneLegends = [
-  { el: document.getElementById('macd-legend'), pane: 1 },
-  { el: document.getElementById('kd-legend'), pane: 2 },
-  { el: document.getElementById('rsi-legend'), pane: 3 },
-];
+/* 副图图例定位：各图例锚定到所属窗格顶部（跟随窗格高度/尺寸/顺序/增删变化） */
 function layoutPaneLegends() {
   const panes = chart.panes();
   const ht = chart.timeScale().height();
-  for (const { el, pane } of paneLegends) {
-    if (pane >= panes.length) continue;
+  for (const inst of indInstances) {
+    if (inst.pane === 0 || inst.pane >= panes.length) continue;
+    const el = inst.legendEl;
     let below = ht;
-    for (let j = pane; j < panes.length; j++) below += panes[j].getHeight();   // 含自身窗格高度
+    for (let j = inst.pane; j < panes.length; j++) below += panes[j].getHeight();   // 含自身窗格高度
     const top = Math.round(container.clientHeight - below + 8);
     if (el.__lastTop !== top) { el.__lastTop = top; el.style.top = top + 'px'; }   // 只在变化时写入，避免频繁样式重算
   }
@@ -672,18 +797,30 @@ setInterval(layoutPaneLegends, 300);
 /* ═══ 数据装载（REST 历史 K 线） ═══ */
 let klines = [];
 let initialLoaded = false;   // 首屏数据是否就绪（拦截冷启动竞态下的 WS 推送）
+/* 全量计算单个实例并写入 series */
+function renderInstance(inst) {
+  const p = inst.params;
+  if (inst.type === 'ma') {
+    inst.series[0].setData(maSeries(klines, p.short));
+    inst.series[1].setData(maSeries(klines, p.long));
+  } else if (inst.type === 'boll') {
+    const { U, M, L } = bollSeries(klines, p.period, p.mult);
+    inst.series[0].setData(U); inst.series[1].setData(M); inst.series[2].setData(L);
+  } else if (inst.type === 'macd') {
+    const { difS, deaS, hist } = macdSeries(klines, p.fast, p.slow, p.signal);
+    inst.series[0].setData(hist); inst.series[1].setData(difS); inst.series[2].setData(deaS);
+  } else if (inst.type === 'kd') {
+    const { K, D } = kdSeries(klines, p.n, p.m);
+    inst.series[0].setData(K); inst.series[1].setData(D);
+  } else if (inst.type === 'rsi') {
+    inst.series[0].setData(rsiSeries(klines, p.period));
+  }
+}
+function renderIndData() { indInstances.forEach(renderInstance); }
 function renderChart() {
   candleSeries.setData(klines.map(k => ({ time: k.time, open: k.open, high: k.high, low: k.low, close: k.close })));
   volumeSeries.setData(klines.map(k => ({ time: k.time, value: k.volume, color: k.close >= k.open ? 'rgba(14,203,129,0.32)' : 'rgba(246,70,93,0.32)' })));
-  ma7Series.setData(maSeries(klines, indParams.ma.short));
-  ma25Series.setData(maSeries(klines, indParams.ma.long));
-  const { U, M, L } = bollSeries(klines, indParams.boll.period, indParams.boll.mult);
-  bollUp.setData(U); bollMid.setData(M); bollLow.setData(L);
-  const { difS, deaS, hist } = macdSeries(klines, indParams.macd.fast, indParams.macd.slow, indParams.macd.signal);
-  macdDif.setData(difS); macdDea.setData(deaS); macdHist.setData(hist);
-  const { K, D } = kdSeries(klines, indParams.kd.n, indParams.kd.m);
-  kdK.setData(K); kdD.setData(D);
-  rsiLine.setData(rsiSeries(klines, indParams.rsi.period));
+  renderIndData();
 }
 /* 拉取一页 K 线（endTime 可选，往前翻页用） */
 async function fetchPage(need, endTime) {
@@ -787,18 +924,24 @@ document.getElementById('chart').addEventListener('contextmenu', e => {
   e.preventDefault();
   ctxKc.value = klineCount;
   ctxRo.value = curRightOffset;
+  document.getElementById('ctx-vol').checked = showVol;
   ctxMenu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
   ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 130) + 'px';
   ctxMenu.classList.add('show');
 });
 document.addEventListener('click', e => { if (!ctxMenu.contains(e.target)) ctxMenu.classList.remove('show'); });
-window.addEventListener('keydown', e => { if (e.key === 'Escape') { ctxMenu.classList.remove('show'); indModal.classList.remove('show'); } });
+window.addEventListener('keydown', e => { if (e.key === 'Escape') { ctxMenu.classList.remove('show'); indModal.classList.remove('show'); indPicker.classList.remove('show'); } });
 ctxKc.addEventListener('change', () => {
   const v = Math.min(5000, Math.max(100, parseInt(ctxKc.value) || 5000));
   ctxKc.value = v;
   if (v === klineCount) return;
   klineCount = v;
   load();
+  saveLayout();
+});
+document.getElementById('ctx-vol').addEventListener('change', e => {
+  showVol = e.target.checked;
+  applyVolVisibility();
   saveLayout();
 });
 ctxRo.addEventListener('change', () => {
@@ -810,42 +953,44 @@ ctxRo.addEventListener('change', () => {
   saveLayout();
 });
 
-/* ═══ 指标参数调整弹窗（齿轮图标 → 参数表单 → 取消/确认） ═══ */
+/* ═══ 指标参数调整弹窗（齿轮图标 → 参数表单 → 移除/取消/确认，基于实例 id） ═══ */
 const GEAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33 1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82 1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';
 document.querySelectorAll('.gear-btn').forEach(b => b.innerHTML = GEAR_SVG);
 
 const indModal = document.getElementById('ind-modal');
-let curIndEdit = null;
-function openIndModal(key) {
-  const meta = IND_META[key];
-  curIndEdit = key;
+let curIndEdit = null;   // 实例 id
+function instById(id) { return indInstances.find(i => i.id === id); }
+function openIndModal(id) {
+  const inst = instById(id);
+  if (!inst) return;
+  const meta = IND_META[inst.type];
+  curIndEdit = id;
   document.getElementById('ind-modal-title').textContent = meta.title;
   document.getElementById('ind-fields').innerHTML = meta.fields.map(f => `
     <div class="field">
       <div class="field-label"><span>${f.label}</span><span class="muted">${f.min} ~ ${fieldMax(f)}</span></div>
-      <div class="input-box"><input id="ind-f-${f.key}" type="number" min="${f.min}" max="${fieldMax(f)}" step="${f.step || 1}" value="${indParams[key][f.key]}"></div>
+      <div class="input-box"><input id="ind-f-${f.key}" type="number" min="${f.min}" max="${fieldMax(f)}" step="${f.step || 1}" value="${inst.params[f.key]}"></div>
     </div>`).join('');
   indModal.classList.add('show');
   document.querySelector('#ind-fields input')?.focus();
 }
 function refreshIndLabels() {
-  const { ma, boll, macd, kd, rsi } = indParams;
-  document.getElementById('lg-ma7-label').textContent = `MA${ma.short}:`;
-  document.getElementById('lg-ma25-label').textContent = `MA${ma.long}:`;
-  document.getElementById('lg-boll-label').textContent = `BOLL(${boll.period},${boll.mult})`;
-  document.getElementById('lg-macd-label').textContent = `MACD(${macd.fast},${macd.slow},${macd.signal})`;
-  document.getElementById('lg-kd-label').textContent = `KD(${kd.n},${kd.m})`;
-  document.getElementById('lg-rsi-label').textContent = `RSI(${rsi.period})`;
+  for (const inst of indInstances) {
+    const el = document.getElementById('lg-label-' + inst.id);
+    if (el) el.textContent = indName(inst);
+  }
 }
-/* 齿轮按钮统一委托（位于各窗格图例内） */
+/* 齿轮按钮统一委托（主图/副图图例内动态生成，按 data-ind-id 定位实例） */
 document.addEventListener('click', e => {
   const btn = e.target.closest('.gear-btn');
-  if (btn) openIndModal(btn.dataset.ind);
+  if (btn && btn.dataset.indId) openIndModal(btn.dataset.indId);
 });
 document.getElementById('ind-cancel').addEventListener('click', () => indModal.classList.remove('show'));
 indModal.addEventListener('click', e => { if (e.target === indModal) indModal.classList.remove('show'); });
 document.getElementById('ind-ok').addEventListener('click', () => {
-  const meta = IND_META[curIndEdit];
+  const inst = instById(curIndEdit);
+  if (!inst) { indModal.classList.remove('show'); return; }
+  const meta = IND_META[inst.type];
   const next = {};
   for (const f of meta.fields) {
     const el = document.getElementById('ind-f-' + f.key);
@@ -854,16 +999,68 @@ document.getElementById('ind-ok').addEventListener('click', () => {
     v = Math.min(fieldMax(f), Math.max(f.min, v));
     next[f.key] = f.step && f.step < 1 ? +v.toFixed(1) : Math.round(v);
   }
-  if (curIndEdit === 'macd' && next.fast >= next.slow) {
+  if (inst.type === 'macd' && next.fast >= next.slow) {
     document.getElementById('ind-f-fast').focus();
     return;   // 快线必须小于慢线
   }
-  indParams[curIndEdit] = next;
+  /* 回写 indLayout 同源条目，重建实例（series 颜色/图例标签同步） */
+  const li = indLayout.findIndex(x => x === layoutRef(inst));
+  if (li >= 0) indLayout[li].params = next; else inst.params = { ...next };
   indModal.classList.remove('show');
-  refreshIndLabels();
-  if (klines.length) renderChart();   // 确认后立即重算全量指标（视窗保持不变）
+  rebuildIndicators();
   saveLayout();
 });
+/* 移除指标：从 indLayout 删除后重建（副图窗格自动回收） */
+document.getElementById('ind-remove').addEventListener('click', () => {
+  const inst = instById(curIndEdit);
+  indModal.classList.remove('show');
+  if (!inst) return;
+  const li = indLayout.indexOf(layoutRef(inst));
+  if (li >= 0) indLayout.splice(li, 1);
+  rebuildIndicators();
+  saveLayout();
+});
+/* 实例 ↔ indLayout 条目映射（重建后实例重新生成，按顺序+类型定位） */
+function layoutRef(inst) {
+  let nth = -1;
+  for (const i of indInstances) {
+    if (i.type === inst.type) nth++;
+    if (i === inst) break;
+  }
+  let cnt = -1;
+  for (const x of indLayout) {
+    if (x.type === inst.type) cnt++;
+    if (cnt === nth) return x;
+  }
+  return null;
+}
+
+/* ═══ 添加指标选择面板（工具栏"指标"按钮：主图/副图分组） ═══ */
+const indPicker = document.getElementById('ind-picker');
+document.getElementById('ind-btn').addEventListener('click', () => {
+  const mains = Object.entries(IND_CATALOG).filter(([, c]) => c.pane === 'main');
+  const subs = Object.entries(IND_CATALOG).filter(([, c]) => c.pane === 'sub');
+  const row = ([type, c]) => `
+    <div class="pick-row" data-pick="${type}">
+      <div><div class="pk-name">${c.title}</div><div class="pk-desc">${c.desc}</div></div>
+      <span class="pk-add">＋</span>
+    </div>`;
+  document.getElementById('ind-pick-list').innerHTML =
+    `<div class="pk-group">主图叠加</div>${mains.map(row).join('')}` +
+    `<div class="pk-group">副图窗格</div>${subs.map(row).join('')}`;
+  indPicker.classList.add('show');
+});
+document.getElementById('ind-pick-list').addEventListener('click', e => {
+  const r = e.target.closest('.pick-row');
+  if (!r) return;
+  const type = r.dataset.pick;
+  indLayout.push({ type, params: { ...IND_CATALOG[type].defaults } });
+  rebuildIndicators();
+  saveLayout();
+  indPicker.classList.remove('show');
+});
+document.getElementById('pick-cancel').addEventListener('click', () => indPicker.classList.remove('show'));
+indPicker.addEventListener('click', e => { if (e.target === indPicker) indPicker.classList.remove('show'); });
 refreshIndLabels();
 
 /* ═══ 十字光标图例 ═══ */
@@ -883,20 +1080,15 @@ function setLg(id, text, cls) {
 let lastCross = null;   // 最近一次十字线参数（冻结期结束后补刷新）
 function refreshLegend() {
   const param = lastCross;
-  let bar, ma7v, ma25v, difv, deav, kv, dv, rsiv, buv, bmv, blv;
+  let bar;
+  const vals = new Map();   // series → 十字线取值
   if (param && param.time && param.seriesData) {
     const c = param.seriesData.get(candleSeries);
     if (c) bar = c;
-    ma7v = param.seriesData.get(ma7Series)?.value;
-    ma25v = param.seriesData.get(ma25Series)?.value;
-    buv = param.seriesData.get(bollUp)?.value;
-    bmv = param.seriesData.get(bollMid)?.value;
-    blv = param.seriesData.get(bollLow)?.value;
-    difv = param.seriesData.get(macdDif)?.value;
-    deav = param.seriesData.get(macdDea)?.value;
-    kv = param.seriesData.get(kdK)?.value;
-    dv = param.seriesData.get(kdD)?.value;
-    rsiv = param.seriesData.get(rsiLine)?.value;
+    for (const inst of indInstances) for (const s of inst.series) {
+      const d = param.seriesData.get(s);
+      if (d) vals.set(s, d.value);
+    }
   }
   const last = bar ?? klines[klines.length - 1];
   if (!last) return;
@@ -905,17 +1097,53 @@ function refreshLegend() {
   setLg('lg-h', fmt(last.high), cls);
   setLg('lg-l', fmt(last.low), cls);
   setLg('lg-c', fmt(last.close), cls);
-  setLg('lg-ma7', ma7v ? ma7v.toFixed(1) : '--');
-  setLg('lg-ma25', ma25v ? ma25v.toFixed(1) : '--');
-  setLg('lg-bu', buv != null ? buv.toFixed(1) : '--');
-  setLg('lg-bm', bmv != null ? bmv.toFixed(1) : '--');
-  setLg('lg-bl', blv != null ? blv.toFixed(1) : '--');
   setLg('lg-vol', 'VOL: ' + (last.volume ? last.volume.toFixed(1) : '--'));
-  setLg('lg-dif', difv != null ? difv.toFixed(2) : '--');
-  setLg('lg-dea', deav != null ? deav.toFixed(2) : '--');
-  setLg('lg-k', kv != null ? kv.toFixed(2) : '--');
-  setLg('lg-d', dv != null ? dv.toFixed(2) : '--');
-  setLg('lg-rsi', rsiv != null ? rsiv.toFixed(2) : '--');
+  /* 各指标实例：十字线取值优先，无十字线时用末根 bar 现算 */
+  for (const inst of indInstances) {
+    const lv = inst.legendVals, keys = Object.keys(lv);
+    if (param && param.time) {
+      inst.series.forEach((s, i) => {
+        if (i >= keys.length) return;
+        const v = vals.get(s);
+        const el = lv[keys[i]];
+        const txt = v != null ? v.toFixed(2) : '--';
+        if (el.textContent !== txt) el.textContent = txt;
+      });
+    } else {
+      const lastVals = calcLastVals(inst);
+      keys.forEach((k, i) => {
+        const v = lastVals[i];
+        const txt = v != null ? v.toFixed(2) : '--';
+        if (lv[k].textContent !== txt) lv[k].textContent = txt;
+      });
+    }
+  }
+}
+/* 末根 bar 各图例分量现算（顺序与 buildInstance 的 parts 一致） */
+function calcLastVals(inst) {
+  const p = inst.params;
+  if (inst.type === 'ma') {
+    const f = klines.length >= p.short ? maSeries(klines.slice(-p.short), p.short)[0]?.value : null;
+    const l = klines.length >= p.long ? maSeries(klines.slice(-p.long), p.long)[0]?.value : null;
+    return [f, l];
+  }
+  if (inst.type === 'boll') {
+    const r = klines.length >= p.period ? bollLast(klines, p.period, p.mult) : null;
+    return r ? [r.u.value, r.m.value, r.l.value] : [null, null, null];
+  }
+  if (inst.type === 'macd') {
+    const { difS, deaS, hist } = macdSeries(klines, p.fast, p.slow, p.signal);
+    return [hist[hist.length - 1]?.value ?? null, difS[difS.length - 1]?.value ?? null, deaS[deaS.length - 1]?.value ?? null];
+  }
+  if (inst.type === 'kd') {
+    const r = kdLast(klines, p.n, p.m);
+    return [r.K[r.K.length - 1]?.value ?? null, r.D[r.D.length - 1]?.value ?? null];
+  }
+  if (inst.type === 'rsi') {
+    const r = rsiLast(klines, p.period);
+    return [r[r.length - 1]?.value ?? null];
+  }
+  return [];
 }
 chart.subscribeCrosshairMove(param => {
   lastCross = param;
@@ -923,11 +1151,12 @@ chart.subscribeCrosshairMove(param => {
   refreshLegend();
 });
 
-/* ═══ WS 实时推送（500ms 增量 update） ═══ */
+/* ═══ WS 实时推送（增量 update + 心跳看门狗：静默超时强制重连并重新订阅） ═══ */
 let ws = null;
-const posPriceTopics = new Set();   // 持仓品种价格订阅主题（与图表同频 500ms）
+let wsLastMsgAt = Date.now();   // 最近一次收到任意 WS 消息的时间
+const posPriceTopics = new Set();   // 持仓品种价格订阅主题（与图表同频）
 function setWs(ok) {
-  document.getElementById('ws-status').textContent = ok ? 'WS 已连接 · 500ms' : 'WS 断开 · 重连中';
+  document.getElementById('ws-status').textContent = ok ? 'WS 已连接' : 'WS 断开 · 重连中';
   document.querySelector('.dot').style.background = ok ? 'var(--up)' : 'var(--down)';
 }
 function subscribeWS() {
@@ -939,12 +1168,18 @@ function connectWS() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   try {
     ws = new WebSocket(WS_URL);
-    ws.onopen = () => { setWs(true); subscribeWS(); posPriceTopics.forEach(t => ws.send(JSON.stringify({ action: 'subscribe', topic: t }))); };
+    ws.onopen = () => {
+      wsLastMsgAt = Date.now();
+      setWs(true); subscribeWS();
+      posPriceTopics.forEach(t => ws.send(JSON.stringify({ action: 'subscribe', topic: t })));
+    };
     ws.onmessage = ev => {
+      wsLastMsgAt = Date.now();
       const msg = JSON.parse(ev.data);
+      if (msg.action === 'pong' || msg.action === 'subscribed') return;   // 心跳/订阅回执
       if (!msg.topic || !msg.topic.startsWith('klines.') || !msg.data) return;
       const parts = msg.topic.split('.');
-      // 持仓品种价格订阅（1m）：更新频率与图表保持一致
+      // 持仓品种价格订阅：更新频率与图表保持一致
       if (posPriceTopics.has(msg.topic)) {
         lastPrices[parts[1]] = msg.data.close;
         renderPositions();
@@ -957,6 +1192,15 @@ function connectWS() {
     ws.onerror = () => ws.close();
   } catch (e) { setWs(false); }
 }
+/* 心跳看门狗：每 10s 发 ping（后端回 pong 兼作保活）；35s 无任何消息 →
+   判定僵尸连接/订阅丢失（TCP 半开时 onclose 不触发），强制重连并重新订阅 */
+setInterval(() => {
+  if (!ws) { connectWS(); return; }
+  if (ws.readyState === WebSocket.OPEN) {
+    if (Date.now() - wsLastMsgAt > 35000) { try { ws.close(); } catch (e) {} return; }
+    try { ws.send(JSON.stringify({ action: 'ping' })); } catch (e) {}
+  }
+}, 10000);
 
 /* 收到实时 bar：增量更新图表与指标 */
 function applyBar(b) {
@@ -969,22 +1213,33 @@ function applyBar(b) {
   else return;
   candleSeries.update(bar);
   volumeSeries.update({ time: t, value: bar.volume, color: bar.close >= bar.open ? 'rgba(14,203,129,0.32)' : 'rgba(246,70,93,0.32)' });
-  const n = klines.length;
-  if (n >= indParams.ma.short) ma7Series.update({ time: t, value: maSeries(klines.slice(-indParams.ma.short), indParams.ma.short)[0].value });
-  if (n >= indParams.ma.long) ma25Series.update({ time: t, value: maSeries(klines.slice(-indParams.ma.long), indParams.ma.long)[0].value });
-  if (n >= indParams.boll.period) {
-    const bu = bollLast(klines, indParams.boll.period, indParams.boll.mult);
-    bollUp.update(bu.u); bollMid.update(bu.m); bollLow.update(bu.l);
-  }
-  const { difS, deaS, hist } = macdSeries(klines, indParams.macd.fast, indParams.macd.slow, indParams.macd.signal);
-  macdDif.update(difS[difS.length - 1]); macdDea.update(deaS[deaS.length - 1]); macdHist.update(hist[hist.length - 1]);
-  const kdU = kdLast(klines, indParams.kd.n, indParams.kd.m);
-  kdK.update(kdU.K[kdU.K.length - 1]); kdD.update(kdU.D[kdU.D.length - 1]);
-  const rsiU = rsiLast(klines, indParams.rsi.period);
-  if (rsiU.length) rsiLine.update(rsiU[rsiU.length - 1]);
+  indInstances.forEach(inst => updateInstanceLast(inst, t));
   lastPrices[curSymbol] = bar.close;
   updateTicker(bar.close);
   renderPositions();
+}
+/* 单实例增量更新：只算末根 bar（限定预热窗口，避免全量重算） */
+function updateInstanceLast(inst, t) {
+  const p = inst.params, n = klines.length;
+  if (inst.type === 'ma') {
+    if (n >= p.short) inst.series[0].update({ time: t, value: maSeries(klines.slice(-p.short), p.short)[0].value });
+    if (n >= p.long) inst.series[1].update({ time: t, value: maSeries(klines.slice(-p.long), p.long)[0].value });
+  } else if (inst.type === 'boll') {
+    if (n >= p.period) {
+      const bu = bollLast(klines, p.period, p.mult);
+      inst.series[0].update(bu.u); inst.series[1].update(bu.m); inst.series[2].update(bu.l);
+    }
+  } else if (inst.type === 'macd') {
+    const { difS, deaS, hist } = macdSeries(klines, p.fast, p.slow, p.signal);
+    inst.series[0].update(hist[hist.length - 1]); inst.series[1].update(difS[difS.length - 1]); inst.series[2].update(deaS[deaS.length - 1]);
+  } else if (inst.type === 'kd') {
+    const r = kdLast(klines, p.n, p.m);
+    if (r.K.length) inst.series[0].update(r.K[r.K.length - 1]);
+    if (r.D.length) inst.series[1].update(r.D[r.D.length - 1]);
+  } else if (inst.type === 'rsi') {
+    const r = rsiLast(klines, p.period);
+    if (r.length) inst.series[0].update(r[r.length - 1]);
+  }
 }
 
 function updateTicker(price) {
@@ -1254,6 +1509,7 @@ document.getElementById('pos-toggle').addEventListener('click', () => {
 });
 
 /* ═══ 启动（所有定义就绪后） ═══ */
+rebuildIndicators();   // 按 indLayout 构建指标实例（首屏数据就绪前，series 空数据）
 connectWS();
 load();
 fetchTopTicker(); setInterval(fetchTopTicker, 15000);

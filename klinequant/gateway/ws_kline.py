@@ -1,33 +1,60 @@
 """WebSocket K线实时推送
 
-后台任务：定时从币安 REST API 拉取最新 K 线，
+主链路：订阅币安原生 WebSocket kline 流（~250ms 级实时更新），
 通过 ws_manager 广播给所有订阅了 klines.{SYMBOL}.{TIMEFRAME} 主题的客户端。
-
-轮询间隔 500ms，多交易对并发请求。
-降级策略：如果币安 WS 不可用，使用 REST 轮询。
+降级策略：币安 WS 断开/静默时自动回退 REST 轮询，重连成功后恢复 WS 主链路。
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import time
 
 import httpx
 
 from gateway.ws import ws_manager
 
 logger = logging.getLogger(__name__)
+# 诊断用：gateway 主日志未配置 stdlib logging handler，额外写一份文件日志
+if not logger.handlers:
+    try:
+        _fh = logging.FileHandler(
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "ws_kline.log"),
+            encoding="utf-8",
+        )
+        _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logger.addHandler(_fh)
+        logger.setLevel(logging.INFO)
+    except Exception:
+        pass
 
 BINANCE_REST_BASE = os.getenv("BINANCE_REST_BASE", "https://api.binance.com")
+# 币安 WS 流基址：必须使用公共行情流（支持 /stream?streams= 组合路径）。
+# 注意：demo-stream.binance.com 是模拟交易私有流，无组合行情路径（会 404），
+# 因此此处默认不读环境变量；确需覆盖时用 KQ_MARKET_WS_BASE。
+BINANCE_WS_BASE = os.getenv("KQ_MARKET_WS_BASE", "wss://stream.binance.com:9443")
 HTTP_PROXY = os.getenv("HTTP_PROXY", "http://127.0.0.1:7897")
 
-# 默认监控的交易对
+# 降级 REST 轮询参数
 WATCHED_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 DEFAULT_TIMEFRAME = "1h"
-POLL_INTERVAL = 0.5  # 秒（500ms）
+POLL_INTERVAL = 2.0  # 秒（降级模式，避免 REST 限频）
+
+# WS 链路健康判定：超过该秒数未收到任何币安消息 → 视为断流，触发重连
+WS_SILENT_TIMEOUT = 15.0
+WS_RECONNECT_BASE = 1.0
+WS_RECONNECT_MAX = 30.0
 
 # 有效周期集合
 VALID_TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "3d", "1w"}
+
+try:
+    import websockets
+    _HAS_WEBSOCKETS = True
+except ImportError:  # pragma: no cover
+    _HAS_WEBSOCKETS = False
 
 
 def _parse_topic(topic: str) -> tuple[str, str] | None:
@@ -43,13 +70,128 @@ def _parse_topic(topic: str) -> tuple[str, str] | None:
     return None
 
 
+def _active_fetch_targets() -> set[tuple[str, str]]:
+    """当前有订阅者的 (symbol, timeframe) 集合；无订阅者时用默认监控集"""
+    fetch_targets: set[tuple[str, str]] = set()
+    for topic in list(ws_manager._subscriptions.keys()):
+        if topic.startswith("klines."):
+            parsed = _parse_topic(topic)
+            if parsed:
+                fetch_targets.add(parsed)
+    if not fetch_targets:
+        for sym in WATCHED_SYMBOLS:
+            fetch_targets.add((sym, DEFAULT_TIMEFRAME))
+    return fetch_targets
+
+
+async def _publish_bar(
+    symbol: str, timeframe: str, ts: int,
+    open_: float, high: float, low: float, close: float, volume: float,
+    sig: str, last_bar: dict[str, str],
+) -> None:
+    """去重后广播一根 bar（WS 主链路与 REST 降级共用）"""
+    cache_key = f"{symbol}_{timeframe}"
+    if last_bar.get(cache_key) == sig:
+        return
+    last_bar[cache_key] = sig
+    bar = {
+        "timestamp": ts,
+        "open": open_,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": volume,
+    }
+    await ws_manager.publish(f"klines.{symbol}.{timeframe}", bar)
+    # 兼容旧格式订阅
+    await ws_manager.publish(f"klines.{symbol}", bar)
+
+
+# ─── 币安 WS 主链路 ───
+
+# 币安 WS 主链路健康状态（最近收到消息的单调时间）
+_ws_last_event_at: float = 0.0
+
+
+def _ws_healthy() -> bool:
+    """主链路在 WS_SILENT_TIMEOUT 内有过消息 → 健康（REST 降级让路）"""
+    return _HAS_WEBSOCKETS and (time.monotonic() - _ws_last_event_at) < WS_SILENT_TIMEOUT
+
+
+async def _ws_loop(last_bar: dict[str, str]) -> None:
+    """币安原生 WS 接收主循环：按当前订阅动态拼流地址，静默超时/断线自动重连"""
+    global _ws_last_event_at
+    backoff = WS_RECONNECT_BASE
+    while True:
+        targets = _active_fetch_targets()
+        streams = "/".join(f"{s.lower()}@kline_{tf}" for s, tf in sorted(targets))
+        # 单个流用直连路径 /ws/<stream>，多个流用组合路径 /stream?streams=a/b
+        if len(targets) == 1:
+            url = f"{BINANCE_WS_BASE}/ws/{streams}"
+        else:
+            url = f"{BINANCE_WS_BASE}/stream?streams={streams}"
+        logger.info(f"Binance WS connecting: {url}")
+        connect_kwargs = {"ping_interval": 20, "ping_timeout": 10, "close_timeout": 5}
+        if HTTP_PROXY:
+            connect_kwargs["proxy"] = HTTP_PROXY
+
+        try:
+            async with websockets.connect(url, **connect_kwargs) as conn:
+                logger.info(f"Binance WS stream connected: {len(targets)} streams")
+                backoff = WS_RECONNECT_BASE
+                connected_targets = targets
+                while True:
+                    try:
+                        raw = await asyncio.wait_for(conn.recv(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        # 静默超时 → 断流重连；订阅集合变化 → 重连以纳入新主题
+                        if time.monotonic() - _ws_last_event_at > WS_SILENT_TIMEOUT:
+                            logger.warning("Binance WS silent timeout, reconnecting...")
+                            break
+                        if _active_fetch_targets() != connected_targets:
+                            logger.info("Subscription set changed, reconnecting WS streams...")
+                            break
+                        continue
+                    _ws_last_event_at = time.monotonic()
+                    try:
+                        msg = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    # 组合流消息带 data 包装，单流直连无包装，两种都兼容
+                    payload = msg.get("data") or msg
+                    k = payload.get("k") if isinstance(payload, dict) else None
+                    if not k:
+                        continue
+                    symbol = k.get("s", "")
+                    tf = k.get("i", "")
+                    if not symbol or tf not in VALID_TIMEFRAMES:
+                        continue
+                    ts = int(k.get("t", 0))
+                    sig = f"{ts}_{k.get('h')}_{k.get('l')}_{k.get('c')}"
+                    await _publish_bar(
+                        symbol, tf, ts,
+                        float(k.get("o", 0)), float(k.get("h", 0)),
+                        float(k.get("l", 0)), float(k.get("c", 0)),
+                        float(k.get("v", 0)), sig, last_bar,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Binance WS error: {e}, fallback to REST polling")
+
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, WS_RECONNECT_MAX)
+
+
+# ─── REST 降级轮询 ───
+
 async def _fetch_and_publish(
     client: httpx.AsyncClient,
     symbol: str,
     timeframe: str,
     last_bar: dict[str, str],
 ) -> None:
-    """拉取单个交易对的最新 K 线并推送（供并发调用）"""
+    """拉取单个交易对的最新 K 线并推送（降级模式）"""
     try:
         resp = await client.get(
             f"{BINANCE_REST_BASE}/api/v3/klines",
@@ -63,67 +205,41 @@ async def _fetch_and_publish(
 
         k = raw[0]
         ts = int(k[0])
-        bar = {
-            "timestamp": ts,
-            "open": float(k[1]),
-            "high": float(k[2]),
-            "low": float(k[3]),
-            "close": float(k[4]),
-            "volume": float(k[5]),
-        }
-
-        # 去重：timestamp + close + high + low 均相同则跳过
-        cache_key = f"{symbol}_{timeframe}"
-        bar_sig = f"{ts}_{k[2]}_{k[3]}_{k[4]}"
-        if last_bar.get(cache_key) == bar_sig:
-            return
-        last_bar[cache_key] = bar_sig
-
-        # 推送到精确主题
-        await ws_manager.publish(f"klines.{symbol}.{timeframe}", bar)
-        # 兼容旧格式订阅
-        await ws_manager.publish(f"klines.{symbol}", bar)
-
+        sig = f"{ts}_{k[2]}_{k[3]}_{k[4]}"
+        await _publish_bar(
+            symbol, timeframe, ts,
+            float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5]),
+            sig, last_bar,
+        )
     except Exception as e:
         logger.debug(f"Kline fetch error for {symbol}/{timeframe}: {e}")
 
 
-async def start_kline_broadcaster():
-    """启动 K 线广播后台任务（500ms 轮询，并发请求）"""
-    logger.info("Kline broadcaster started (REST polling mode, interval=500ms)")
-    # 缓存上次推送的 bar 签名，避免重复推送
-    last_bar: dict[str, str] = {}
-
+async def _rest_poll_loop(last_bar: dict[str, str]) -> None:
+    """REST 轮询协程：仅在币安 WS 主循环未存活期间实际推送（通过健康标记门控）"""
     async with httpx.AsyncClient(
         proxy=HTTP_PROXY if HTTP_PROXY else None,
         timeout=5.0,
     ) as client:
         while True:
             try:
-                # 获取当前有订阅者的主题
-                active_topics = set(ws_manager._subscriptions.keys())
-                kline_topics = [t for t in active_topics if t.startswith("klines.")]
-
-                # 解析需要拉取的 (symbol, timeframe) 对
-                fetch_targets: set[tuple[str, str]] = set()
-                for topic in kline_topics:
-                    parsed = _parse_topic(topic)
-                    if parsed:
-                        fetch_targets.add(parsed)
-
-                # 如果没有订阅者，拉取默认交易对
-                if not fetch_targets:
-                    for sym in WATCHED_SYMBOLS:
-                        fetch_targets.add((sym, DEFAULT_TIMEFRAME))
-
-                # 并发请求所有交易对
-                tasks = [
-                    _fetch_and_publish(client, symbol, timeframe, last_bar)
-                    for symbol, timeframe in fetch_targets
-                ]
-                await asyncio.gather(*tasks, return_exceptions=True)
-
+                if not _ws_healthy():
+                    tasks = [
+                        _fetch_and_publish(client, symbol, timeframe, last_bar)
+                        for symbol, timeframe in _active_fetch_targets()
+                    ]
+                    await asyncio.gather(*tasks, return_exceptions=True)
             except Exception as e:
-                logger.error(f"Kline broadcaster error: {e}")
-
+                logger.error(f"Kline REST poll error: {e}")
             await asyncio.sleep(POLL_INTERVAL)
+
+
+async def start_kline_broadcaster():
+    """启动 K 线广播后台任务：币安 WS 主链路 + REST 轮询降级"""
+    last_bar: dict[str, str] = {}
+    if _HAS_WEBSOCKETS:
+        logger.info("Kline broadcaster started (Binance WS primary, REST fallback)")
+        asyncio.create_task(_ws_loop(last_bar))
+    else:
+        logger.warning("websockets 库不可用，K 线广播降级为纯 REST 轮询")
+    await _rest_poll_loop(last_bar)

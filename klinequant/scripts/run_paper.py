@@ -147,20 +147,20 @@ class DualMAPaperTrader:
         return Decimal("0")
 
     async def _on_kline(self, kline: Kline):
-        """K 线回调"""
+        """K 线回调：价格实时更新（每个 tick），指标/信号收盘驱动"""
         if not self._running:
             return
 
-        # 只处理已收盘的 K 线
+        # 实时价格层：未收盘/收盘事件都刷新最新价（持仓盈亏实时，未来盘中止损挂载点）
+        self.sim.update_price(self.symbol, kline.close)
+
+        # 指标/信号层：只在收盘后计算（避免未收盘 bar 反复变化导致信号重算）
         if not kline.is_closed:
             return
 
         self.bar_count += 1
         close = float(kline.close)
         self.closes.append(close)
-
-        # 更新模拟器价格
-        self.sim.update_price(self.symbol, kline.close)
 
         # 计算均线
         fast_ma = calc_ma(self.closes, FAST_PERIOD)
@@ -174,14 +174,13 @@ class DualMAPaperTrader:
         self.prev_fast = fast_ma
         self.prev_slow = slow_ma
 
-        # 状态输出
-        if signal_direction or self.bar_count % 5 == 0:
-            pos = self._get_position_info()
-            logger.info(
-                f"Bar#{self.bar_count} | {self.symbol} close={close:.2f} | "
-                f"MA{FAST_PERIOD}={fast_ma:.2f} MA{SLOW_PERIOD}={slow_ma:.2f} | "
-                f"{pos}"
-            )
+        # 状态输出（每根收盘 bar 打印一条，便于观察实际更新频率）
+        pos = self._get_position_info()
+        logger.info(
+            f"Bar#{self.bar_count} | {self.symbol} close={close:.2f} | "
+            f"MA{FAST_PERIOD}={fast_ma:.2f} MA{SLOW_PERIOD}={slow_ma:.2f} | "
+            f"{pos}"
+        )
 
         # 产生信号 → 下单
         if signal_direction:
