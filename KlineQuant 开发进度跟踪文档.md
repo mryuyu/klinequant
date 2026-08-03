@@ -491,4 +491,4 @@
 | 2026-07-30 | v6.0 | 前后端数据贯通✅：P2-011~020（Gateway AppState+system/trade/alert路由接入真实数据+WS K线推送+AlertView告警中心页面(FE-008)+AccountView真实账户+SystemView真实指标+MarketStore WS+REST降级）；FE-001~FE-009全部9个前端页面完成；币安Demo账户实时数据展示验证通过 |
 | 2026-07-29 | v7.0 | Phase 3 核心✅：P3-003 高级风控+P3-004 安全加固(AES-256-GCM)+P3-005 运维监控(health_check/backup_duckdb，14测试)+P3-006 混沌测试(ChaosMonkey，30测试)；QA-001 E2E测试(Playwright 18项)+QA-002 全量回归(490项通过，83%覆盖率)；INT-003/P3-001/P3-002 列入 BACKLOG |
 | 2026-07-29 | v7.1 | QA-003 K线图与指标副图同步联动✅：useChartSync 组合式模块（时间轴缩放/滚动双向同步+十字光标联动+WeakSet防重复订阅）；vue-tsc+vite build 通过；全量 490 测试通过 |
-| 2026-07-29 | v8.0 | 🎉 v1.0.0-paper 正式发布：版本号升级（后端/前端 1.0.0）+全量回归490项通过+前端生产构建+部署脚本(start_all/stop_all.ps1)+打包脚本(build_release.ps1)+CHANGELOG.md；产物 release/klinequant-1.0.0-paper.zip（231条目，0.49MB，已排除.env/密钥/运行时数据）；实盘验证(INT-003)延至 v1.1 |
+| 2026-07-29 | v8.0 | 🎉 v1.0.0-paper 正式发布：版本号升级（后端/前端 1.0.0）+全量回归490项通过+前端生产构建+部署脚本(start_all/stop_all.ps1)+打包脚本(build_release.ps1)+CHANGELOG.md；产物 release/klinequant-1.0.0-paper.zip（231条目，0.49MB，已排除.env/密钥/运行时数据）；实盘验证(INT-003)延至 v1.1；已发布至 GitHub（https://github.com/mryuyu/klinequant，tag v1.0.0-paper）；新建《KlineQuant 迭代计划.md》规划 v1.1~v2.0 路线 |
