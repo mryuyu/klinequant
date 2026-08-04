@@ -198,8 +198,8 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .pick-row .pk-add { color:var(--accent); font-size:15px; flex:none; margin-left:10px; }
 .pk-group { font-size:11px; color:var(--text-sub); padding:6px 2px 4px; }
 
-/* 状态栏 */
-.statusbar { display:flex; align-items:center; gap:16px; background:var(--bg-panel); border-top:1px solid var(--border); padding:0 16px; font-size:11px; color:var(--text-sub); }
+/* 状态栏（靠右显示：交易所 + WS 实时延迟） */
+.statusbar { display:flex; align-items:center; justify-content:flex-end; gap:16px; background:var(--bg-panel); border-top:1px solid var(--border); padding:0 16px; font-size:11px; color:var(--text-sub); }
 </style>
 </head>
 <body>
@@ -797,6 +797,7 @@ setInterval(layoutPaneLegends, 300);
 /* ═══ 数据装载（REST 历史 K 线） ═══ */
 let klines = [];
 let initialLoaded = false;   // 首屏数据是否就绪（拦截冷启动竞态下的 WS 推送）
+let sbInfo = '';             // 状态栏基础信息（装载完成后更新，WS 延迟由定时器每秒拼接刷新）
 /* 全量计算单个实例并写入 series */
 function renderInstance(inst) {
   const p = inst.params;
@@ -833,7 +834,6 @@ async function fetchPage(need, endTime) {
   }));
 }
 async function load() {
-  const t0 = performance.now();
   loadGen++;                // 作废进行中的翻页请求
   initialLoaded = false;    // 重新拉取期间暂不接收 WS bar
   setSb(`◉ 拉取 ${curSymbol} ${curTf} K 线…`);
@@ -850,7 +850,8 @@ async function load() {
     initialLoaded = true;   // 首屏就绪，开始接收 WS 增量
     lastPrices[curSymbol] = klines[klines.length - 1].close;
     updateTicker(klines[klines.length - 1].close);
-    setSb(`◉ Binance Spot · REST ${(performance.now() - t0).toFixed(0)}ms · ${curSymbol} ${curTf} · ${klines.length} 根${noMoreData ? '' : '（左滑加载更多）'}`);
+    sbInfo = 'Binance Spot';
+    renderStatusbar();
   } catch (e) {
     setSb('✕ 后端未连接（127.0.0.1:8000），请先启动 API Gateway');
   }
@@ -874,7 +875,6 @@ async function loadMore() {
     page = page.filter(k => k.time < anchorTime);                       // 防时间戳重叠
     if (!page.length) {                                                 // 无更早数据
       noMoreData = true;
-      setSb(`◉ ${curSymbol} ${curTf} · 已加载全部 ${klines.length} 根`);
       return;
     }
     if (page.length < need) noMoreData = true;
@@ -883,7 +883,6 @@ async function loadMore() {
     klines = page.concat(klines);
     renderChart();
     if (lvr) chart.timeScale().setVisibleLogicalRange({ from: lvr.from + page.length, to: lvr.to + page.length });
-    setSb(`◉ Binance Spot · ${curSymbol} ${curTf} · 已加载 ${klines.length} 根${noMoreData ? '（全量）' : ''}`);
   } catch (e) {
     setSb('✕ 加载更早 K 线失败');
   } finally {
@@ -1154,6 +1153,8 @@ chart.subscribeCrosshairMove(param => {
 /* ═══ WS 实时推送（增量 update + 心跳看门狗：静默超时强制重连并重新订阅） ═══ */
 let ws = null;
 let wsLastMsgAt = Date.now();   // 最近一次收到任意 WS 消息的时间
+let wsLatency = null;           // 最新端到端延迟（ms）= Date.now() - 行情事件时间 event_ms
+let wsLatencyAt = 0;            // wsLatency 的刷新时刻（超 10s 未刷新视为无数据）
 const posPriceTopics = new Set();   // 持仓品种价格订阅主题（与图表同频）
 function setWs(ok) {
   document.getElementById('ws-status').textContent = ok ? 'WS 已连接' : 'WS 断开 · 重连中';
@@ -1178,6 +1179,10 @@ function connectWS() {
       const msg = JSON.parse(ev.data);
       if (msg.action === 'pong' || msg.action === 'subscribed') return;   // 心跳/订阅回执
       if (!msg.topic || !msg.topic.startsWith('klines.') || !msg.data) return;
+      if (msg.data.event_ms) {   // 端到端延迟：币安事件时间 → 前端接收
+        wsLatency = Math.max(0, Date.now() - msg.data.event_ms);
+        wsLatencyAt = Date.now();
+      }
       const parts = msg.topic.split('.');
       // 持仓品种价格订阅：更新频率与图表保持一致
       if (posPriceTopics.has(msg.topic)) {
@@ -1201,6 +1206,30 @@ setInterval(() => {
     try { ws.send(JSON.stringify({ action: 'ping' })); } catch (e) {}
   }
 }, 10000);
+
+/* 状态栏：基础信息 + 信号图标 + 实时延迟，每秒刷新（直观反映链路状态） */
+function sigSvg(level, color) {
+  /* 4 格信号图标：level 0~4 为点亮格数，未点亮格用边框灰 */
+  const hs = [4, 7, 10, 13];
+  const bars = hs.map((h, i) =>
+    `<rect x="${i * 4}" y="${14 - h}" width="2.5" height="${h}" rx="0.8" fill="${i < level ? color : 'var(--border)'}"/>`).join('');
+  return `<svg width="15" height="14" viewBox="0 0 14 14" style="vertical-align:-2px">${bars}</svg>`;
+}
+function renderStatusbar() {
+  if (!initialLoaded || loadingMore || !sbInfo) return;
+  let icon, label;
+  if (wsLatency !== null && Date.now() - wsLatencyAt < 10000) {
+    const lv = wsLatency < 500 ? 4 : wsLatency < 1200 ? 3 : wsLatency < 2500 ? 2 : 1;
+    const col = lv >= 3 ? 'var(--up)' : lv === 2 ? '#e0a63f' : 'var(--down)';
+    icon = sigSvg(lv, col); label = `${wsLatency}ms`;
+  } else if (ws && ws.readyState === WebSocket.OPEN) {
+    icon = sigSvg(1, 'var(--text-sub)'); label = '等待数据';
+  } else {
+    icon = sigSvg(0, 'var(--down)'); label = '断开';
+  }
+  document.getElementById('sb-status').innerHTML = `◉ ${sbInfo} · ${icon} ${label}`;
+}
+setInterval(renderStatusbar, 1000);
 
 /* 收到实时 bar：增量更新图表与指标 */
 function applyBar(b) {

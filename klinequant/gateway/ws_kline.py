@@ -44,6 +44,7 @@ POLL_INTERVAL = 2.0  # 秒（降级模式，避免 REST 限频）
 
 # WS 链路健康判定：超过该秒数未收到任何币安消息 → 视为断流，触发重连
 WS_SILENT_TIMEOUT = 15.0
+WS_CONNECT_TIMEOUT = 10.0   # 建连超时（代理丢弃 SYN 时 connect 会永久挂起，必须兜底）
 WS_RECONNECT_BASE = 1.0
 WS_RECONNECT_MAX = 30.0
 
@@ -87,12 +88,16 @@ def _active_fetch_targets() -> set[tuple[str, str]]:
 async def _publish_bar(
     symbol: str, timeframe: str, ts: int,
     open_: float, high: float, low: float, close: float, volume: float,
-    sig: str, last_bar: dict[str, str],
-) -> None:
-    """去重后广播一根 bar（WS 主链路与 REST 降级共用）"""
+    sig: str, last_bar: dict[str, str], event_ms: int = 0,
+) -> bool:
+    """去重后广播一根 bar（WS 主链路与 REST 降级共用），返回是否实际广播
+
+    event_ms: 行情事件时间（币安 kline 事件 E 字段，REST 降级用本机时间），
+    供前端计算端到端实时延迟。
+    """
     cache_key = f"{symbol}_{timeframe}"
     if last_bar.get(cache_key) == sig:
-        return
+        return False
     last_bar[cache_key] = sig
     bar = {
         "timestamp": ts,
@@ -101,10 +106,12 @@ async def _publish_bar(
         "low": low,
         "close": close,
         "volume": volume,
+        "event_ms": event_ms,
     }
     await ws_manager.publish(f"klines.{symbol}.{timeframe}", bar)
     # 兼容旧格式订阅
     await ws_manager.publish(f"klines.{symbol}", bar)
+    return True
 
 
 # ─── 币安 WS 主链路 ───
@@ -136,23 +143,50 @@ async def _ws_loop(last_bar: dict[str, str]) -> None:
             connect_kwargs["proxy"] = HTTP_PROXY
 
         try:
-            async with websockets.connect(url, **connect_kwargs) as conn:
+            # 建连超时保护：代理异常时 connect 可能永久挂起，超时后走重连退避
+            conn = await asyncio.wait_for(
+                websockets.connect(url, **connect_kwargs), timeout=WS_CONNECT_TIMEOUT
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Binance WS connect failed: {e}, retrying...")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, WS_RECONNECT_MAX)
+            continue
+
+        try:
+            async with conn:
                 logger.info(f"Binance WS stream connected: {len(targets)} streams")
                 backoff = WS_RECONNECT_BASE
                 connected_targets = targets
+                _ws_last_event_at = time.monotonic()   # 静默判定的宽限起点，避免首条消息前误判断流
+                _rx_count = 0          # 本轮连接收到的原始消息数（诊断）
+                _pub_count = 0         # 本轮连接实际广播的 bar 数（诊断）
+                _last_stat_at = time.monotonic()
                 while True:
                     try:
-                        raw = await asyncio.wait_for(conn.recv(), timeout=5.0)
+                        raw = await asyncio.wait_for(conn.recv(), timeout=1.0)
                     except asyncio.TimeoutError:
-                        # 静默超时 → 断流重连；订阅集合变化 → 重连以纳入新主题
-                        if time.monotonic() - _ws_last_event_at > WS_SILENT_TIMEOUT:
-                            logger.warning("Binance WS silent timeout, reconnecting...")
-                            break
-                        if _active_fetch_targets() != connected_targets:
-                            logger.info("Subscription set changed, reconnecting WS streams...")
-                            break
+                        raw = None
+
+                    # 周期性诊断/控制面检查（无论是否有消息都执行）
+                    now = time.monotonic()
+                    if now - _last_stat_at >= 10:
+                        logger.info(f"Binance WS stats: rx={_rx_count} pub={_pub_count} targets={len(connected_targets)}")
+                        _rx_count = 0; _pub_count = 0; _last_stat_at = now
+                    # 静默超时 → 断流重连；订阅集合变化 → 重连以纳入新主题
+                    if now - _ws_last_event_at > WS_SILENT_TIMEOUT:
+                        logger.warning("Binance WS silent timeout, reconnecting...")
+                        break
+                    if _active_fetch_targets() != connected_targets:
+                        logger.info("Subscription set changed, reconnecting WS streams...")
+                        break
+                    if raw is None:
                         continue
-                    _ws_last_event_at = time.monotonic()
+
+                    _rx_count += 1
+                    _ws_last_event_at = now
                     try:
                         msg = json.loads(raw)
                     except json.JSONDecodeError:
@@ -168,12 +202,15 @@ async def _ws_loop(last_bar: dict[str, str]) -> None:
                         continue
                     ts = int(k.get("t", 0))
                     sig = f"{ts}_{k.get('h')}_{k.get('l')}_{k.get('c')}"
-                    await _publish_bar(
+                    published = await _publish_bar(
                         symbol, tf, ts,
                         float(k.get("o", 0)), float(k.get("h", 0)),
                         float(k.get("l", 0)), float(k.get("c", 0)),
                         float(k.get("v", 0)), sig, last_bar,
+                        event_ms=int(payload.get("E", 0)),
                     )
+                    if published:
+                        _pub_count += 1
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -210,6 +247,7 @@ async def _fetch_and_publish(
             symbol, timeframe, ts,
             float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5]),
             sig, last_bar,
+            event_ms=int(time.time() * 1000),
         )
     except Exception as e:
         logger.debug(f"Kline fetch error for {symbol}/{timeframe}: {e}")
