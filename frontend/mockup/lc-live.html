@@ -149,6 +149,10 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .submit-btn { width:100%; padding:11px 0; border:none; border-radius:6px; background:var(--up); color:#0b0e14; font-size:14px; font-weight:700; cursor:pointer; }
 /* 品种列表栏（最右独立栏） */
 .symbols-col { border-left:1px solid var(--border); background:var(--bg-panel); display:flex; flex-direction:column; min-height:0; }
+.sc-exch { display:flex; gap:6px; padding:0 12px 8px; }
+.exch-btn { flex:1; padding:5px 0; border:1px solid var(--border); border-radius:5px; background:none; color:var(--text-sub); font-size:12px; cursor:pointer; font-family:var(--font-ui); white-space:nowrap; }
+.exch-btn.active { border-color:var(--accent); color:var(--accent); background:var(--accent-dim); font-weight:600; }
+.tf-btn:disabled { opacity:0.3; cursor:default; }
 .sc-head { display:flex; align-items:center; justify-content:space-between; padding:12px 12px 8px; }
 .sc-title { font-weight:700; font-size:14px; }
 .sc-actions { display:flex; gap:4px; }
@@ -218,7 +222,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
       <div class="ticker-item"><span class="ticker-label">24h 低</span><span class="ticker-value" id="tk-low">--</span></div>
     </div>
     <div class="topbar-right">
-      <div class="mode-badge">◈ LIVE · Binance 真实数据</div>
+      <div class="mode-badge" id="mode-badge">◈ LIVE · Binance 真实数据</div>
       <div class="conn"><span class="dot"></span><span id="ws-status">WS 连接中…</span></div>
     </div>
   </header>
@@ -334,6 +338,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
           <button class="sc-btn" id="add-sym" title="添加品种">＋</button>
         </div>
       </div>
+      <div class="sc-exch" id="exch-switch"></div>
       <div class="sc-search"><input id="sym-filter" placeholder="搜索品种…"></div>
       <div class="sc-body" id="sym-list"></div>
     </aside>
@@ -405,10 +410,14 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 const { createChart, CandlestickSeries, HistogramSeries, LineSeries } = LightweightCharts;
 
 /* ═══ 真实数据接入（后端 REST + WS） ═══ */
-const API = 'http://127.0.0.1:8000';
-const WS_URL = 'ws://127.0.0.1:8000/ws';
+/* http(s) 访问时随页面同源（后端静态托管）；file:// 打开时回退本地默认地址 */
+const API = location.protocol.startsWith('http') ? `${location.protocol}//${location.host}` : 'http://127.0.0.1:8000';
+const WS_URL = location.protocol === 'https:' ? `wss://${location.host}/ws`
+  : location.protocol === 'http:' ? `ws://${location.host}/ws` : 'ws://127.0.0.1:8000/ws';
 let curSymbol = 'BTCUSDT';
 let curTf = '15m';
+let curExchange = 'binance';    // 当前市场源（binance/ig，后端插件注册表驱动）
+const sourcesMeta = {};         // exchange -> 插件元数据（label/周期支持/默认品种/成交量）
 let klineCount = 1000;          // K 线总量上限：可自定义，默认 1000
 const INIT_BARS = 300;          // 首屏加载根数（懒加载分页）
 const PAGE_SIZE = 1000;         // 每次翻页拉取根数（币安单次上限）
@@ -431,6 +440,7 @@ if (savedLayout) {
   if (savedLayout.klineCount) klineCount = savedLayout.klineCount;
   if (savedLayout.tf && TF_VALID.includes(savedLayout.tf)) curTf = savedLayout.tf;
   if (savedLayout.symbol) curSymbol = savedLayout.symbol;
+  if (savedLayout.exchange) curExchange = savedLayout.exchange;
   if (savedLayout.posCollapsed) document.getElementById('pos-bar')?.classList.add('collapsed');
   if (typeof savedLayout.showVol === 'boolean') showVol = savedLayout.showVol;
 }
@@ -446,6 +456,7 @@ function saveLayout() {
       klineCount,
       tf: curTf,
       symbol: curSymbol,
+      exchange: curExchange,
       indLayout,
       showVol,
     }));
@@ -625,17 +636,24 @@ const candleSeries = chart.addSeries(CandlestickSeries, {
   upColor: '#0ecb81', downColor: '#f6465d',
   borderUpColor: '#0ecb81', borderDownColor: '#f6465d',
   wickUpColor: '#0ecb81', wickDownColor: '#f6465d',
+  priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
 }, 0);
 const volumeSeries = chart.addSeries(HistogramSeries, {
   priceFormat: { type: 'volume' }, priceScaleId: 'vol', priceLineVisible: false, lastValueVisible: false,
 }, 0);
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-/* 成交量显示/隐藏：隐藏时释放底部 18% 空间给主图，图例 VOL 同步隐藏 */
+/* 成交量显示/隐藏：隐藏时释放底部 18% 空间给主图，图例 VOL 同步隐藏；
+   OTC 市场（如外汇）无成交量，强制隐藏并禁用开关 */
+function sourceSupportsVolume() { const m = sourcesMeta[curExchange]; return !m || m.supports_volume !== false; }
 function applyVolVisibility() {
-  volumeSeries.applyOptions({ visible: showVol });
-  chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: showVol ? 0.22 : 0.05 } });
-  document.getElementById('lg-vol').style.display = showVol ? '' : 'none';
-  document.getElementById('ctx-vol').checked = showVol;
+  const vol = showVol && sourceSupportsVolume();
+  volumeSeries.applyOptions({ visible: vol });
+  chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: vol ? 0.22 : 0.05 } });
+  document.getElementById('lg-vol').style.display = vol ? '' : 'none';
+  const ctxVol = document.getElementById('ctx-vol');
+  ctxVol.checked = showVol;
+  ctxVol.disabled = !sourceSupportsVolume();
+  ctxVol.title = sourceSupportsVolume() ? '' : '该市场无成交量';
 }
 applyVolVisibility();
 
@@ -825,7 +843,7 @@ function renderChart() {
 }
 /* 拉取一页 K 线（endTime 可选，往前翻页用） */
 async function fetchPage(need, endTime) {
-  const url = `${API}/api/market/klines?symbol=${curSymbol}&timeframe=${curTf}&limit=${need}${endTime ? `&end_time=${endTime}` : ''}`;
+  const url = `${API}/api/market/klines?symbol=${curSymbol}&timeframe=${curTf}&limit=${need}&exchange=${curExchange}${endTime ? `&end_time=${endTime}` : ''}`;
   const resp = await fetch(url);
   const json = await resp.json();
   return (json.data || []).map(k => ({
@@ -844,13 +862,17 @@ async function load() {
     klines = await fetchPage(need, null);
     if (!klines.length) { setSb('✕ 未返回 K 线数据'); return; }
     if (klines.length < need) noMoreData = true;
+    /* Y 轴/十字线精度随品种价格量级自适应（外汇 4~5 位 / 黄金加密 1~2 位） */
+    const p0 = Math.abs(klines[klines.length - 1].close);
+    const prec = p0 < 1 ? 5 : p0 < 10 ? 4 : p0 < 1000 ? 2 : 1;
+    candleSeries.applyOptions({ priceFormat: { type: 'price', precision: prec, minMove: +(10 ** -prec).toFixed(prec) } });
     renderChart();
     if (!panesSized) { panesSized = true; setTimeout(applyPaneHeights, 200); }   // 首屏就绪后应用副图高度（等 autoSize 布局稳定）
     chart.timeScale().fitContent();
     initialLoaded = true;   // 首屏就绪，开始接收 WS 增量
     lastPrices[curSymbol] = klines[klines.length - 1].close;
     updateTicker(klines[klines.length - 1].close);
-    sbInfo = 'Binance Spot';
+    sbInfo = (sourcesMeta[curExchange] && sourcesMeta[curExchange].label) || curExchange;
     renderStatusbar();
   } catch (e) {
     setSb('✕ 后端未连接（127.0.0.1:8000），请先启动 API Gateway');
@@ -907,6 +929,7 @@ function switchSymbol(sym) {
   saveLayout();
 }
 document.querySelectorAll('.tf-btn').forEach(b => b.addEventListener('click', () => {
+  if (b.disabled) return;   // 当前市场源不支持的周期禁点
   document.querySelectorAll('.tf-btn').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   curTf = b.dataset.tf;
@@ -1063,7 +1086,12 @@ indPicker.addEventListener('click', e => { if (e.target === indPicker) indPicker
 refreshIndLabels();
 
 /* ═══ 十字光标图例 ═══ */
-const fmt = v => v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+/* 价格格式化：小数位随量级自适应（外汇汇率 4~5 位 / 日元对与黄金 2 位 / 大价 1 位） */
+const fmt = v => {
+  const av = Math.abs(v);
+  const digits = av > 0 && av < 1 ? 5 : av < 10 ? 4 : av < 1000 ? 2 : 1;
+  return v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+};
 /* 悬停图例行期间冻结文本更新：防止数值变化→行宽变化→齿轮位移→鼠标落回图表→十字线再触发的抖动循环 */
 let legendFrozen = false, legendDirty = false;
 document.querySelectorAll('.legend-row').forEach(row => {
@@ -1105,14 +1133,14 @@ function refreshLegend() {
         if (i >= keys.length) return;
         const v = vals.get(s);
         const el = lv[keys[i]];
-        const txt = v != null ? v.toFixed(2) : '--';
+        const txt = v != null ? fmt(v) : '--';
         if (el.textContent !== txt) el.textContent = txt;
       });
     } else {
       const lastVals = calcLastVals(inst);
       keys.forEach((k, i) => {
         const v = lastVals[i];
-        const txt = v != null ? v.toFixed(2) : '--';
+        const txt = v != null ? fmt(v) : '--';
         if (lv[k].textContent !== txt) lv[k].textContent = txt;
       });
     }
@@ -1162,7 +1190,7 @@ function setWs(ok) {
 }
 function subscribeWS() {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ action: 'subscribe', topic: `klines.${curSymbol}.${curTf}` }));
+    ws.send(JSON.stringify({ action: 'subscribe', topic: `klines.${curExchange}.${curSymbol}.${curTf}` }));
   }
 }
 function connectWS() {
@@ -1179,6 +1207,7 @@ function connectWS() {
       const msg = JSON.parse(ev.data);
       if (msg.action === 'pong' || msg.action === 'subscribed') return;   // 心跳/订阅回执
       if (!msg.topic || !msg.topic.startsWith('klines.') || !msg.data) return;
+      if (msg.data.exchange && msg.data.exchange !== curExchange) return;   // 跨所串数据防护
       if (msg.data.event_ms) {   // 端到端延迟：币安事件时间 → 前端接收
         wsLatency = Math.max(0, Date.now() - msg.data.event_ms);
         wsLatencyAt = Date.now();
@@ -1186,11 +1215,11 @@ function connectWS() {
       const parts = msg.topic.split('.');
       // 持仓品种价格订阅：更新频率与图表保持一致
       if (posPriceTopics.has(msg.topic)) {
-        lastPrices[parts[1]] = msg.data.close;
+        lastPrices[parts[parts.length - 2]] = msg.data.close;
         renderPositions();
         return;
       }
-      if (parts[1] !== curSymbol || (parts[2] || '') !== curTf) return;   // 只收当前品种+周期
+      if (parts[parts.length - 2] !== curSymbol || (parts[parts.length - 1] || '') !== curTf) return;   // 只收当前品种+周期
       applyBar(msg.data);
     };
     ws.onclose = () => { setWs(false); setTimeout(connectWS, 3000); };
@@ -1281,13 +1310,18 @@ function updateTicker(price) {
 /* ═══ REST 轮询：24h 行情 / 持仓与账户 / 品种列表价格 ═══ */
 async function fetchTopTicker() {
   try {
-    const t = await (await fetch(`${API}/api/market/ticker?symbol=${curSymbol}`)).json();
+    const t = await (await fetch(`${API}/api/market/ticker?symbol=${curSymbol}&exchange=${curExchange}`)).json();
     if (t.last_price > 0) {
       const chgEl = document.getElementById('tk-chg');
       chgEl.textContent = (t.price_change_pct >= 0 ? '+' : '') + t.price_change_pct.toFixed(2) + '%';
       chgEl.className = 'ticker-value ' + (t.price_change_pct >= 0 ? 'up' : 'down');
       document.getElementById('tk-high').textContent = fmt(t.high_24h);
       document.getElementById('tk-low').textContent = fmt(t.low_24h);
+    } else {
+      /* 无报价（如外汇休市）：复位占位，避免残留上一所/上一品种的旧值 */
+      ['tk-chg', 'tk-high', 'tk-low'].forEach(id => {
+        const el = document.getElementById(id); el.textContent = '--'; el.className = 'ticker-value';
+      });
     }
   } catch (e) { /* 后端未连时保持占位 */ }
 }
@@ -1339,7 +1373,7 @@ async function refreshListPrices() {
   symGroups.forEach(g => g.symbols.forEach(s => { if (s.sym) targets.push(s); }));
   await Promise.all(targets.map(async s => {
     try {
-      const t = await (await fetch(`${API}/api/market/ticker?symbol=${s.sym}`)).json();
+      const t = await (await fetch(`${API}/api/market/ticker?symbol=${s.sym}&exchange=${curExchange}`)).json();
       if (t.last_price > 0) {
         s.price = t.last_price;
         s.chg = (t.price_change_pct >= 0 ? '+' : '') + t.price_change_pct.toFixed(2) + '%';
@@ -1351,9 +1385,9 @@ async function refreshListPrices() {
   renderPositions();
 }
 
-/* ═══ 品种列表：分组 + 添加/删除 ═══ */
+/* ═══ 品种列表：分组 + 添加/删除（分组按交易所隔离，切换交易所时整组替换） ═══ */
 const ICO_COLORS = ['#f7931a','#627eea','#f0b90b','#00ffa3','#c2a633','#e84142','#8e44ad','#2980b9'];
-const symGroups = [
+const DEFAULT_BINANCE_GROUPS = [
   { name: '加密货币', collapsed: false, symbols: [
     { name: 'BTC/USDT', sym: 'BTCUSDT', price: null, chg: '--' },
     { name: 'ETH/USDT', sym: 'ETHUSDT', price: null, chg: '--' },
@@ -1371,7 +1405,105 @@ const symGroups = [
     { name: 'USD/CNY', price: 7.1420, chg: '-0.12%' },
   ]},
 ];
+const symGroupsByEx = {};   // exchange -> 该所品种分组（用户增删后保留）
+function groupsFor(ex) {
+  if (!symGroupsByEx[ex]) {
+    if (ex === 'binance') {
+      symGroupsByEx[ex] = DEFAULT_BINANCE_GROUPS;
+    } else {
+      /* 非币安所：默认分组由后端插件元数据（default_symbols）生成；
+         元数据未加载（localStorage 恢复 exchange 早于 initSources）时返回临时空组，不写入缓存 */
+      const m = sourcesMeta[ex];
+      if (!m) return [];
+      symGroupsByEx[ex] = [{ name: (m && m.label) || ex, collapsed: false,
+        symbols: ((m && m.default_symbols) || []).map(s => ({ name: s.name, sym: s.symbol, price: null, chg: '--' })) }];
+    }
+  }
+  return symGroupsByEx[ex];
+}
+let symGroups = groupsFor(curExchange);
 let symFilter = '';
+
+/* 交易所切换：替换分组/默认品种，同步图表与订阅 */
+function renderExchSwitch() {
+  const root = document.getElementById('exch-switch');
+  root.innerHTML = Object.values(sourcesMeta).map(s =>
+    `<button class="exch-btn${s.exchange === curExchange ? ' active' : ''}" data-ex="${s.exchange}">${s.label}</button>`).join('');
+}
+document.getElementById('exch-switch').addEventListener('click', e => {
+  const b = e.target.closest('.exch-btn');
+  if (b && b.dataset.ex !== curExchange) switchExchange(b.dataset.ex);
+});
+/* 顶栏 LIVE 徽标跟随当前市场源 */
+function updateModeBadge() {
+  const m = sourcesMeta[curExchange];
+  const el = document.getElementById('mode-badge');
+  if (el && m) el.textContent = `◈ LIVE · ${m.label} 实时数据`;
+}
+function switchExchange(ex, opts = {}) {
+  const meta = sourcesMeta[ex];
+  if (!meta) return;
+  curExchange = ex;
+  symGroups = groupsFor(ex);
+  /* 品种：当前品种不属于新所时切到该所默认首个品种 */
+  const belongs = symGroups.some(g => g.symbols.some(s => s.sym && s.sym === curSymbol));
+  if (!opts.keepSymbol && !belongs && meta.default_symbols.length) {
+    curSymbol = meta.default_symbols[0].symbol;
+    document.getElementById('top-symbol').textContent = curSymbol;
+    document.querySelector('.watermark').textContent = curSymbol;
+  }
+  /* 周期：该所不支持当前周期时切到首个支持项 */
+  if (meta.timeframes && meta.timeframes.length && !meta.timeframes.includes(curTf)) {
+    curTf = meta.timeframes[0];
+    document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === curTf));
+  }
+  applyTfAvailability();
+  applyVolVisibility();
+  renderExchSwitch();
+  renderSymbols();
+  updateModeBadge();
+  load();
+  subscribeWS();
+  fetchTopTicker();
+  refreshListPrices();
+  saveLayout();
+}
+/* 周期按钮可用性：插件不支持的周期置灰禁点 */
+function applyTfAvailability() {
+  const m = sourcesMeta[curExchange];
+  document.querySelectorAll('.tf-btn').forEach(b => {
+    const ok = !m || !m.timeframes.length || m.timeframes.includes(b.dataset.tf);
+    b.disabled = !ok;
+  });
+}
+/* 启动时拉取后端已注册市场源插件（前端交易所选择器数据源） */
+async function initSources() {
+  try {
+    const j = await (await fetch(`${API}/api/market/sources`)).json();
+    (j.sources || []).forEach(s => { sourcesMeta[s.exchange] = s; });
+  } catch (e) {}
+  if (!sourcesMeta[curExchange]) curExchange = Object.keys(sourcesMeta)[0] || 'binance';
+  /* 解析期可能已生成无品种的占位分组（元数据未就绪），重建以填充默认品种；
+     已有用户品种的缓存不动，保留用户增删 */
+  const cached = symGroupsByEx[curExchange];
+  if (curExchange !== 'binance' && cached && !cached.some(g => g.symbols.some(s => s.sym))) {
+    delete symGroupsByEx[curExchange];
+  }
+  symGroups = groupsFor(curExchange);
+  /* 恢复的品种不属于当前所（如 exchange=ig 但 symbol=BTCUSDT）：回退到该所默认首个品种 */
+  const meta = sourcesMeta[curExchange];
+  const belongs = symGroups.some(g => g.symbols.some(s => s.sym && s.sym === curSymbol));
+  if (!belongs && meta && meta.default_symbols && meta.default_symbols.length) {
+    curSymbol = meta.default_symbols[0].symbol;
+    const topSym = document.getElementById('top-symbol');
+    if (topSym) topSym.textContent = curSymbol;
+    const wm = document.querySelector('.watermark');
+    if (wm) wm.textContent = curSymbol;
+    saveLayout();   // 回退结果写回持久化，避免每次刷新重复纠正
+  }
+  renderExchSwitch();
+  applyTfAvailability();
+}
 
 function icoFor(name) {
   let h = 0;
@@ -1391,7 +1523,7 @@ function renderSymbols() {
     list.forEach(s => {
       const isUp = (s.chg || '').startsWith('+');
       const chgCls = s.chg === '--' ? 'muted' : (isUp ? 'up' : 'down');
-      const priceTxt = typeof s.price === 'number' ? s.price.toLocaleString('en-US', { maximumFractionDigits: 4 }) : '--';
+      const priceTxt = typeof s.price === 'number' ? fmt(s.price) : '--';
       const activeCls = s.sym && s.sym === curSymbol ? ' active' : '';
       html += `<div class="wl-row${activeCls}" data-sym="${s.name}">
         <span class="wl-ico" style="background:${icoFor(s.name)}">${s.name[0].toUpperCase()}</span>
@@ -1469,7 +1601,11 @@ document.getElementById('sym-ok').addEventListener('click', () => {
   let g = symGroups.find(x => x.name === gName);
   if (!g) { g = { name: gName, collapsed: false, symbols: [] }; symGroups.push(g); }
   if (!g.symbols.some(s => s.name === name)) {
-    g.symbols.push({ name, sym: name.endsWith('/USDT') ? name.replace('/', '') : null, price: null, chg: '--' });
+    /* 币安所沿用 /USDT 展开规则；其余所（如 IG）直接取字母数字作品种码 */
+    const symCode = curExchange === 'binance'
+      ? (name.endsWith('/USDT') ? name.replace('/', '') : null)
+      : name.replace(/[^A-Z0-9]/g, '');
+    g.symbols.push({ name, sym: symCode, price: null, chg: '--' });
   }
   modal.classList.remove('show');
   renderSymbols();
@@ -1537,13 +1673,17 @@ document.getElementById('pos-toggle').addEventListener('click', () => {
   saveLayout();
 });
 
-/* ═══ 启动（所有定义就绪后） ═══ */
-rebuildIndicators();   // 按 indLayout 构建指标实例（首屏数据就绪前，series 空数据）
-connectWS();
-load();
-fetchTopTicker(); setInterval(fetchTopTicker, 15000);
-fetchPositions(); setInterval(fetchPositions, 5000);
-refreshListPrices(); setInterval(refreshListPrices, 10000);
+/* ═══ 启动（所有定义就绪后；先拉市场源注册表再初始化图表链路） ═══ */
+(async () => {
+  await initSources();
+  updateModeBadge();
+  rebuildIndicators();   // 按 indLayout 构建指标实例（首屏数据就绪前，series 空数据）
+  connectWS();
+  load();
+  fetchTopTicker(); setInterval(fetchTopTicker, 15000);
+  fetchPositions(); setInterval(fetchPositions, 5000);
+  refreshListPrices(); setInterval(refreshListPrices, 10000);
+})();
 </script>
 </body>
 </html>

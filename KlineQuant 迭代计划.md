@@ -128,8 +128,9 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 
 | 编号 | 需求 | 内容 | 来源 |
 |------|------|------|------|
-| P3-001 | A 股适配（QMT） | QMT/miniQMT 接入，A 股行情+交易适配，T+1 规则 | Phase 3 BACKLOG |
-| P3-002 | 期货适配（CTP） | CTP 接口接入，保证金/逐日盯市规则 | Phase 3 BACKLOG |
+| MKT-PLG | 市场源插件框架 + IG 外汇接入（已提前落地） | 统一 `MarketSource` 插件接口 + 注册路由 manager（`gateway/market_sources/`），REST/WS 增加 exchange 维度（WS 主题 `klines.{exchange}.{symbol}.{tf}`，兼容旧格式）。币安链路作为首个插件迁移（行为零变化）；IG 外汇插件：REST `/prices` 历史（分页）+ Lightstreamer `CANDLE:{epic}:{resolution}` 实时流 + REST 轮询降级，OTC 无成交量（前端隐藏 VOL、不支持周期禁用）；lc-live.html 交易所切换由 `/api/market/sources` 驱动。凭证写入 `.env`（IG_API_KEY/IG_IDENTIFIER/IG_PASSWORD），缺失时插件不注册不影响币安链路 | 用户指令（2026-08）：新增市场/交易所一律插件式接入 |
+| P3-001 | A 股适配（QMT） | QMT/miniQMT 接入，A 股行情+交易适配，T+1 规则（按 MKT-PLG 插件框架接入） | Phase 3 BACKLOG |
+| P3-002 | 期货适配（CTP） | CTP 接口接入，保证金/逐日盯市规则（按 MKT-PLG 插件框架接入） | Phase 3 BACKLOG |
 | 文档 | 用户手册 + API 文档 | 操作手册、REST/WS API 参考、策略开发指南 | 需求文档 P2 |
 | 部署 | Docker 方案 | 容器化部署（当前 Windows 本地部署为主，Docker 为可选） | 需求文档 P2 |
 
@@ -179,6 +180,7 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | STR-008 | 策略模板库 | v1.3.0 | ⬜ BACKLOG |
 | P3-001 | A 股适配（QMT） | v2.0.0 | ⬜ BACKLOG |
 | P3-002 | 期货适配（CTP） | v2.0.0 | ⬜ BACKLOG |
+| MKT-PLG | 市场源插件框架 + IG 外汇接入 | 提前落地（v1.1 期） | ✅ 已实现（IG 待凭证冒烟） |
 | DOC | 用户手册/API 文档 | v2.0.0 | ⬜ BACKLOG |
 | DOCKER | Docker 部署方案 | v2.0.0 | ⬜ BACKLOG（非必需） |
 | INT-003 | 实盘验证 | v2.1.0-live（最后） | ⬜ BACKLOG（用户明确留到最后） |
@@ -206,3 +208,4 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | 2026-07-30 | v1.5 | 新增 IND-107/108：用户策略需盘中触发（止损/止盈/K 线形态）。IND-107 ZigZag 重绘型指标（增量状态机 + 快照法盘中重绘，策略/图表共用）；IND-108 策略盘中触发机制（on_bar_update/on_tick 回调 + 订阅制行情路由 + 盘中信号执行快路径）；约定固定止损止盈走交易所条件单（TRD-007），指标动态止损走策略盘中触发 |
 | 2026-07-30 | v1.6 | 确认自定义指标约定：命名全局唯一、前端只设参数。扩展 IND-102（/meta 元数据接口，display_meta 下发）、IND-103（前端增删指标交互 + indParams 升级为 indLayout 有序列表，四份用途同源）；新增 IND-109 自定义指标支持体系（三步接入 + 增量接口分级/窗口兜底 + display_meta 契约 + 单测模板） |
 | 2026-07-29 | v1.7 | 明确指标自动发现闭环：IND-103 增补"指标目录动态化"——前端删除硬编码 IND_CATALOG/IND_META，选择面板/参数弹窗由 meta 接口驱动渲染，后端注册新指标后前端刷新即自动出现，零改动接入 |
+| 2026-08-07 | v1.8 | 新增 MKT-PLG 任务组（提前落地）：市场源插件框架 + IG 外汇接入。`gateway/market_sources/` 统一 MarketSource 接口 + 注册路由 + 去重广播；币安链路插件化迁移（行为零变化）；IG 插件 REST 历史（分页）+ Lightstreamer 实时流 + REST 轮询降级；网关/前端增加 exchange 维度（WS 主题 klines.{exchange}.{symbol}.{tf}），OTC 无成交量隐藏 VOL、不支持周期禁用。架构约定：此后新增市场/交易所一律插件式接入（P3-001/P3-002 同步标注） |

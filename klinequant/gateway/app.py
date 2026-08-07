@@ -11,17 +11,30 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+from gateway.env import load_env
+
+load_env()  # 凭证等环境变量从 klinequant/.env 加载（须在路由/插件导入前）
+
 from gateway.errors import register_error_handlers
+from gateway.market_sources import bootstrap_sources, market_manager
 from gateway.routers import alert, backtest, market, risk, strategy, system, trade
 from gateway.ws import ws_manager
 
 logger = logging.getLogger(__name__)
+
+# 前端页面目录（lc-live.html 为默认首页与唯一迭代基线）：klinequant/../frontend/mockup
+FRONTEND_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "frontend", "mockup")
+)
 
 
 def create_app() -> FastAPI:
@@ -78,13 +91,28 @@ def create_app() -> FastAPI:
             logger.error(f"WS error: {ws_id}: {e}")
             ws_manager.disconnect(ws_id)
 
+    # 前端页面：根路径重定向到 /static/lc-live.html（保证页面内相对路径 lwc.js 正确解析），
+    # /static 挂载整个 mockup 目录
+    index_file = os.path.join(FRONTEND_DIR, "lc-live.html")
+    if os.path.isfile(index_file):
+        @app.get("/", include_in_schema=False)
+        async def index():
+            return RedirectResponse("/static/lc-live.html")
+
+        app.mount("/static", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
+    else:
+        logger.warning(f"Frontend dir not found, UI disabled: {FRONTEND_DIR}")
+
+        @app.get("/", include_in_schema=False)
+        async def index_missing():
+            return RedirectResponse("/docs")
+
     @app.on_event("startup")
     async def on_startup():
         logger.info("KlineQuant Gateway starting...")
-        # 启动 WS K线推送后台任务
-        import asyncio
-        from gateway.ws_kline import start_kline_broadcaster
-        asyncio.create_task(start_kline_broadcaster())
+        # 市场源插件框架：注册启用的插件（KQ_MARKET_SOURCES）并启动订阅分发
+        bootstrap_sources()
+        await market_manager.start()
 
     @app.on_event("shutdown")
     async def on_shutdown():
