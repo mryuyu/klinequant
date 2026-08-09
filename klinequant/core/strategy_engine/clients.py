@@ -142,15 +142,22 @@ class MarketClient:
         # 本地模式回调
         self._get_klines_callback = None
         self._get_indicators_callback = None
+        self._get_indicator_history_callback = None
 
     @property
     def strategy_id(self) -> str:
         return self._strategy_id
 
-    def set_callbacks(self, get_klines_cb=None, get_indicators_cb=None):
+    def set_callbacks(
+        self,
+        get_klines_cb=None,
+        get_indicators_cb=None,
+        get_indicator_history_cb=None,
+    ):
         """设置本地模式回调"""
         self._get_klines_callback = get_klines_cb
         self._get_indicators_callback = get_indicators_cb
+        self._get_indicator_history_callback = get_indicator_history_cb
 
     async def get_klines(
         self,
@@ -209,6 +216,45 @@ class MarketClient:
                 "symbol": symbol,
                 "indicator_name": indicator_name,
                 "timeframe": timeframe,
+            }
+            return await self._transport.request("market_service", msg)
+
+        return None
+
+    async def get_indicator_history(
+        self,
+        symbol: str,
+        timeframe: str,
+        indicator_name: str,
+        params: Optional[Dict[str, Any]] = None,
+        limit: int = 300,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """获取指标历史序列（IND-106：后端引擎统一计算的有效序列）
+
+        Args:
+            symbol: 交易对
+            timeframe: 周期
+            indicator_name: 指标名（如 'MACD'）
+            params: 参数组合（计算契约 key 的一部分）
+            limit: 根数
+
+        Returns:
+            [{"timestamp": ms, "values": {...}}, ...]；未接通时 None
+        """
+        if self._get_indicator_history_callback:
+            return await self._get_indicator_history_callback(
+                symbol, timeframe, indicator_name, params, limit
+            )
+
+        if self._transport:
+            msg = {
+                "action": "get_indicator_history",
+                "strategy_id": self._strategy_id,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "indicator_name": indicator_name,
+                "params": params or {},
+                "limit": limit,
             }
             return await self._transport.request("market_service", msg)
 

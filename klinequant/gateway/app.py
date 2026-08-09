@@ -26,7 +26,7 @@ load_env()  # 凭证等环境变量从 klinequant/.env 加载（须在路由/插
 
 from gateway.errors import register_error_handlers
 from gateway.market_sources import bootstrap_sources, market_manager
-from gateway.routers import alert, backtest, market, risk, strategy, system, trade
+from gateway.routers import alert, backtest, indicator, market, risk, strategy, system, trade
 from gateway.ws import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,7 @@ def create_app() -> FastAPI:
     # 注册路由
     app.include_router(system.router)
     app.include_router(market.router)
+    app.include_router(indicator.router)
     app.include_router(strategy.router)
     app.include_router(trade.router)
     app.include_router(backtest.router)

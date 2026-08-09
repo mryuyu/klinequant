@@ -1,0 +1,400 @@
+"""本地 MetaTrader 5 市场源插件
+
+接入方式：官方 MetaTrader5 Python 包连接本机 MT5 终端（需终端已登录运行，
+或配置 MT5_TERMINAL_PATH/MT5_LOGIN 等由其拉起）。历史深度远超 IG demo
+（本地终端全量历史，支持多年 M1），实时链路为终端轮询（包无推送接口）。
+
+精度铁律落地：MT5 symbol_info().digits 是订阅到的市场元数据（tick 小数位），
+直接作为 price_precision 下发，不做任何推导。
+
+阻塞调用统一 asyncio.to_thread（MetaTrader5 包为同步实现），驱动层可注入
+fake 以便单测。
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import threading
+import time
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
+from gateway.market_sources.base import MarketSource
+from gateway.market_sources.manager import market_manager
+
+try:
+    import MetaTrader5 as _mt5  # type: ignore
+    _HAS_MT5 = True
+except ImportError:  # pragma: no cover
+    _mt5 = None
+    _HAS_MT5 = False
+
+logger = logging.getLogger(__name__)
+
+POLL_INTERVAL = float(os.getenv("MT5_POLL_INTERVAL", "2"))   # 终端轮询间隔（秒，本地调用开销低）
+TICKER_CACHE_TTL = 5.0   # ticker 缓存（秒）：前端多品种并发轮询时合并重复请求，
+                         # 降低对单连接 MT5 包的并发压力（本地终端数据无时效损失容忍）
+RECONNECT_COOLDOWN = 30.0   # 重连冷却（秒）：终端长时间未启动时避免每轮都 shutdown/initialize
+
+
+def _tf_const(name: str, fallback: int) -> int:
+    """从 MetaTrader5 包取 TIMEFRAME 常量（包缺失时用官方协议值兜底，便于单测）"""
+    return getattr(_mt5, name, fallback) if _HAS_MT5 else fallback
+
+
+# 前端周期 → MT5 TIMEFRAME 常量（fallback 为 MT5 协议定义值：分钟级=分钟数，
+# 小时级=16384+小时数，D1=16408，W1=32769）
+TIMEFRAME_MAP = {
+    "1m": _tf_const("TIMEFRAME_M1", 1),
+    "3m": _tf_const("TIMEFRAME_M3", 3),
+    "5m": _tf_const("TIMEFRAME_M5", 5),
+    "15m": _tf_const("TIMEFRAME_M15", 15),
+    "30m": _tf_const("TIMEFRAME_M30", 30),
+    "1h": _tf_const("TIMEFRAME_H1", 16385),
+    "2h": _tf_const("TIMEFRAME_H2", 16386),
+    "4h": _tf_const("TIMEFRAME_H4", 16388),
+    "6h": _tf_const("TIMEFRAME_H6", 16390),
+    "12h": _tf_const("TIMEFRAME_H12", 16396),
+    "1d": _tf_const("TIMEFRAME_D1", 16408),
+    "1w": _tf_const("TIMEFRAME_W1", 32769),
+}
+# 周期秒数（copy_rates_range 回溯窗口估算用）
+TF_SECONDS = {
+    "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+    "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "12h": 43200,
+    "1d": 86400, "1w": 604800,
+}
+
+
+class Mt5Api:
+    """真实驱动：包装 MetaTrader5 包的同步调用（numpy 结构数组 → 标准 dict）
+
+    MetaTrader5 包单连接且非线程安全：asyncio.to_thread 并发直调会互相
+    干扰（请求挂起/数据错乱），全部调用经全局锁串行。
+
+    返回值约定：错误/连接丢失返回 None；成功但无数据返回 []/空对象。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def initialize(self, **kwargs) -> bool:
+        if not _HAS_MT5:
+            return False
+        with self._lock:
+            return bool(_mt5.initialize(**kwargs))
+
+    def shutdown(self) -> None:
+        if _HAS_MT5:
+            with self._lock:
+                _mt5.shutdown()
+
+    def symbol_select(self, symbol: str, enable: bool = True) -> bool:
+        with self._lock:
+            return bool(_mt5.symbol_select(symbol, enable))
+
+    def symbol_info(self, symbol: str):
+        with self._lock:
+            return _mt5.symbol_info(symbol)
+
+    def symbol_info_tick(self, symbol: str):
+        with self._lock:
+            return _mt5.symbol_info_tick(symbol)
+
+    def copy_rates_from_pos(self, symbol: str, timeframe: int, start_pos: int, count: int):
+        with self._lock:
+            return self._to_rows(_mt5.copy_rates_from_pos(symbol, timeframe, start_pos, count))
+
+    def copy_rates_range(self, symbol: str, timeframe: int, date_from, date_to):
+        with self._lock:
+            return self._to_rows(_mt5.copy_rates_range(symbol, timeframe, date_from, date_to))
+
+    @staticmethod
+    def _to_rows(rates) -> list[dict] | None:
+        """numpy 结构数组 → list[dict]；time 为 UTC epoch 秒（MT5 内部已转 UTC）"""
+        if rates is None:
+            return None
+        rows = []
+        for r in rates:
+            rows.append({
+                "time": int(r["time"].astype("int64")),   # datetime64[s] → epoch 秒
+                "open": float(r["open"]),
+                "high": float(r["high"]),
+                "low": float(r["low"]),
+                "close": float(r["close"]),
+                "tick_volume": int(r["tick_volume"]),
+                "real_volume": int(r["real_volume"]),
+            })
+        return rows
+
+
+class Mt5Source(MarketSource):
+    """本地 MT5 终端：历史 K 线（copy_rates）+ 终端轮询实时流"""
+
+    name = "mt5"
+    label = "MT5 Local"
+    supported_timeframes = set(TIMEFRAME_MAP.keys())
+    supports_volume = True   # tick_volume 为真实订阅数据（外汇无 real_volume 时用 tick）
+    default_symbols = [
+        {"symbol": "EURUSD", "name": "EUR/USD"},
+        {"symbol": "GBPUSD", "name": "GBP/USD"},
+        {"symbol": "USDJPY", "name": "USD/JPY"},
+        {"symbol": "AUDUSD", "name": "AUD/USD"},
+        {"symbol": "USDCHF", "name": "USD/CHF"},
+        {"symbol": "XAUUSD", "name": "XAU/USD"},
+    ]
+    watched_targets: list[tuple[str, str]] = []
+
+    def __init__(self, driver: Mt5Api | None = None):
+        self._driver = driver or Mt5Api()
+        self.available = self._driver.initialize(**self._init_kwargs())
+        #: symbol -> digits（订阅到的 tick 小数位，精度唯一权威来源）
+        self._digits: dict[str, int] = {}
+        #: 已加入市场报价的品种（symbol_select 幂等缓存）
+        self._selected: set[str] = set()
+        #: symbol -> (ts, ticker)
+        self._ticker_cache: dict[str, tuple[float, dict | None]] = {}
+        self._last_reconnect_at = 0.0
+        if self.available:
+            self._probe_symbols()
+
+    @staticmethod
+    def _init_kwargs() -> dict:
+        """终端连接参数（全部可选：缺省时连接已运行的本机终端）"""
+        kw: dict = {}
+        path = os.getenv("MT5_TERMINAL_PATH", "")
+        if path:
+            kw["path"] = path
+        login = os.getenv("MT5_LOGIN", "")
+        if login:
+            kw["login"] = int(login)
+            kw["password"] = os.getenv("MT5_PASSWORD", "")
+            server = os.getenv("MT5_SERVER", "")
+            if server:
+                kw["server"] = server
+        return kw
+
+    def _probe_symbols(self) -> None:
+        """过滤默认品种为终端实际存在的（经纪商命名可能有后缀），顺带缓存 digits"""
+        kept = []
+        for item in self.default_symbols:
+            info = self._driver.symbol_info(item["symbol"])
+            if info is not None:
+                self._digits[item["symbol"].upper()] = int(info.digits)
+                kept.append(item)
+        if kept:
+            self.default_symbols = kept
+        else:
+            logger.warning("MT5 none of default symbols found in terminal, keeping list as-is")
+
+    def _ensure_selected(self, symbol: str) -> None:
+        """品种须在终端市场报价中才可取数（惰性 symbol_select）"""
+        if symbol not in self._selected:
+            self._driver.symbol_select(symbol, True)
+            self._selected.add(symbol)
+
+    def _ensure_digits(self, symbol: str) -> None:
+        if symbol not in self._digits:
+            info = self._driver.symbol_info(symbol)
+            if info is not None:
+                self._digits[symbol] = int(info.digits)
+
+    # ─── 精度：digits 优先（订阅到的市场元数据），价格推导兜底 ───
+
+    def price_precision(self, symbol: str) -> int:
+        d = self._digits.get(symbol.upper())
+        if d:
+            return d
+        return super().price_precision(symbol)
+
+    # ─── REST 历史 K 线 / 行情摘要 ───
+
+    def _to_bar(self, row: dict) -> dict:
+        # real_volume 为 0 时（外汇/CFD 常态）用 tick_volume
+        vol = row.get("real_volume") or row.get("tick_volume") or 0
+        return {
+            "timestamp": int(row["time"]) * 1000,
+            "open": row["open"],
+            "high": row["high"],
+            "low": row["low"],
+            "close": row["close"],
+            "volume": float(vol),
+            "event_ms": int(time.time() * 1000),
+        }
+
+    async def fetch_klines(
+        self,
+        symbol: str,
+        timeframe: str,
+        limit: int = 200,
+        end_time: int | None = None,
+    ) -> list[dict]:
+        tf_const = TIMEFRAME_MAP.get(timeframe)
+        if not tf_const:
+            raise ValueError(f"MT5 unsupported timeframe: {timeframe}")
+        sym = symbol.upper()
+        self._ensure_selected(sym)
+        self._ensure_digits(sym)
+        if end_time:
+            # 翻页加深：按 end_time（含）向前回溯 limit 根（窗口留 2 倍冗余防缺口）
+            dt_to = datetime.fromtimestamp(end_time / 1000, tz=timezone.utc)
+            dt_from = dt_to - timedelta(seconds=TF_SECONDS[timeframe] * limit * 2)
+            rows = await asyncio.to_thread(
+                self._driver.copy_rates_range, sym, tf_const, dt_from, dt_to
+            )
+        else:
+            rows = await asyncio.to_thread(
+                self._driver.copy_rates_from_pos, sym, tf_const, 0, limit
+            )
+        if rows is None:
+            raise RuntimeError(f"MT5 copy_rates failed for {sym}/{timeframe}")
+        bars = [self._to_bar(r) for r in rows]
+        # 价格精度兜底累积（digits 缺失时才生效；digits 存在时 price_precision 优先返回）
+        for b in bars[-20:]:
+            self._track_prec(sym, [b["open"], b["high"], b["low"], b["close"]])
+        if end_time:
+            bars = [b for b in bars if b["timestamp"] <= end_time]
+        return bars[-limit:]
+
+    async def fetch_ticker(self, symbol: str) -> dict | None:
+        cached = self._ticker_cache.get(symbol)
+        if cached and time.monotonic() - cached[0] < TICKER_CACHE_TTL:
+            return cached[1]
+        sym = symbol.upper()
+        self._ensure_selected(sym)
+        self._ensure_digits(sym)
+        tick = await asyncio.to_thread(self._driver.symbol_info_tick, sym)
+        bid = getattr(tick, "bid", None) if tick is not None else None
+        ask = getattr(tick, "ask", None) if tick is not None else None
+        if not bid and not ask:
+            # 无报价（休市/终端断连）：用最新 K 线构造 ticker
+            result = await self._ticker_from_candles(sym)
+            self._ticker_cache[symbol] = (time.monotonic(), result)
+            return result
+        bid_n, ask_n = float(bid or 0), float(ask or 0)
+        self._track_prec(sym, [v for v in (bid_n, ask_n) if v])
+        # 中点用 Decimal 均值避免浮点噪声污染展示价
+        last = ask_n if not bid_n else (
+            bid_n if not ask_n else float((Decimal(str(bid_n)) + Decimal(str(ask_n))) / 2)
+        )
+        high, low, pct = last, last, 0.0
+        try:
+            # 24h 高低：近 25 根 H1；涨跌幅：对上一根日 K 收盘价
+            h1 = await asyncio.to_thread(
+                self._driver.copy_rates_from_pos, sym, TIMEFRAME_MAP["1h"], 0, 25
+            )
+            if h1:
+                highs = [r["high"] for r in h1 if r["high"] > 0]
+                lows = [r["low"] for r in h1 if r["low"] > 0]
+                if highs:
+                    high = max(highs)
+                if lows:
+                    low = min(lows)
+            d1 = await asyncio.to_thread(
+                self._driver.copy_rates_from_pos, sym, TIMEFRAME_MAP["1d"], 0, 2
+            )
+            if d1 and len(d1) >= 2 and d1[-2]["close"] > 0:
+                pct = (last / d1[-2]["close"] - 1) * 100
+        except Exception as e:
+            logger.debug(f"MT5 ticker 24h stats fallback failed {sym}: {e}")
+        result = {
+            "symbol": sym,
+            "last_price": last,
+            "bid": bid_n,
+            "ask": ask_n,
+            "volume_24h": 0.0,
+            "price_change_pct": pct,
+            "high_24h": high,
+            "low_24h": low,
+        }
+        self._ticker_cache[symbol] = (time.monotonic(), result)
+        return result
+
+    async def _ticker_from_candles(self, sym: str) -> dict | None:
+        """无 tick 报价时的 ticker 构造：最新分钟 K 收盘价 + 近 25 根小时 K 统计"""
+        rows = await asyncio.to_thread(
+            self._driver.copy_rates_from_pos, sym, TIMEFRAME_MAP["1m"], 0, 1
+        )
+        if not rows:
+            return None
+        close = rows[-1]["close"]
+        if close <= 0:
+            return None
+        high, low, pct = close, close, 0.0
+        try:
+            h1 = await asyncio.to_thread(
+                self._driver.copy_rates_from_pos, sym, TIMEFRAME_MAP["1h"], 0, 25
+            )
+            if h1:
+                highs = [r["high"] for r in h1 if r["high"] > 0]
+                lows = [r["low"] for r in h1 if r["low"] > 0]
+                if highs:
+                    high = max(highs)
+                if lows:
+                    low = min(lows)
+        except Exception as e:
+            logger.debug(f"MT5 ticker candle fallback failed {sym}: {e}")
+        self._track_prec(sym, [close, high, low])
+        return {
+            "symbol": sym,
+            "last_price": close,
+            "bid": close,
+            "ask": 0.0,
+            "volume_24h": 0.0,
+            "price_change_pct": pct,
+            "high_24h": high,
+            "low_24h": low,
+        }
+
+    # ─── 实时流：终端轮询（MetaTrader5 包无推送接口） ───
+
+    async def stream_loop(self) -> None:
+        if not self.available:
+            logger.warning("MT5 source unavailable: terminal not connected, stream loop idle")
+            while True:
+                await asyncio.sleep(60)
+        logger.info(f"MT5 source stream started (mode=terminal-poll, interval={POLL_INTERVAL}s)")
+        while True:
+            targets = sorted(market_manager.active_targets(self.name))
+            if not targets:
+                await asyncio.sleep(2)
+                continue
+            for symbol, tf in targets:
+                try:
+                    sym = symbol.upper()
+                    self._ensure_selected(sym)
+                    # 取最新一根（含未收盘）：OHLC 变化由 manager 去重签名识别后广播
+                    rows = await asyncio.to_thread(
+                        self._driver.copy_rates_from_pos, sym, TIMEFRAME_MAP[tf], 0, 1
+                    )
+                    if rows is None:
+                        self._try_reconnect()
+                        break
+                    if rows:
+                        bar = self._to_bar(rows[-1])
+                        self._ensure_digits(sym)
+                        await market_manager.publish_bar(self.name, symbol, tf, bar)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.debug(f"MT5 poll error {symbol}/{tf}: {e}")
+            await asyncio.sleep(POLL_INTERVAL)
+
+    def _try_reconnect(self) -> None:
+        """终端断连（调用返回 None）时重连（冷却内不重复尝试）"""
+        now = time.monotonic()
+        if now - self._last_reconnect_at < RECONNECT_COOLDOWN:
+            return
+        self._last_reconnect_at = now
+        logger.warning("MT5 terminal connection lost, attempting reconnect...")
+        self.available = False
+        try:
+            self._driver.shutdown()
+        except Exception:
+            pass
+        self.available = self._driver.initialize(**self._init_kwargs())
+        if self.available:
+            logger.info("MT5 terminal reconnected")
+        else:
+            logger.warning("MT5 terminal reconnect failed, will retry after cooldown")

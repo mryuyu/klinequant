@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
 
@@ -37,6 +37,8 @@ class StrategyBase(ABC):
         self._ctx = context
         self._trade = trade_client
         self._market = market_client
+        # IND-106：指标需求声明 [{symbol, timeframe, indicator, params}]
+        self._indicator_requirements: List[Dict[str, Any]] = []
 
     @property
     def ctx(self) -> StrategyContext:
@@ -57,6 +59,44 @@ class StrategyBase(ABC):
     @property
     def logger(self):
         return self._ctx.logger
+
+    # ─── 指标需求声明（IND-106） ───
+
+    def require_indicators(
+        self,
+        symbol: str,
+        timeframe: str,
+        indicators: List[Tuple[str, Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
+        """声明策略依赖的指标（on_init 中调用）
+
+        计算契约 key = (指标名, 参数组合)：同指标多参数实例可重复声明（去重）。
+        声明由引擎侧统一预热维护，策略不自行实现公式（IND-106）。
+
+        Args:
+            indicators: [("MACD", {"fast_period": 12, ...}), ...]
+
+        Returns:
+            当前累计的声明列表
+        """
+        for name, params in indicators:
+            req = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "indicator": name,
+                "params": dict(params or {}),
+            }
+            if req not in self._indicator_requirements:
+                self._indicator_requirements.append(req)
+                self.logger.info(
+                    f"Indicator required: {name}{req['params']} {symbol}@{timeframe}"
+                )
+        return list(self._indicator_requirements)
+
+    @property
+    def indicator_requirements(self) -> List[Dict[str, Any]]:
+        """策略声明的指标需求列表（供管理器/引擎接线消费）"""
+        return list(self._indicator_requirements)
 
     # ─── 生命周期方法 ───
 

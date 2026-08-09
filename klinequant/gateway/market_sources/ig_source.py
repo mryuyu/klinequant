@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import time
+from decimal import Decimal
 
 from gateway.market_sources.base import MarketSource
 from gateway.market_sources.ig_client import RESOLUTION_MAP, IgClient, normalize_bar, normalize_rate
@@ -95,7 +96,10 @@ class IgSource(MarketSource):
         try:
             prices = await self._client.fetch_prices(epic, resolution, limit, end_time)
             for p in prices:
-                self._hist_merge(sym, timeframe, normalize_bar(sym, IgClient.candle_to_bar(p)))
+                bar = normalize_bar(sym, IgClient.candle_to_bar(p))
+                # 从归一化后的价格推导品种显示精度（点位对已÷回汇率，随响应下发，前端只渲染）
+                self._track_prec(sym, [bar["open"], bar["high"], bar["low"], bar["close"]])
+                self._hist_merge(sym, timeframe, bar)
         except Exception as e:
             # API 失败时用累积缓存兜底（有则返回，无则继续上抛）
             if not self._hist_cache.get((sym, timeframe)):
@@ -125,7 +129,14 @@ class IgSource(MarketSource):
             return result
         bid_n = normalize_rate(sym, float(bid))
         offer_n = normalize_rate(sym, float(offer))
-        last = offer_n if bid is None else (bid_n if offer is None else (bid_n + offer_n) / 2)
+        self._track_prec(
+            sym,
+            [bid_n, offer_n, normalize_rate(sym, float(snap.get("high") or 0)), normalize_rate(sym, float(snap.get("low") or 0))],
+        )
+        # 中点用 Decimal 均值避免浮点噪声污染展示价（(1.15578+1.15581)/2 可能带长尾）
+        last = offer_n if bid is None else (
+            bid_n if offer is None else float((Decimal(str(bid_n)) + Decimal(str(offer_n))) / 2)
+        )
         result = {
             "symbol": sym,
             "last_price": float(last),
@@ -163,6 +174,8 @@ class IgSource(MarketSource):
                     pct = (close / first_open - 1) * 100
         except Exception as e:
             logger.debug(f"IG ticker 24h stats fallback failed {sym}: {e}")
+        # K 线构造的 ticker 同样累积精度（snapshot 无报价时此路径是前端唯一下发源）
+        self._track_prec(sym, [close, high, low])
         return {
             "symbol": sym,
             "last_price": close,

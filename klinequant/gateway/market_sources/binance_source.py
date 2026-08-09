@@ -89,6 +89,11 @@ class BinanceSource(MarketSource):
             resp = await client.get(f"{BINANCE_REST_BASE}/api/v3/klines", params=params)
             resp.raise_for_status()
             raw = resp.json()
+        # 从订阅到的原始字符串价格推导品种显示精度（随 klines 响应下发，前端只渲染）
+        self._track_prec(
+            symbol,
+            [p for k in raw for p in (k[1], k[2], k[3], k[4])],
+        )
         return [
             {
                 "timestamp": int(k[0]),
@@ -110,6 +115,10 @@ class BinanceSource(MarketSource):
             )
             resp.raise_for_status()
             t = resp.json()
+        self._track_prec(
+            symbol.upper(),
+            [t["lastPrice"], t["bidPrice"], t["askPrice"], t["highPrice"], t["lowPrice"]],
+        )
         return {
             "symbol": symbol.upper(),
             "last_price": float(t["lastPrice"]),
@@ -205,6 +214,8 @@ class BinanceSource(MarketSource):
                             if not symbol or tf not in VALID_TIMEFRAMES:
                                 continue
                             ts = int(k.get("t", 0))
+                            # 实时 bar 同步累积品种精度（WS 主链路）
+                            self._track_prec(symbol, [k.get("o"), k.get("h"), k.get("l"), k.get("c")])
                             published = await market_manager.publish_bar(
                                 self.name, symbol, tf,
                                 {
@@ -215,6 +226,7 @@ class BinanceSource(MarketSource):
                                     "close": float(k.get("c", 0)),
                                     "volume": float(k.get("v", 0)),
                                     "event_ms": int(payload.get("E", 0)),
+                                    "is_closed": bool(k.get("x", False)),
                                 },
                             )
                             if published:
@@ -266,6 +278,7 @@ class BinanceSource(MarketSource):
             if not raw:
                 return
             k = raw[0]
+            self._track_prec(symbol, [k[1], k[2], k[3], k[4]])   # REST 降级链路同步累积精度
             await market_manager.publish_bar(
                 self.name, symbol, timeframe,
                 {

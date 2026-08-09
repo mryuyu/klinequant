@@ -9,8 +9,10 @@ from typing import Any, Dict, Optional
 import polars as pl
 
 from core.indicator_engine.base import IndicatorBase
+from core.indicator_engine.registry import register_indicator
 
 
+@register_indicator
 class VWAP(IndicatorBase):
     """成交量加权平均价
 

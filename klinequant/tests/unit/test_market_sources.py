@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from gateway.market_sources.base import MarketSource
+from gateway.market_sources.base import price_decimals
 from gateway.market_sources.ig_client import (
     RESOLUTION_MAP,
     IgClient,
@@ -60,6 +61,62 @@ def test_meta_contract():
     assert meta["timeframes"] == ["1h", "1m"]
     assert meta["default_symbols"][0]["symbol"] == "IGUSD"
     assert _FakeSource("otc").meta()["supports_volume"] is False   # OTC 所声明无成交量
+
+
+# ─── 价格精度：从订阅到的价格推导，随响应下发（前端只渲染不推导） ───
+
+def test_price_decimals_from_raw_strings():
+    """交易所按 tick 补齐的字符串价格：去尾零后计小数位"""
+    assert price_decimals(["65239.14000000", "65240.00000000"]) == 2    # BTC tick 0.01
+    assert price_decimals(["0.07068000"]) == 5                          # DOGE tick 0.00001
+    assert price_decimals(["1.08432"]) == 5                             # 外汇 5 位
+    assert price_decimals(["71420"]) == 0                               # 整数价
+    assert price_decimals([]) == 0
+    assert price_decimals(["0.123456789"], cap=8) == 8                  # 上限截断
+
+
+def test_price_decimals_from_floats():
+    assert price_decimals([7.142]) == 3
+    assert price_decimals([65239.14]) == 2
+
+
+def test_track_prec_monotonic_and_case():
+    """精度缓存只增不减（新批次碰巧整数价不回退），品种名大小写不敏感"""
+    src = _FakeSource("mockex")
+    assert src.price_precision("BTCUSDT") == 0          # 未订阅数据时未知
+    src._track_prec("btcusdt", ["65000.00000000"])      # 整数价不抬升
+    assert src.price_precision("BTCUSDT") == 0
+    src._track_prec("BTCUSDT", ["65239.14000000"])
+    assert src.price_precision("btcusdt") == 2
+    src._track_prec("BTCUSDT", ["66000.00000000"])      # 后续整数批次不回退
+    assert src.price_precision("BTCUSDT") == 2
+
+
+def test_klines_response_delivers_price_precision():
+    """/api/market/klines 响应携带后端推导的 price_precision（前端只消费）"""
+    from fastapi.testclient import TestClient
+    from gateway.app import create_app
+    from gateway.market_sources.manager import market_manager
+
+    class _PrecSource(_FakeSource):
+        name = "mockex"
+
+        async def fetch_klines(self, symbol, timeframe, limit=200, end_time=None):
+            # 模拟币安：原始字符串价格按 tick 补齐，转 float 前先推导精度
+            self._track_prec(symbol, ["65239.14000000", "65240.10000000"])
+            return [{"timestamp": 1, "open": 65239.14, "high": 65240.1,
+                     "low": 65238.0, "close": 65239.14, "volume": 1.0, "event_ms": 0}]
+
+    src = _PrecSource("mockex")
+    market_manager.register(src)
+    try:
+        client = TestClient(create_app())
+        resp = client.get("/api/market/klines?symbol=BTCUSDT&timeframe=1m&exchange=mockex")
+        data = resp.json()
+        assert resp.status_code == 200
+        assert data["price_precision"] == 2
+    finally:
+        market_manager._sources.pop("mockex", None)
 
 
 # 分页测试用：以固定基准生成合法 IG 时间格式的 candle
@@ -235,6 +292,16 @@ def test_normalize_rate_points_to_rate():
     # 非汇率型货币对不做归一（USDJPY 157 / XAUUSD 4395 都是合法报价）
     assert normalize_rate("USDJPY", 157.43) == pytest.approx(157.43)
     assert normalize_rate("XAUUSD", 4395.5) == pytest.approx(4395.5)
+
+
+def test_normalize_rate_no_float_noise():
+    """归一化不得引入浮点噪声：浮点除法会把 11514.8/10000 算成 1.1514799999999998，
+    噪声会污染价格展示并把精度推导推高到 8 位（Decimal 移位修复后应为干净十进制）"""
+    assert repr(normalize_rate("EURUSD", 11514.8)) == "1.15148"
+    assert repr(normalize_rate("EURUSD", 11514.7)) == "1.15147"
+    # 归一化后的价格推导精度不超过真实报价位数（点位 1 位小数 → 汇率 5 位）
+    rates = [normalize_rate("EURUSD", p) for p in [11561, 11561.5, 11514.8, 11557]]
+    assert price_decimals(rates) == 5
 
 
 def test_normalize_bar_ohlc_only():

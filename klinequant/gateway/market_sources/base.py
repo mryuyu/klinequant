@@ -13,6 +13,24 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
+def price_decimals(values, cap: int = 8) -> int:
+    """从订阅到的原始价格推导显示小数位（前端只渲染不推导）
+
+    字符串价格去除尾部零后计小数位（交易所按 tick 补齐，去零后即时值）；
+    数值型取十进制表示。返回批次内最大位数（上限 cap），无可推导值时返 0。
+    """
+    max_d = 0
+    for v in values:
+        s = v if isinstance(v, str) else repr(v) if isinstance(v, (int, float)) else None
+        if not s:
+            continue
+        s = s.rstrip("0").rstrip(".")
+        i = s.find(".")
+        if i >= 0:
+            max_d = max(max_d, min(cap, len(s) - i - 1))
+    return max_d
+
+
 class MarketSource(ABC):
     """市场数据源插件基类"""
 
@@ -28,6 +46,18 @@ class MarketSource(ABC):
     default_symbols: list[dict[str, str]] = []
     #: 无订阅者时的默认监控集 [(symbol, timeframe)]，保持旧行为
     watched_targets: list[tuple[str, str]] = []
+
+    def _track_prec(self, symbol: str, values) -> None:
+        """从订阅到的原始价格更新品种精度缓存（只增不减：新批次可能碰巧整数价）"""
+        d = price_decimals(values)
+        if not hasattr(self, "_price_prec"):
+            self._price_prec = {}
+        if d > self._price_prec.get(symbol.upper(), 0):
+            self._price_prec[symbol.upper()] = d
+
+    def price_precision(self, symbol: str) -> int:
+        """品种价格显示精度（已订阅数据推导；未知时 0，前端自行保底）"""
+        return getattr(self, "_price_prec", {}).get(symbol.upper(), 0)
 
     @abstractmethod
     async def fetch_klines(

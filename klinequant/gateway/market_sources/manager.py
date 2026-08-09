@@ -106,6 +106,12 @@ class MarketSourceManager:
         # 兼容旧格式订阅（无 exchange 维度的旧前端）
         await ws_manager.publish(f"klines.{symbol}.{timeframe}", payload)
         await ws_manager.publish(f"klines.{symbol}", payload)
+        # IND-102：驱动指标引擎增量计算并推送 indicators.* 主题（无注册指标时零开销）
+        try:
+            from gateway.indicator_service import on_bar
+            await on_bar(exchange, symbol, timeframe, payload)
+        except Exception as e:
+            logger.debug(f"Indicator bridge error: {e}")
         return True
 
     # ─── 启动与分发 ───
@@ -143,7 +149,7 @@ def bootstrap_sources() -> None:
 
     enabled = {
         s.strip().lower()
-        for s in os.getenv("KQ_MARKET_SOURCES", "binance,ig").split(",")
+        for s in os.getenv("KQ_MARKET_SOURCES", "binance,ig,mt5").split(",")
         if s.strip()
     }
     if "binance" in enabled:
@@ -156,3 +162,10 @@ def bootstrap_sources() -> None:
             market_manager.register(ig)
         else:
             logger.warning("IG source skipped: IG_API_KEY/IG_IDENTIFIER/IG_PASSWORD missing in .env")
+    if "mt5" in enabled:
+        from gateway.market_sources.mt5_source import Mt5Source
+        mt5 = Mt5Source()
+        if mt5.available:
+            market_manager.register(mt5)
+        else:
+            logger.warning("MT5 source skipped: 本机 MT5 终端未连接（需终端已登录运行，或配置 MT5_TERMINAL_PATH）")

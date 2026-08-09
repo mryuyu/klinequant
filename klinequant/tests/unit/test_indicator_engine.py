@@ -455,3 +455,182 @@ class TestIndicatorEngine:
 
         names = engine.list_indicators("BTCUSDT", "binance", "1m")
         assert sorted(names) == ["MA", "RSI"]
+
+
+# ─── IND-101: MACD 真增量（O(1) 递推 + 快照法） ───
+
+def _gen_closes(n: int, seed: int = 7) -> list[float]:
+    """确定性伪随机价格序列（LCG，避免外部随机源影响可复现性）"""
+    closes, x = [], seed
+    for _ in range(n):
+        x = (x * 1103515245 + 12345) % (2 ** 31)
+        closes.append(100.0 + (x % 1000) / 10.0)
+    return closes
+
+
+def _macd_full_last(closes: list[float], params: Dict[str, Any]) -> Dict[str, float]:
+    """全量计算的末根 MACD 值（对拍基准）"""
+    result = MACD(params=params).calculate(make_kline_df(closes))
+    prefix = f"MACD_{params['fast_period']}_{params['slow_period']}_{params['signal_period']}"
+    return {
+        "DIF": result[f"{prefix}_DIF"][-1],
+        "DEA": result[f"{prefix}_DEA"][-1],
+        "HIST": result[f"{prefix}_HIST"][-1],
+    }
+
+
+def _mk_kline(symbol: str, close: float, timestamp: int, is_closed: bool = True) -> Kline:
+    return Kline(
+        symbol=symbol,
+        exchange="binance",
+        timeframe="1m",
+        timestamp=timestamp,
+        open=Decimal(str(close - 0.5)),
+        high=Decimal(str(close + 1.0)),
+        low=Decimal(str(close - 1.0)),
+        close=Decimal(str(close)),
+        volume=Decimal("100"),
+        quote_volume=Decimal(str(100 * close)),
+        trade_count=10,
+        is_closed=is_closed,
+    )
+
+
+class TestMACDIncremental:
+    PARAMS = {"fast_period": 12, "slow_period": 26, "signal_period": 9}
+
+    def test_incremental_equals_full_every_step(self):
+        """增量递推逐步与全量计算一致；预热段降级不输出"""
+        closes = _gen_closes(200)
+        df = make_kline_df(closes)
+        full = MACD(params=self.PARAMS).calculate(df)
+
+        inc = MACD(params=self.PARAMS)
+        min_p = inc.min_periods
+        for i, row in enumerate(df.iter_rows(named=True)):
+            vals = inc.update_bar(row, True)
+            if i + 1 < min_p:
+                assert vals is None  # 预热未完成：降级不输出失真数据
+                continue
+            assert vals["DIF"] == pytest.approx(full["MACD_12_26_9_DIF"][i], rel=1e-9, abs=1e-12)
+            assert vals["DEA"] == pytest.approx(full["MACD_12_26_9_DEA"][i], rel=1e-9, abs=1e-12)
+            assert vals["HIST"] == pytest.approx(full["MACD_12_26_9_HIST"][i], rel=1e-9, abs=1e-12)
+
+    def test_unclosed_bar_snapshot_idempotent(self):
+        """快照法：未收盘 bar 同 ts 多次推送幂等，结果等价于只应用最后一次 close"""
+        closes = _gen_closes(100)
+        inc = MACD(params=self.PARAMS)
+        for row in make_kline_df(closes).iter_rows(named=True):
+            inc.update_bar(row, True)
+
+        new_ts = 1700000000000 + 100 * 60000
+        vals = None
+        for close in (105.0, 98.0, 110.0):  # tick 反复改写未收盘 close
+            vals = inc.update_bar({"timestamp": new_ts, "close": close}, False)
+            assert vals is not None
+
+        expect = _macd_full_last(closes + [110.0], self.PARAMS)
+        assert vals["DIF"] == pytest.approx(expect["DIF"], rel=1e-9, abs=1e-12)
+        assert vals["HIST"] == pytest.approx(expect["HIST"], rel=1e-9, abs=1e-12)
+
+        # 下一根新 ts：上一根隐式确认，状态提交正确
+        vals2 = inc.update_bar({"timestamp": new_ts + 60000, "close": 112.0}, True)
+        expect2 = _macd_full_last(closes + [110.0, 112.0], self.PARAMS)
+        assert vals2["DEA"] == pytest.approx(expect2["DEA"], rel=1e-9, abs=1e-12)
+
+    def test_stale_bar_ignored(self):
+        """乱序历史 bar：增量路径不处理"""
+        inc = MACD(params=self.PARAMS)
+        for row in make_kline_df(_gen_closes(50)).iter_rows(named=True):
+            inc.update_bar(row, True)
+        assert inc.update_bar({"timestamp": 1, "close": 99.0}, True) is None
+
+    def test_reset_replay_matches(self):
+        """reset 后重新重放结果不变（幂等预热）"""
+        closes = _gen_closes(80)
+        inc = MACD(params=self.PARAMS)
+        v1 = None
+        for row in make_kline_df(closes).iter_rows(named=True):
+            v1 = inc.update_bar(row, True)
+        inc.reset()
+        assert not inc.is_warmed_up
+        v2 = None
+        for row in make_kline_df(closes).iter_rows(named=True):
+            v2 = inc.update_bar(row, True)
+        for k in ("DIF", "DEA", "HIST"):
+            assert v1[k] == pytest.approx(v2[k], rel=1e-12)
+
+
+class TestEngineIncremental:
+    PARAMS = {"fast_period": 12, "slow_period": 26, "signal_period": 9}
+    MIN_P = 26 + 9 - 1  # MACD(12,26,9) 预热根数
+
+    def test_ensure_indicator_dedupe(self):
+        """计算契约 key=(指标名,参数组合)：同参复用，异参并存"""
+        engine = IndicatorEngine()
+        a = engine.ensure_indicator("MACD", self.PARAMS, "BTCUSDT", "binance", "1m")
+        b = engine.ensure_indicator("MACD", dict(self.PARAMS), "BTCUSDT", "binance", "1m")
+        assert a is b
+        c = engine.ensure_indicator(
+            "MACD", {"fast_period": 2, "slow_period": 5, "signal_period": 3},
+            "BTCUSDT", "binance", "1m",
+        )
+        assert c is not a
+        assert sorted(engine.list_indicators("BTCUSDT", "binance", "1m")) == ["MACD", "MACD"]
+
+    def test_warmup_series_excludes_warmup_segment(self):
+        """REST 供给序列剔除预热段：长度 = 总根数 - min_periods + 1"""
+        engine = IndicatorEngine()
+        engine.ensure_indicator("MACD", self.PARAMS, "BTCUSDT", "binance", "1m")
+        closes = _gen_closes(100)
+        results = engine.warmup("BTCUSDT", "binance", "1m", make_kline_df(closes))
+        assert "MACD" in results
+
+        series = engine.get_series("MACD", self.PARAMS, "BTCUSDT", "binance", "1m")
+        assert len(series) == 100 - self.MIN_P + 1
+
+        full = MACD(params=self.PARAMS).calculate(make_kline_df(closes))
+        assert series[0]["timestamp"] == full["timestamp"][self.MIN_P - 1]
+        assert series[-1]["values"]["DIF"] == pytest.approx(
+            full["MACD_12_26_9_DIF"][-1], rel=1e-9
+        )
+
+    def test_update_kline_incremental_and_series_upsert(self):
+        """实时增量推送：新 ts 追加、同 ts 未收盘覆盖，值与全量对拍"""
+        engine = IndicatorEngine()
+        engine.ensure_indicator("MACD", self.PARAMS, "BTCUSDT", "binance", "1m")
+        closes = _gen_closes(100)
+        base_ts = 1700000000000
+        engine.warmup("BTCUSDT", "binance", "1m", make_kline_df(closes))
+
+        received: list = []
+        engine.subscribe("MACD", received.append)
+
+        # 新收盘 bar
+        ts1 = base_ts + 100 * 60000
+        ivs = engine.update_kline(_mk_kline("BTCUSDT", 111.0, ts1))
+        assert len(ivs) == 1 and len(received) == 1
+        expect1 = _macd_full_last(closes + [111.0], self.PARAMS)
+        assert ivs[0].values["DIF"] == pytest.approx(expect1["DIF"], rel=1e-9)
+
+        series = engine.get_series("MACD", self.PARAMS, "BTCUSDT", "binance", "1m")
+        n1 = len(series)
+        assert series[-1]["timestamp"] == ts1
+
+        # 下一根未收盘 bar：多次 tick 覆盖同一序列位
+        ts2 = ts1 + 60000
+        engine.update_kline(_mk_kline("BTCUSDT", 112.0, ts2, is_closed=False))
+        engine.update_kline(_mk_kline("BTCUSDT", 113.0, ts2, is_closed=False))
+        series2 = engine.get_series("MACD", self.PARAMS, "BTCUSDT", "binance", "1m")
+        assert len(series2) == n1 + 1  # 同 ts 覆盖不重复追加
+        expect2 = _macd_full_last(closes + [111.0, 113.0], self.PARAMS)
+        assert series2[-1]["values"]["DIF"] == pytest.approx(expect2["DIF"], rel=1e-9)
+
+    def test_warmup_insufficient_no_output(self):
+        """预热不足：降级不输出（序列为空，update_kline 不产生值）"""
+        engine = IndicatorEngine()
+        engine.ensure_indicator("MACD", self.PARAMS, "BTCUSDT", "binance", "1m")
+        engine.warmup("BTCUSDT", "binance", "1m", make_kline_df(_gen_closes(10)))
+        assert engine.get_series("MACD", self.PARAMS, "BTCUSDT", "binance", "1m") == []
+        ivs = engine.update_kline(_mk_kline("BTCUSDT", 100.0, 1700000000000 + 10 * 60000))
+        assert ivs == []

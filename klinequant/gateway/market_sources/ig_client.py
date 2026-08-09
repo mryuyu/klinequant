@@ -16,6 +16,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -54,13 +55,14 @@ ALLOWANCE_BACKOFF = 60.0           # 秒：触发限流后的退避时长（账�
 # 价格超出合理区间时除以 10000 还原为汇率
 RATE_PAIRS = {"EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "EURGBP", "USDCHF", "USDCAD"}
 NORM_THRESHOLD = 10.0
-NORM_DIVISOR = 10000.0
 
 
 def normalize_rate(symbol: str, price: float) -> float:
-    """点位报价归一：汇率型货币对价格超合理区间（>10）视为点位（×10000），除回汇率"""
+    """点位报价归一：汇率型货币对价格超合理区间（>10）视为点位（×10000），除回汇率。
+    用 Decimal 十进制移位替代浮点除法，避免浮点噪声（11514.8/10000=1.1514799999999998）
+    污染价格显示与精度推导"""
     if symbol in RATE_PAIRS and price > NORM_THRESHOLD:
-        return price / NORM_DIVISOR
+        return float(Decimal(str(price)).scaleb(-4))
     return price
 
 

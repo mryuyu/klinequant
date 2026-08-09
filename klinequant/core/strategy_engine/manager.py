@@ -124,6 +124,13 @@ class StrategyManager:
         try:
             managed.strategy.on_init()
             managed.status = StrategyStatus.INITIALIZED
+            # IND-106：on_init 中的 require_indicators 声明在此收口记录
+            # （引擎侧统一预热接线在策略启动链路上消费该声明）
+            reqs = managed.strategy.indicator_requirements
+            if reqs:
+                logger.info(
+                    f"Strategy {strategy_id} indicator requirements: {reqs}"
+                )
             logger.info(f"Strategy initialized: {strategy_id}")
         except Exception as e:
             managed.status = StrategyStatus.ERROR

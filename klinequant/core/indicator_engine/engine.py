@@ -13,11 +13,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from decimal import Decimal
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple
 
 import polars as pl
 
@@ -55,6 +56,10 @@ class IndicatorEngine:
         # 指标实例: KlineKey -> List[IndicatorBase]
         self._indicators: Dict[KlineKey, List[IndicatorBase]] = defaultdict(list)
 
+        # 指标值序列（预热完成后的有效值，IND-102 REST 供给源）:
+        # KlineKey -> Dict[ind_key, deque[(timestamp, values)]]
+        self._series: Dict[KlineKey, Dict[str, Deque[Tuple[int, Dict[str, Any]]]]] = defaultdict(dict)
+
         # 订阅者回调: indicator_name -> List[callback]
         self._subscribers: Dict[str, List[Callable]] = defaultdict(list)
 
@@ -70,6 +75,11 @@ class IndicatorEngine:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @staticmethod
+    def ind_key(name: str, params: Optional[Dict[str, Any]]) -> str:
+        """计算契约 key = (指标名, 参数组合)（IND-102）：参数 JSON 规范化序列化"""
+        return f"{name}|{json.dumps(params or {}, sort_keys=True, separators=(',', ':'))}"
 
     def add_indicator(
         self,
@@ -89,6 +99,26 @@ class IndicatorEngine:
         key = (symbol, exchange, timeframe)
         self._indicators[key].append(indicator)
         logger.info(f"Added indicator {indicator} for {key}")
+
+    def ensure_indicator(
+        self,
+        name: str,
+        params: Optional[Dict[str, Any]],
+        symbol: str,
+        exchange: str,
+        timeframe: str,
+    ) -> IndicatorBase:
+        """按计算契约 key 幂等注册：同 (指标名, 参数组合) 复用已有实例"""
+        key = (symbol, exchange, timeframe)
+        ik = self.ind_key(name, params)
+        for indicator in self._indicators.get(key, []):
+            if self.ind_key(indicator.name, indicator.params) == ik:
+                return indicator
+        return self.create_indicator(name, params, symbol, exchange, timeframe)
+
+    def has_indicators(self, symbol: str, exchange: str, timeframe: str) -> bool:
+        """指定品种/周期是否存在已注册指标（实时推送分流判断用）"""
+        return bool(self._indicators.get((symbol, exchange, timeframe)))
 
     def create_indicator(
         self,
@@ -146,15 +176,24 @@ class IndicatorEngine:
         """
         key = (symbol, exchange, timeframe)
 
-        # 缓存历史数据
-        self._kline_cache[key] = historical_df.clone()
+        # 缓存历史数据（保留更长的一份：多指标不同预热深度多次预热时不互相截短）
+        existing = self._kline_cache.get(key)
+        if existing is None or len(historical_df) >= len(existing):
+            self._kline_cache[key] = historical_df.clone()
 
         results = {}
         for indicator in self._indicators.get(key, []):
-            result_df = indicator.calculate(historical_df)
-            if indicator.is_warmed_up:
-                # 提取最后一行的指标值
-                values = self._extract_last_values(indicator, result_df)
+            if indicator.supports_incremental:
+                # 增量指标：逐根重放建立递推状态，序列即预热后的有效值
+                values = self._warmup_incremental(key, indicator, historical_df)
+            else:
+                result_df = indicator.calculate(historical_df)
+                values = None
+                if indicator.is_warmed_up:
+                    values = self._extract_last_values(indicator, result_df)
+                    self._rebuild_full_series(key, indicator, result_df)
+
+            if indicator.is_warmed_up and values is not None:
                 indicator._last_values = values
                 results[indicator.name] = values
                 logger.info(
@@ -166,6 +205,45 @@ class IndicatorEngine:
                     f"need {indicator.min_periods}, got {len(historical_df)}"
                 )
         return results
+
+    def _warmup_incremental(
+        self,
+        key: KlineKey,
+        indicator: IndicatorBase,
+        df: pl.DataFrame,
+    ) -> Optional[Dict[str, Any]]:
+        """增量指标预热：重置状态后逐根重放，同步建立有效值序列（剔除预热段）"""
+        indicator.reset()
+        series: Deque[Tuple[int, Dict[str, Any]]] = deque(maxlen=self._max_cache_size)
+        self._series[key][self.ind_key(indicator.name, indicator.params)] = series
+        values: Optional[Dict[str, Any]] = None
+        for row in df.iter_rows(named=True):
+            values = indicator.update_bar(row, True)
+            if values is not None:
+                series.append((row["timestamp"], dict(values)))
+        return series[-1][1] if series else None
+
+    def _rebuild_full_series(
+        self,
+        key: KlineKey,
+        indicator: IndicatorBase,
+        result_df: pl.DataFrame,
+    ) -> None:
+        """全量计算指标：从结果 DataFrame 提取预热完成后的有效序列"""
+        prefix_map = self._get_column_prefix(indicator)
+        if not prefix_map:
+            return
+        cols: Dict[str, List[Any]] = {}
+        for col_name in result_df.columns:
+            for prefix in prefix_map:
+                if col_name.startswith(prefix):
+                    suffix = col_name[len(prefix):].lstrip("_") or indicator.name
+                    cols[suffix] = result_df[col_name].to_list()
+        ts_list = result_df["timestamp"].to_list()
+        series: Deque[Tuple[int, Dict[str, Any]]] = deque(maxlen=self._max_cache_size)
+        for i in range(min(indicator.min_periods, len(result_df)) - 1, len(result_df)):
+            series.append((ts_list[i], {s: vals[i] for s, vals in cols.items()}))
+        self._series[key][self.ind_key(indicator.name, indicator.params)] = series
 
     def update_kline(self, kline: Kline) -> List[IndicatorValue]:
         """接收新 K 线，增量更新指标
@@ -216,24 +294,76 @@ class IndicatorEngine:
 
         # 增量计算所有关联指标
         df = self._kline_cache[key]
+        row = {
+            "timestamp": kline.timestamp,
+            "open": float(kline.open),
+            "high": float(kline.high),
+            "low": float(kline.low),
+            "close": float(kline.close),
+            "volume": float(kline.volume),
+        }
         for indicator in self._indicators.get(key, []):
-            result_df = indicator.calculate(df)
-            if indicator.is_warmed_up:
+            if indicator.supports_incremental:
+                # O(1) 递推（快照法处理未收盘 bar）
+                values = indicator.update_bar(row, kline.is_closed)
+                if values is None:
+                    continue  # 预热未完成（降级标记，不输出失真数据）
+            else:
+                result_df = indicator.calculate(df)
+                if not indicator.is_warmed_up:
+                    continue
                 values = self._extract_last_values(indicator, result_df)
-                indicator._last_values = values
 
-                iv = indicator.to_indicator_value(
-                    symbol=kline.symbol,
-                    timeframe=kline.timeframe,
-                    timestamp=kline.timestamp,
-                    values=values,
-                )
-                updated_values.append(iv)
+            indicator._last_values = values
+            self._upsert_series(key, indicator, kline.timestamp, values)
 
-                # 通知订阅者
-                self._notify_subscribers(indicator.name, iv)
+            iv = indicator.to_indicator_value(
+                symbol=kline.symbol,
+                timeframe=kline.timeframe,
+                timestamp=kline.timestamp,
+                values=values,
+            )
+            updated_values.append(iv)
+
+            # 通知订阅者
+            self._notify_subscribers(indicator.name, iv)
 
         return updated_values
+
+    def _upsert_series(
+        self,
+        key: KlineKey,
+        indicator: IndicatorBase,
+        timestamp: int,
+        values: Dict[str, Any],
+    ) -> None:
+        """序列写入：同 ts 覆盖（未收盘 bar 重复推送），新 ts 追加"""
+        ik = self.ind_key(indicator.name, indicator.params)
+        series = self._series[key].get(ik)
+        if series is None:
+            series = deque(maxlen=self._max_cache_size)
+            self._series[key][ik] = series
+        if series and series[-1][0] == timestamp:
+            series[-1] = (timestamp, dict(values))
+        else:
+            series.append((timestamp, dict(values)))
+
+    def get_series(
+        self,
+        name: str,
+        params: Optional[Dict[str, Any]],
+        symbol: str,
+        exchange: str,
+        timeframe: str,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """获取指标历史序列（预热完成后的有效值，IND-102 REST 供给）"""
+        key = (symbol, exchange, timeframe)
+        series = self._series.get(key, {}).get(self.ind_key(name, params))
+        if not series:
+            return []
+        items = list(series)[-limit:] if limit else list(series)
+        return [{"timestamp": ts, "values": vals} for ts, vals in items]
 
     def get_indicator_value(
         self,

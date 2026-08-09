@@ -49,6 +49,26 @@ class IndicatorBase(ABC):
         return dict(self._params)
 
     @property
+    def default_params(self) -> Dict[str, Any]:
+        """默认参数（meta 端点展示用），子类按需覆盖"""
+        return {}
+
+    @property
+    def supports_incremental(self) -> bool:
+        """是否支持 O(1) 增量递推（IND-101），默认 False 走全量重算"""
+        return False
+
+    @property
+    def display_meta(self) -> Dict[str, Any]:
+        """展示元数据（IND-102/IND-109 契约）
+
+        fields: 输出字段列表；range: 值域类型
+            unbounded（无界）/ bounded_0_100（0-100）/ zero_symmetric（零轴对称）
+        同窗格叠加兼容性判断依据。
+        """
+        return {"fields": [], "range": "unbounded"}
+
+    @property
     def is_warmed_up(self) -> bool:
         return self._warmed_up
 
@@ -76,6 +96,28 @@ class IndicatorBase(ABC):
     def _calculate(self, df: pl.DataFrame) -> pl.DataFrame:
         """子类实现具体指标计算"""
         ...
+
+    def reset(self) -> None:
+        """重置内部状态（预热重放前调用）"""
+        self._warmed_up = False
+        self._last_values = None
+
+    def update_bar(
+        self, bar: Dict[str, Any], is_closed: bool
+    ) -> Optional[Dict[str, Any]]:
+        """单根 K 线增量计算（O(1) 递推），支持增量的子类必须实现
+
+        快照法约定（IND-101）：内部状态必须可回滚到「最近一根已确认 bar」，
+        未收盘 bar 重复推送（同 timestamp）时先恢复快照再应用，保证幂等。
+
+        Args:
+            bar: 原始 K 线 dict，至少含 timestamp(ms)/close
+            is_closed: 该 K 线是否已收盘
+
+        Returns:
+            当根指标值 dict；预热未完成返回 None
+        """
+        raise NotImplementedError(f"{self.name} 不支持增量计算")
 
     def to_indicator_value(
         self,

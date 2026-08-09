@@ -32,6 +32,8 @@ class AppState:
         self._strategy_manager = None
         # RiskEngine 实例（延迟初始化）
         self._risk_engine = None
+        # IndicatorEngine 实例（延迟初始化，IND-102 统一计算）
+        self._indicator_engine = None
         # 币安 REST 客户端
         self._http_client: Optional[httpx.AsyncClient] = None
 
@@ -66,6 +68,16 @@ class AppState:
             self._risk_engine = RiskEngine()
             self._risk_engine.start()
         return self._risk_engine
+
+    @property
+    def indicator_engine(self):
+        """延迟初始化 IndicatorEngine（导入 indicators 包触发内置指标注册）"""
+        if self._indicator_engine is None:
+            from core.indicator_engine.engine import IndicatorEngine
+            import core.indicator_engine.indicators  # noqa: F401
+            self._indicator_engine = IndicatorEngine()
+            self._indicator_engine.start()
+        return self._indicator_engine
 
     def get_http_client(self) -> httpx.AsyncClient:
         """获取带代理的 HTTP 客户端（复用连接）"""

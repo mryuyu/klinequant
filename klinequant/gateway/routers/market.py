@@ -81,6 +81,8 @@ async def get_klines(
         "exchange": ex,
         "count": len(out),
         "data": out,
+        # 品种价格显示精度（市场源从订阅到的价格推导，前端只渲染不推导）
+        "price_precision": source.price_precision(symbol),
     }
 
 
@@ -119,6 +121,7 @@ async def get_ticker(
         t = await source.fetch_ticker(symbol)
         if t:
             t["exchange"] = ex
+            t["price_precision"] = source.price_precision(symbol)
             return t
     except Exception as e:
         logger.error(f"Failed to fetch ticker from {ex}: {e}")
