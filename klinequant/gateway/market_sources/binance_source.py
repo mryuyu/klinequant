@@ -60,16 +60,16 @@ class BinanceSource(MarketSource):
     """币安现货：WS 主链路 + REST 降级"""
 
     name = "binance"
-    label = "Binance Spot"
+    label = "Binance"
     supported_timeframes = set(VALID_TIMEFRAMES)
     supports_volume = True
     default_symbols = [
-        {"symbol": "BTCUSDT", "name": "BTC/USDT"},
-        {"symbol": "ETHUSDT", "name": "ETH/USDT"},
-        {"symbol": "BNBUSDT", "name": "BNB/USDT"},
-        {"symbol": "SOLUSDT", "name": "SOL/USDT"},
-        {"symbol": "XRPUSDT", "name": "XRP/USDT"},
-        {"symbol": "DOGEUSDT", "name": "DOGE/USDT"},
+        {"symbol": "BTCUSDT", "name": "BTC/USDT", "type": "crypto"},
+        {"symbol": "ETHUSDT", "name": "ETH/USDT", "type": "crypto"},
+        {"symbol": "BNBUSDT", "name": "BNB/USDT", "type": "crypto"},
+        {"symbol": "SOLUSDT", "name": "SOL/USDT", "type": "crypto"},
+        {"symbol": "XRPUSDT", "name": "XRP/USDT", "type": "crypto"},
+        {"symbol": "DOGEUSDT", "name": "DOGE/USDT", "type": "crypto"},
     ]
     watched_targets = [("BTCUSDT", "1h"), ("ETHUSDT", "1h")]
 
@@ -129,6 +129,26 @@ class BinanceSource(MarketSource):
             "high_24h": float(t["highPrice"]),
             "low_24h": float(t["lowPrice"]),
         }
+
+    # ─── 全量品种目录（exchangeInfo） ───
+
+    async def list_symbols(self) -> list[dict]:
+        """现货全量品种：exchangeInfo 过滤 TRADING + USDT 计价（与产品 USDT 本位展示口径一致）"""
+        async with httpx.AsyncClient(proxy=HTTP_PROXY or None, timeout=20.0) as client:
+            resp = await client.get(f"{BINANCE_REST_BASE}/api/v3/exchangeInfo")
+            resp.raise_for_status()
+            info = resp.json()
+        return self._parse_exchange_info(info)
+
+    @staticmethod
+    def _parse_exchange_info(info: dict) -> list[dict]:
+        return [
+            {"symbol": s["symbol"], "name": f"{s['baseAsset']}/{s['quoteAsset']}", "type": "crypto"}
+            for s in info.get("symbols", [])
+            if s.get("status") == "TRADING"
+            and s.get("quoteAsset") == "USDT"
+            and s.get("isSpotTradingAllowed", True)
+        ]
 
     # ─── 实时流主循环（WS 主链路 + REST 降级并行） ───
 

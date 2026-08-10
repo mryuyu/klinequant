@@ -32,7 +32,7 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL = float(os.getenv("MT5_POLL_INTERVAL", "2"))   # 终端轮询间隔（秒，本地调用开销低）
+POLL_INTERVAL = float(os.getenv("MT5_POLL_INTERVAL", "0.5"))   # 终端轮询间隔（秒，与币安 K 线 500ms 更新节奏对齐；本地调用开销低）
 TICKER_CACHE_TTL = 5.0   # ticker 缓存（秒）：前端多品种并发轮询时合并重复请求，
                          # 降低对单连接 MT5 包的并发压力（本地终端数据无时效损失容忍）
 RECONNECT_COOLDOWN = 30.0   # 重连冷却（秒）：终端长时间未启动时避免每轮都 shutdown/initialize
@@ -64,6 +64,17 @@ TF_SECONDS = {
     "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
     "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "12h": 43200,
     "1d": 86400, "1w": 604800,
+}
+
+# 品种目录：完全可交易模式常量 + path 顶层目录 → 资产类别
+# （Commodities 按二级细分：Metals=贵金属，Energies/Softs=商品）
+_TRADE_MODE_FULL = _tf_const("SYMBOL_TRADE_MODE_FULL", 4)
+_ASSET_TYPE_BY_PATH = {
+    "Forex": "forex",
+    "Indices": "index",
+    "Crypto": "crypto",
+    "Bonds CFDs": "bond",
+    "Stock CFD's": "stock",
 }
 
 
@@ -102,6 +113,13 @@ class Mt5Api:
         with self._lock:
             return _mt5.symbol_info_tick(symbol)
 
+    def symbols_get(self):
+        """终端全量品种元数据（含 path 分类/可交易模式）"""
+        if not _HAS_MT5:
+            return None
+        with self._lock:
+            return _mt5.symbols_get()
+
     def copy_rates_from_pos(self, symbol: str, timeframe: int, start_pos: int, count: int):
         with self._lock:
             return self._to_rows(_mt5.copy_rates_from_pos(symbol, timeframe, start_pos, count))
@@ -133,16 +151,16 @@ class Mt5Source(MarketSource):
     """本地 MT5 终端：历史 K 线（copy_rates）+ 终端轮询实时流"""
 
     name = "mt5"
-    label = "MT5 Local"
+    label = "IC Markets"
     supported_timeframes = set(TIMEFRAME_MAP.keys())
     supports_volume = True   # tick_volume 为真实订阅数据（外汇无 real_volume 时用 tick）
     default_symbols = [
-        {"symbol": "EURUSD", "name": "EUR/USD"},
-        {"symbol": "GBPUSD", "name": "GBP/USD"},
-        {"symbol": "USDJPY", "name": "USD/JPY"},
-        {"symbol": "AUDUSD", "name": "AUD/USD"},
-        {"symbol": "USDCHF", "name": "USD/CHF"},
-        {"symbol": "XAUUSD", "name": "XAU/USD"},
+        {"symbol": "EURUSD", "name": "EUR/USD", "type": "forex"},
+        {"symbol": "GBPUSD", "name": "GBP/USD", "type": "forex"},
+        {"symbol": "USDJPY", "name": "USD/JPY", "type": "forex"},
+        {"symbol": "AUDUSD", "name": "AUD/USD", "type": "forex"},
+        {"symbol": "USDCHF", "name": "USD/CHF", "type": "forex"},
+        {"symbol": "XAUUSD", "name": "XAU/USD", "type": "metal"},
     ]
     watched_targets: list[tuple[str, str]] = []
 
@@ -207,6 +225,26 @@ class Mt5Source(MarketSource):
         if d:
             return d
         return super().price_precision(symbol)
+
+    # ─── 全量品种目录（终端 symbols_get，按 path 资产分类） ───
+
+    async def list_symbols(self) -> list[dict]:
+        """终端全量可交易品种：trade_mode=FULL 过滤，path 顶层目录归资产类别"""
+        rows = await asyncio.to_thread(self._driver.symbols_get)
+        if not rows:
+            return await super().list_symbols()
+        out = []
+        for s in rows:
+            if int(s.trade_mode) != _TRADE_MODE_FULL:
+                continue
+            parts = (s.path or "").split("\\")
+            top = parts[0]
+            if top == "Commodities":
+                atype = "metal" if len(parts) > 1 and parts[1] == "Metals" else "commodity"
+            else:
+                atype = _ASSET_TYPE_BY_PATH.get(top, "")
+            out.append({"symbol": s.name, "name": s.description or s.name, "type": atype})
+        return out
 
     # ─── REST 历史 K 线 / 行情摘要 ───
 

@@ -45,16 +45,16 @@ class IgSource(MarketSource):
     """IG 外汇：Lightstreamer 主链路 + REST 轮询降级"""
 
     name = "ig"
-    label = "IG Forex"
+    label = "IG"
     supported_timeframes = set(RESOLUTION_MAP.keys())
     supports_volume = False
     default_symbols = [
-        {"symbol": "EURUSD", "name": "EUR/USD"},
-        {"symbol": "GBPUSD", "name": "GBP/USD"},
-        {"symbol": "USDJPY", "name": "USD/JPY"},
-        {"symbol": "AUDUSD", "name": "AUD/USD"},
-        {"symbol": "USDCHF", "name": "USD/CHF"},
-        {"symbol": "XAUUSD", "name": "XAU/USD"},
+        {"symbol": "EURUSD", "name": "EUR/USD", "type": "forex"},
+        {"symbol": "GBPUSD", "name": "GBP/USD", "type": "forex"},
+        {"symbol": "USDJPY", "name": "USD/JPY", "type": "forex"},
+        {"symbol": "AUDUSD", "name": "AUD/USD", "type": "forex"},
+        {"symbol": "USDCHF", "name": "USD/CHF", "type": "forex"},
+        {"symbol": "XAUUSD", "name": "XAU/USD", "type": "metal"},
     ]
     watched_targets: list[tuple[str, str]] = []
 

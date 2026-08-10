@@ -18,6 +18,8 @@
   --accent-dim: rgba(0,212,170,0.12);
   --up: #0ecb81;
   --down: #f6465d;
+  --up-rgb: 14,203,129;
+  --down-rgb: 246,70,93;
   --warning: #f0b90b;
   --ma7: #f0b90b;
   --ma25: #2962ff;
@@ -50,9 +52,7 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .ticker-item { display:flex; flex-direction:column; gap:1px; }
 .ticker-label { font-size:10px; color:var(--text-sub); }
 .ticker-value { font-size:13px; font-weight:600; }
-.topbar-right { margin-left:auto; display:flex; align-items:center; gap:12px; }
-.mode-badge { display:flex; align-items:center; gap:6px; font-size:12px; padding:4px 10px; border-radius:12px; background:rgba(240,185,11,0.12); color:var(--warning); font-weight:600; }
-.dot { width:7px; height:7px; border-radius:50%; background:var(--up); animation:pulse 2s infinite; }
+.dot { width:7px; height:7px; border-radius:50%; background:#0ecb81; animation:pulse 2s infinite; display:inline-block; }   /* 连接状态色固定，不随涨跌配色方案交换 */
 @keyframes pulse { 50%{opacity:.4;} }
 .conn { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-sub); }
 
@@ -130,9 +130,9 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .qtrade { padding:14px; }
 .side-btns { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px; }
 .side-btn { padding:9px 0; border:none; border-radius:6px; font-size:13px; font-weight:700; cursor:pointer; }
-.side-buy { background:rgba(14,203,129,0.15); color:var(--up); border:1px solid rgba(14,203,129,0.4); }
+.side-buy { background:rgba(var(--up-rgb),0.15); color:var(--up); border:1px solid rgba(var(--up-rgb),0.4); }
 .side-buy.selected { background:var(--up); color:#0b0e14; }
-.side-sell { background:rgba(246,70,93,0.1); color:var(--down); border:1px solid rgba(246,70,93,0.3); }
+.side-sell { background:rgba(var(--down-rgb),0.1); color:var(--down); border:1px solid rgba(var(--down-rgb),0.3); }
 .field { margin-bottom:10px; }
 .field-label { display:flex; justify-content:space-between; font-size:11px; color:var(--text-sub); margin-bottom:4px; }
 .input-box { display:flex; align-items:center; background:var(--bg-base); border:1px solid var(--border); border-radius:6px; padding:0 10px; height:34px; }
@@ -149,9 +149,6 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .submit-btn { width:100%; padding:11px 0; border:none; border-radius:6px; background:var(--up); color:#0b0e14; font-size:14px; font-weight:700; cursor:pointer; }
 /* 品种列表栏（最右独立栏） */
 .symbols-col { border-left:1px solid var(--border); background:var(--bg-panel); display:flex; flex-direction:column; min-height:0; }
-.sc-exch { display:flex; gap:6px; padding:0 12px 8px; }
-.exch-btn { flex:1; padding:5px 0; border:1px solid var(--border); border-radius:5px; background:none; color:var(--text-sub); font-size:12px; cursor:pointer; font-family:var(--font-ui); white-space:nowrap; }
-.exch-btn.active { border-color:var(--accent); color:var(--accent); background:var(--accent-dim); font-weight:600; }
 .tf-btn:disabled { opacity:0.3; cursor:default; }
 .sc-head { display:flex; align-items:center; justify-content:space-between; padding:12px 12px 8px; }
 .sc-title { font-weight:700; font-size:14px; }
@@ -192,10 +189,40 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .modal-btns button { flex:1; padding:8px 0; border-radius:6px; border:none; cursor:pointer; font-size:13px; }
 .m-cancel { background:var(--bg-elevated); color:var(--text); }
 .m-ok { background:var(--accent); color:#0b0e14; font-weight:700; }
-.m-remove { background:rgba(246,70,93,0.10); color:var(--down); border:1px solid rgba(246,70,93,0.35); }
-.m-remove:hover { background:rgba(246,70,93,0.22); }
+.m-remove { background:rgba(var(--down-rgb),0.10); color:var(--down); border:1px solid rgba(var(--down-rgb),0.35); }
+.m-remove:hover { background:rgba(var(--down-rgb),0.22); }
 /* 添加指标选择面板 */
 .pick-row { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-radius:6px; cursor:pointer; }
+/* ── 品种搜索弹窗（TradingView 式：市场分类页签 + 地区筛选，数据源对用户隐藏） ── */
+.sr-modal { width:620px; max-width:92vw; padding:0; overflow:hidden; }
+.sr-head { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 10px; }
+.sr-title { font-weight:700; font-size:14px; }
+.sr-close { background:none; border:none; color:var(--text-sub); font-size:15px; cursor:pointer; padding:2px 7px; border-radius:4px; }
+.sr-close:hover { color:var(--text); background:var(--bg-elevated); }
+.sr-search { margin:0 16px 10px; display:flex; align-items:center; gap:8px; background:var(--bg-base); border:1px solid var(--border-light); border-radius:8px; padding:8px 12px; }
+.sr-search svg { width:15px; height:15px; color:var(--text-sub); flex:none; }
+.sr-search input { flex:1; background:none; border:none; outline:none; color:var(--text); font-size:13px; padding:0; }
+.sr-search input:focus { border-color:transparent; box-shadow:none; }
+.mkt-tabs { display:flex; gap:6px; padding:0 16px 10px; flex-wrap:wrap; }
+.mkt-pill { padding:5px 12px; border-radius:14px; border:none; background:var(--bg-elevated); color:var(--text-sub); font-size:12px; cursor:pointer; }
+.mkt-pill:hover { color:var(--text); }
+.mkt-pill.active { background:#4a4e59; color:#fff; font-weight:600; }
+.sr-filter { display:flex; align-items:center; gap:8px; padding:0 16px 8px; min-height:30px; }
+.region-seg { display:flex; background:var(--bg-base); border:1px solid var(--border); border-radius:14px; padding:2px; }
+.region-btn { border:none; background:none; color:var(--text-sub); font-size:11.5px; padding:3px 12px; border-radius:11px; cursor:pointer; }
+.region-btn.active { background:var(--bg-elevated); color:var(--text); font-weight:600; }
+.sr-body { height:320px; overflow-y:auto; border-top:1px solid var(--border); }
+.sr-row { display:flex; align-items:center; gap:10px; padding:8px 16px; cursor:pointer; }
+.sr-row:hover { background:var(--bg-elevated); }
+.sr-row.active { background:var(--accent-dim); }
+.sr-ico { width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#0b0e14; flex:none; }
+.sr-sym { font-weight:700; font-size:13px; min-width:92px; }
+.sr-desc { color:var(--text-sub); font-size:12px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sr-type { font-size:10px; padding:2px 6px; border-radius:3px; background:var(--bg-elevated); color:var(--text-sub); flex:none; }
+.sr-src { font-size:11px; color:var(--text-sub); flex:none; min-width:64px; text-align:right; }   /* 数据源展示名（仿 TradingView 行尾来源） */
+.sr-more { padding:10px 16px; text-align:center; color:var(--text-sub); font-size:11.5px; }
+.sr-empty { padding:56px 16px; text-align:center; color:var(--text-sub); font-size:12.5px; line-height:2; }
+.sr-empty b { color:var(--warning); }
 .pick-row:hover { background:var(--bg-elevated); }
 .pick-row .pk-name { font-weight:600; font-size:13px; }
 .pick-row .pk-desc { font-size:11px; color:var(--text-sub); margin-top:1px; }
@@ -211,8 +238,8 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
   <!-- 顶栏 -->
   <header class="topbar">
     <div class="logo"><div class="logo-mark">K</div>KlineQuant</div>
-    <div class="symbol-picker">
-      <span class="symbol-name" id="top-symbol">BTCUSDT</span><span class="symbol-tag">SPOT</span>
+    <div class="symbol-picker" id="symbol-picker" title="品种搜索">
+      <span class="symbol-name" id="top-symbol">BTCUSDT</span><span class="symbol-tag" id="top-tag">SPOT</span>
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
     </div>
     <div class="ticker mono">
@@ -220,10 +247,6 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
       <div class="ticker-item"><span class="ticker-label">24h 涨跌</span><span class="ticker-value" id="tk-chg">--</span></div>
       <div class="ticker-item"><span class="ticker-label">24h 高</span><span class="ticker-value" id="tk-high">--</span></div>
       <div class="ticker-item"><span class="ticker-label">24h 低</span><span class="ticker-value" id="tk-low">--</span></div>
-    </div>
-    <div class="topbar-right">
-      <div class="mode-badge" id="mode-badge">◈ LIVE · Binance 真实数据</div>
-      <div class="conn"><span class="dot"></span><span id="ws-status">WS 连接中…</span></div>
     </div>
   </header>
 
@@ -338,34 +361,9 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
           <button class="sc-btn" id="add-sym" title="添加品种">＋</button>
         </div>
       </div>
-      <div class="sc-exch" id="exch-switch"></div>
       <div class="sc-search"><input id="sym-filter" placeholder="搜索品种…"></div>
       <div class="sc-body" id="sym-list"></div>
     </aside>
-  </div>
-
-  <!-- 添加品种弹窗 -->
-  <div class="modal-mask" id="sym-modal">
-    <div class="modal">
-      <h3>添加品种</h3>
-      <label class="field-label">品种名称（如 BTC/USDT）</label>
-      <input id="new-sym-name" placeholder="输入品种代码">
-      <label class="field-label">所属分组</label>
-      <select id="new-sym-group">
-        <option>加密货币</option>
-        <option>全球指数</option>
-        <option>外汇与商品</option>
-        <option value="__new__">＋ 新建分组…</option>
-      </select>
-      <div id="new-group-wrap" style="display:none">
-        <label class="field-label">新分组名称</label>
-        <input id="new-group-name" placeholder="输入分组名">
-      </div>
-      <div class="modal-btns">
-        <button class="m-cancel" id="sym-cancel">取消</button>
-        <button class="m-ok" id="sym-ok">添加</button>
-      </div>
-    </div>
   </div>
 
   <!-- 指标参数调整弹窗（齿轮按钮触发） -->
@@ -392,9 +390,27 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
     </div>
   </div>
 
-  <!-- 状态栏 -->
+  <!-- 品种搜索弹窗（顶栏品种按钮 / 右栏 ＋ 打开：市场分类页签 + 地区筛选） -->
+  <div class="modal-mask" id="sr-modal">
+    <div class="modal sr-modal">
+      <div class="sr-head">
+        <span class="sr-title">品种搜索</span>
+        <button class="sr-close" id="sr-close">✕</button>
+      </div>
+      <div class="sr-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input id="sr-input" placeholder="符号或名称，如 EURUSD…" autocomplete="off">
+      </div>
+      <div class="mkt-tabs" id="sr-tabs"></div>
+      <div class="sr-filter" id="sr-filter"></div>
+      <div class="sr-body" id="sr-body"></div>
+    </div>
+  </div>
+
+  <!-- 状态栏（WS 连接状态居右下角） -->
   <div class="statusbar">
     <span id="sb-status">◉ 连接后端 127.0.0.1:8000…</span>
+    <span class="conn"><span class="dot"></span><span id="ws-status">WS 连接中…</span></span>
   </div>
 </div>
 
@@ -403,6 +419,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
   <div class="ctx-row"><span>K线总量上限</span><input id="ctx-kc" class="ctx-input" type="number" min="100" max="5000" step="100"></div>
   <div class="ctx-row"><span>右侧留白</span><input id="ctx-ro" class="ctx-input" type="number" min="0" max="100"></div>
   <div class="ctx-row"><span>成交量</span><input id="ctx-vol" type="checkbox" checked></div>
+  <div class="ctx-row"><span>涨跌配色</span><select id="ctx-scheme" class="ctx-input"><option value="gd">绿涨红跌</option><option value="cn">红涨绿跌</option></select></div>
 </div>
 
 <script src="lwc.js"></script>
@@ -432,6 +449,23 @@ const fmtSym = (sym, v) => {
   return d > 0 ? v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : fmt(v);
 };
 function setSb(txt) { document.getElementById('sb-status').textContent = txt; }
+
+/* ═══ 涨跌配色方案（全局）：gd=绿涨红跌（默认）/ cn=红涨绿跌；
+   CSS 变量 --up/--down 交换覆盖全站 UI，K 线/成交量/MACD 柱走 CS 常量重绘 ═══ */
+const COLOR_SCHEMES = {
+  gd: { up: '#0ecb81', down: '#f6465d', upRgb: '14,203,129', downRgb: '246,70,93' },
+  cn: { up: '#f6465d', down: '#0ecb81', upRgb: '246,70,93', downRgb: '14,203,129' },
+};
+let colorScheme = localStorage.getItem('kq-color-scheme') === 'cn' ? 'cn' : 'gd';
+let CS = COLOR_SCHEMES[colorScheme];
+const applySchemeVars = () => {
+  const r = document.documentElement.style;
+  r.setProperty('--up', CS.up); r.setProperty('--down', CS.down);
+  r.setProperty('--up-rgb', CS.upRgb); r.setProperty('--down-rgb', CS.downRgb);
+};
+applySchemeVars();
+const volColor = (c, o) => `rgba(${c >= o ? CS.upRgb : CS.downRgb},0.32)`;   // 成交量柱：随方案
+const histColor = v => `rgba(${v >= 0 ? CS.upRgb : CS.downRgb},0.55)`;       // MACD 柱：随方案
 
 /* ═══ 布局持久化（localStorage：面板尺寸/折叠/K线数/右侧留白/周期/品种） ═══ */
 const LS_KEY = 'kq-layout-live';
@@ -550,7 +584,7 @@ function macdSeries(klines, fast = 12, slow = 26, signal = 9) {
   klines.forEach((k, i) => {
     difS.push({ time: k.time, value: dif[i] });
     deaS.push({ time: k.time, value: dea[i] });
-    hist.push({ time: k.time, value: (dif[i] - dea[i]) * 2, color: (dif[i] - dea[i]) >= 0 ? 'rgba(14,203,129,0.55)' : 'rgba(246,70,93,0.55)' });
+    hist.push({ time: k.time, value: (dif[i] - dea[i]) * 2, color: histColor(dif[i] - dea[i]) });
   });
   return { difS, deaS, hist };
 }
@@ -627,7 +661,7 @@ function backendParams(inst) {
   if (inst.type === 'macd') return { fast_period: p.fast, slow_period: p.slow, signal_period: p.signal };
   return { ...p };
 }
-function macdHistColor(v) { return v >= 0 ? 'rgba(14,203,129,0.55)' : 'rgba(246,70,93,0.55)'; }
+function macdHistColor(v) { return histColor(v); }
 async function fetchIndHistory(inst, gen) {
   const url = `${API}/api/indicator/history?symbol=${curSymbol}&timeframe=${curTf}&exchange=${curExchange}` +
     `&indicator=${IND_BACKEND[inst.type]}&limit=${klines.length}&params=${encodeURIComponent(JSON.stringify(backendParams(inst)))}`;
@@ -701,9 +735,9 @@ const chart = createChart(container, {
 });
 
 const candleSeries = chart.addSeries(CandlestickSeries, {
-  upColor: '#0ecb81', downColor: '#f6465d',
-  borderUpColor: '#0ecb81', borderDownColor: '#f6465d',
-  wickUpColor: '#0ecb81', wickDownColor: '#f6465d',
+  upColor: CS.up, downColor: CS.down,
+  borderUpColor: CS.up, borderDownColor: CS.down,
+  wickUpColor: CS.up, wickDownColor: CS.down,
   priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
 }, 0);
 const volumeSeries = chart.addSeries(HistogramSeries, {
@@ -783,10 +817,10 @@ function buildInstance(it) {
     inst.series = [chart.addSeries(LineSeries, { color: '#26c6da', ...LINE_BASE }, pane)];
     parts.push({ key: 'r', label: 'RSI', color: '#26c6da' });
   }
-  /* 图例 DOM */
-  const rowHtml = `<span class="muted" id="lg-label-${id}">${indName(it)}</span>` +
-    parts.map(p => `<span style="color:${p.color}">${p.label} <b id="lg-${id}-${p.key}">--</b></span>`).join(' ') +
-    ` <button class="gear-btn" data-ind-id="${id}" title="调整参数"></button>`;
+  /* 图例 DOM（齿轮置于指标名称前） */
+  const rowHtml = `<button class="gear-btn" data-ind-id="${id}" title="调整参数"></button>` +
+    `<span class="muted" id="lg-label-${id}">${indName(it)}</span>` +
+    parts.map(p => `<span style="color:${p.color}">${p.label} <b id="lg-${id}-${p.key}">--</b></span>`).join(' ');
   if (cat.pane === 'main') {
     const wrap = document.createElement('span');
     wrap.className = 'ind-main-wrap';
@@ -923,8 +957,23 @@ function renderInstance(inst) {
 function renderIndData() { indInstances.forEach(renderInstance); }
 function renderChart() {
   candleSeries.setData(klines.map(k => ({ time: k.time, open: k.open, high: k.high, low: k.low, close: k.close })));
-  volumeSeries.setData(klines.map(k => ({ time: k.time, value: k.volume, color: k.close >= k.open ? 'rgba(14,203,129,0.32)' : 'rgba(246,70,93,0.32)' })));
+  volumeSeries.setData(klines.map(k => ({ time: k.time, value: k.volume, color: volColor(k.close, k.open) })));
   renderIndData();
+}
+/* 切换涨跌配色（全局生效）：交换 CSS 变量 + K 线系列改色 + 全量重绘 */
+function applyColorScheme(scheme, persist = true) {
+  if (!COLOR_SCHEMES[scheme]) return;
+  colorScheme = scheme; CS = COLOR_SCHEMES[scheme];
+  applySchemeVars();
+  candleSeries.applyOptions({
+    upColor: CS.up, downColor: CS.down,
+    borderUpColor: CS.up, borderDownColor: CS.down,
+    wickUpColor: CS.up, wickDownColor: CS.down,
+  });
+  renderChart();   // 成交量/MACD 等按新方案重绘
+  const sel = document.getElementById('ctx-scheme');
+  if (sel) sel.value = scheme;
+  if (persist) { try { localStorage.setItem('kq-color-scheme', scheme); } catch (e) {} }
 }
 /* 拉取一页 K 线（endTime 可选，往前翻页用）；同时携带后端下发的价格精度 */
 async function fetchPage(need, endTime) {
@@ -1051,6 +1100,7 @@ document.getElementById('chart').addEventListener('contextmenu', e => {
   ctxKc.value = klineCount;
   ctxRo.value = curRightOffset;
   document.getElementById('ctx-vol').checked = showVol;
+  document.getElementById('ctx-scheme').value = colorScheme;
   ctxMenu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
   ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 130) + 'px';
   ctxMenu.classList.add('show');
@@ -1070,6 +1120,8 @@ document.getElementById('ctx-vol').addEventListener('change', e => {
   applyVolVisibility();
   saveLayout();
 });
+/* 涨跌配色切换：即时全局生效并持久化（localStorage: kq-color-scheme） */
+document.getElementById('ctx-scheme').addEventListener('change', e => applyColorScheme(e.target.value));
 ctxRo.addEventListener('change', () => {
   const v = Math.min(100, Math.max(0, parseInt(ctxRo.value) || 0));
   ctxRo.value = v;
@@ -1285,14 +1337,43 @@ let wsLastMsgAt = Date.now();   // 最近一次收到任意 WS 消息的时间
 let wsLatency = null;           // 最新端到端延迟（ms）= Date.now() - 行情事件时间 event_ms
 let wsLatencyAt = 0;            // wsLatency 的刷新时刻（超 10s 未刷新视为无数据）
 const posPriceTopics = new Set();   // 持仓品种价格订阅主题（与图表同频）
+const listPriceTopics = new Set();   // 品种列表价格订阅主题（与图表同源同频，替代 REST 轮询）
 function setWs(ok) {
   document.getElementById('ws-status').textContent = ok ? 'WS 已连接' : 'WS 断开 · 重连中';
-  document.querySelector('.dot').style.background = ok ? 'var(--up)' : 'var(--down)';
+  document.querySelector('.dot').style.background = ok ? '#0ecb81' : '#f6465d';   // 连接状态色固定，不随涨跌方案交换
 }
 function subscribeWS() {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ action: 'subscribe', topic: `klines.${curExchange}.${curSymbol}.${curTf}` }));
     ws.send(JSON.stringify({ action: 'subscribe', topic: `indicators.${curExchange}.${curSymbol}.${curTf}` }));
+  }
+}
+/* 品种列表价格改走 WS（与图表同源同频）：按当前所列表品种差量订阅/退订 1m 主题 */
+function resyncListTopics() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const want = new Set();
+  symGroups.forEach(g => g.symbols.forEach(s => { if (s.sym) want.add(`klines.${curExchange}.${s.sym}.1m`); }));
+  for (const t of [...listPriceTopics]) if (!want.has(t)) {
+    ws.send(JSON.stringify({ action: 'unsubscribe', topic: t }));
+    listPriceTopics.delete(t);
+  }
+  for (const t of want) if (!listPriceTopics.has(t)) {
+    ws.send(JSON.stringify({ action: 'subscribe', topic: t }));
+    listPriceTopics.add(t);
+  }
+}
+/* 品种列表单行价格实时更新（定点改 DOM，不重建列表） */
+function updateListPrice(sym, price) {
+  let entry = null;
+  for (const g of symGroups) { entry = g.symbols.find(s => s.sym === sym); if (entry) break; }
+  if (!entry) return;
+  const prev = entry.price;
+  entry.price = price;
+  lastPrices[sym] = price;
+  const el = document.querySelector(`.wl-row[data-sym="${entry.name}"] .wl-val`);
+  if (el) {
+    el.textContent = fmtSym(sym, price);
+    if (prev != null && price !== prev) el.className = 'wl-val ' + (price > prev ? 'up' : 'down');
   }
 }
 function connectWS() {
@@ -1303,6 +1384,7 @@ function connectWS() {
       wsLastMsgAt = Date.now();
       setWs(true); subscribeWS();
       posPriceTopics.forEach(t => ws.send(JSON.stringify({ action: 'subscribe', topic: t })));
+      listPriceTopics.clear(); resyncListTopics();   // 重连后服务端订阅已丢，全量重建
     };
     ws.onmessage = ev => {
       wsLastMsgAt = Date.now();
@@ -1317,6 +1399,8 @@ function connectWS() {
         wsLatencyAt = Date.now();
       }
       const parts = msg.topic.split('.');
+      // 品种列表价格订阅：与图表同源同频更新（不 return，当前品种 1m 时图表链路继续处理）
+      if (listPriceTopics.has(msg.topic)) updateListPrice(parts[parts.length - 2], msg.data.close);
       // 持仓品种价格订阅：更新频率与图表保持一致
       if (posPriceTopics.has(msg.topic)) {
         lastPrices[parts[parts.length - 2]] = msg.data.close;
@@ -1353,7 +1437,7 @@ function renderStatusbar() {
   let icon, label;
   if (wsLatency !== null && Date.now() - wsLatencyAt < 10000) {
     const lv = wsLatency < 500 ? 4 : wsLatency < 1200 ? 3 : wsLatency < 2500 ? 2 : 1;
-    const col = lv >= 3 ? 'var(--up)' : lv === 2 ? '#e0a63f' : 'var(--down)';
+    const col = lv >= 3 ? '#0ecb81' : lv === 2 ? '#e0a63f' : '#f6465d';   // 链路状态色固定，不随涨跌方案交换
     icon = sigSvg(lv, col); label = `${wsLatency}ms`;
   } else if (ws && ws.readyState === WebSocket.OPEN) {
     icon = sigSvg(1, 'var(--text-sub)'); label = '等待数据';
@@ -1374,7 +1458,7 @@ function applyBar(b) {
   else if (!last || t > last.time) { klines.push(bar); if (klines.length > klineCount) klines.shift(); }
   else return;
   candleSeries.update(bar);
-  volumeSeries.update({ time: t, value: bar.volume, color: bar.close >= bar.open ? 'rgba(14,203,129,0.32)' : 'rgba(246,70,93,0.32)' });
+  volumeSeries.update({ time: t, value: bar.volume, color: volColor(bar.close, bar.open) });
   indInstances.forEach(inst => updateInstanceLast(inst, t));
   lastPrices[curSymbol] = bar.close;
   updateTicker(bar.close);
@@ -1412,7 +1496,7 @@ function updateTicker(price) {
   el.className = 'ticker-value ' + (price >= prev ? 'up' : 'down');
 }
 
-/* ═══ REST 轮询：24h 行情 / 持仓与账户 / 品种列表价格 ═══ */
+/* ═══ REST 轮询：24h 行情 / 持仓与账户（品种列表价格已改走 WS，ticker 仅作涨跌幅兜底） ═══ */
 async function fetchTopTicker() {
   try {
     const t = await (await fetch(`${API}/api/market/ticker?symbol=${curSymbol}&exchange=${curExchange}`)).json();
@@ -1492,7 +1576,18 @@ async function refreshListPrices() {
   renderPositions();
 }
 
-/* ═══ 品种列表：分组 + 添加/删除（分组按交易所隔离，切换交易所时整组替换） ═══ */
+/* ═══ 市场映射（内部路由标识 -> 市场名；阶段二迁至后端路由表）：市场固定，一市场绑定唯一数据源 ═══ */
+const MARKET_NAMES = { crypto: '加密', fx: '外汇', stock: '股票', future: '期货' };
+const MARKET_OF_EX = { binance: 'crypto', mt5: 'fx', ig: 'fx' };
+
+/* 顶栏 SPOT 标签 -> 当前市场名（不再展示数据源名称） */
+function updateTopTag() {
+  const el = document.getElementById('top-tag');
+  if (el) el.textContent = MARKET_NAMES[MARKET_OF_EX[curExchange]] || 'SPOT';
+}
+function updateModeBadge() { updateTopTag(); }
+
+/* ═══ 品种列表：分组 + 删除（分组按市场隔离，切换市场时整组替换） ═══ */
 const ICO_COLORS = ['#f7931a','#627eea','#f0b90b','#00ffa3','#c2a633','#e84142','#8e44ad','#2980b9'];
 const DEFAULT_BINANCE_GROUPS = [
   { name: '加密货币', collapsed: false, symbols: [
@@ -1522,7 +1617,8 @@ function groupsFor(ex) {
          元数据未加载（localStorage 恢复 exchange 早于 initSources）时返回临时空组，不写入缓存 */
       const m = sourcesMeta[ex];
       if (!m) return [];
-      symGroupsByEx[ex] = [{ name: (m && m.label) || ex, collapsed: false,
+      /* 分组名为市场分类（加密/外汇…），与数据源名称无关 */
+      symGroupsByEx[ex] = [{ name: MARKET_NAMES[MARKET_OF_EX[ex]] || (m && m.label) || ex, collapsed: false,
         symbols: ((m && m.default_symbols) || []).map(s => ({ name: s.name, sym: s.symbol, price: null, chg: '--' })) }];
     }
   }
@@ -1531,30 +1627,18 @@ function groupsFor(ex) {
 let symGroups = groupsFor(curExchange);
 let symFilter = '';
 
-/* 交易所切换：替换分组/默认品种，同步图表与订阅 */
-function renderExchSwitch() {
-  const root = document.getElementById('exch-switch');
-  root.innerHTML = Object.values(sourcesMeta).map(s =>
-    `<button class="exch-btn${s.exchange === curExchange ? ' active' : ''}" data-ex="${s.exchange}">${s.label}</button>`).join('');
-}
-document.getElementById('exch-switch').addEventListener('click', e => {
-  const b = e.target.closest('.exch-btn');
-  if (b && b.dataset.ex !== curExchange) switchExchange(b.dataset.ex);
-});
-/* 顶栏 LIVE 徽标跟随当前市场源 */
-function updateModeBadge() {
-  const m = sourcesMeta[curExchange];
-  const el = document.getElementById('mode-badge');
-  if (el && m) el.textContent = `◈ LIVE · ${m.label} 实时数据`;
-}
 function switchExchange(ex, opts = {}) {
   const meta = sourcesMeta[ex];
   if (!meta) return;
   curExchange = ex;
   symGroups = groupsFor(ex);
-  /* 品种：当前品种不属于新所时切到该所默认首个品种 */
+  /* 品种：opts.symbol 指定时（品种搜索弹窗选中）直接采用；否则当前品种不属于新所时切到该所默认首个品种 */
   const belongs = symGroups.some(g => g.symbols.some(s => s.sym && s.sym === curSymbol));
-  if (!opts.keepSymbol && !belongs && meta.default_symbols.length) {
+  if (opts.symbol) {
+    curSymbol = opts.symbol;
+    document.getElementById('top-symbol').textContent = curSymbol;
+    document.querySelector('.watermark').textContent = curSymbol;
+  } else if (!opts.keepSymbol && !belongs && meta.default_symbols.length) {
     curSymbol = meta.default_symbols[0].symbol;
     document.getElementById('top-symbol').textContent = curSymbol;
     document.querySelector('.watermark').textContent = curSymbol;
@@ -1566,8 +1650,8 @@ function switchExchange(ex, opts = {}) {
   }
   applyTfAvailability();
   applyVolVisibility();
-  renderExchSwitch();
   renderSymbols();
+  resyncListTopics();   // 切所：退订旧所列表品种、订阅新所
   updateModeBadge();
   load();
   subscribeWS();
@@ -1608,8 +1692,9 @@ async function initSources() {
     if (wm) wm.textContent = curSymbol;
     saveLayout();   // 回退结果写回持久化，避免每次刷新重复纠正
   }
-  renderExchSwitch();
+  renderSymbols();
   applyTfAvailability();
+  resyncListTopics();   // 首屏：列表品种 WS 订阅（WS 未就绪时由 onopen 补建）
 }
 
 function icoFor(name) {
@@ -1655,6 +1740,7 @@ document.getElementById('sym-list').addEventListener('click', e => {
     g.symbols = g.symbols.filter(s => s.name !== name);
     if (!g.symbols.length) symGroups.splice(+gi, 1);
     renderSymbols();
+    resyncListTopics();
     return;
   }
   const head = e.target.closest('.wl-group-head');
@@ -1676,53 +1762,104 @@ document.getElementById('sym-filter').addEventListener('input', e => {
   renderSymbols();
 });
 
-/* 添加品种弹窗 */
-const modal = document.getElementById('sym-modal');
-const groupSel = document.getElementById('new-sym-group');
-document.getElementById('add-sym').addEventListener('click', () => {
-  document.getElementById('new-sym-name').value = '';
-  document.getElementById('new-group-name').value = '';
-  document.getElementById('new-group-wrap').style.display = 'none';
-  groupSel.value = symGroups[0]?.name ?? '__new__';
-  syncGroupOptions();
-  modal.classList.add('show');
-});
-document.getElementById('sym-cancel').addEventListener('click', () => modal.classList.remove('show'));
-modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('show'); });
-
-function syncGroupOptions() {
-  const cur = groupSel.value;
-  groupSel.innerHTML = symGroups.map(g => `<option>${g.name}</option>`).join('') + '<option value="__new__">＋ 新建分组…</option>';
-  groupSel.value = cur && cur !== '__new__' && symGroups.some(g => g.name === cur) ? cur : '__new__';
-  document.getElementById('new-group-wrap').style.display = groupSel.value === '__new__' ? 'block' : 'none';
-}
-groupSel.addEventListener('change', () => {
-  document.getElementById('new-group-wrap').style.display = groupSel.value === '__new__' ? 'block' : 'none';
-});
-
-document.getElementById('sym-ok').addEventListener('click', () => {
-  const name = document.getElementById('new-sym-name').value.trim().toUpperCase();
-  if (!name) { document.getElementById('new-sym-name').focus(); return; }
-  let gName = groupSel.value;
-  if (gName === '__new__') {
-    gName = document.getElementById('new-group-name').value.trim();
-    if (!gName) { document.getElementById('new-group-name').focus(); return; }
-  }
-  let g = symGroups.find(x => x.name === gName);
-  if (!g) { g = { name: gName, collapsed: false, symbols: [] }; symGroups.push(g); }
-  if (!g.symbols.some(s => s.name === name)) {
-    /* 币安所沿用 /USDT 展开规则；其余所（如 IG）直接取字母数字作品种码 */
-    const symCode = curExchange === 'binance'
-      ? (name.endsWith('/USDT') ? name.replace('/', '') : null)
-      : name.replace(/[^A-Z0-9]/g, '');
-    g.symbols.push({ name, sym: symCode, price: null, chg: '--' });
-  }
-  modal.classList.remove('show');
-  renderSymbols();
-  refreshListPrices();
-});
+/* 右栏 ＋ -> 品种搜索弹窗（品种全部由后端提供，手动添加已移除） */
+document.getElementById('add-sym').addEventListener('click', openSymSearch);
 
 renderSymbols();
+
+/* ═══ 品种搜索弹窗（TradingView 式：后端全量品种目录 + 资产类别筛选 + 数据源名标注） ═══ */
+let srType = 'all', srRegion = 'global', srKw = '';
+let srFull = null;            // 全量品种目录（后端 /api/market/symbols，含全部数据源）；null=未拉取
+const srModal = document.getElementById('sr-modal');
+const SR_RENDER_CAP = 200;    // 单次渲染上限（品种数千级，先筛选后渲染）
+/* 资产类别 pill 固定顺序（仅展示数据中实际存在的类别） */
+const TYPE_ORDER = ['crypto', 'forex', 'metal', 'index', 'commodity', 'stock', 'bond'];
+const TYPE_NAMES = { crypto: '加密', forex: '外汇', metal: '贵金属', index: '指数', commodity: '商品', stock: '股票', bond: '债券' };
+
+async function loadSrFull() {
+  if (srFull) return;
+  try {
+    const d = await (await fetch('/api/market/symbols')).json();
+    srFull = d.symbols || [];
+  } catch (e) {
+    /* 后端未连接：回退源元数据默认品种，保证弹窗可用 */
+    srFull = Object.entries(sourcesMeta).flatMap(([ex, m]) =>
+      ((m && m.default_symbols) || []).map(s => ({ exchange: ex, source: m.label, symbol: s.symbol, name: s.name, type: s.type || '' })));
+  }
+}
+function renderSrTabs() {
+  const present = new Set((srFull || []).map(r => r.type).filter(Boolean));
+  const pills = [{ key: 'all', name: '全部' }].concat(
+    TYPE_ORDER.filter(t => present.has(t)).map(t => ({ key: t, name: TYPE_NAMES[t] })));
+  document.getElementById('sr-tabs').innerHTML = pills.map(t =>
+    `<button class="mkt-pill${t.key === srType ? ' active' : ''}" data-tp="${t.key}">${t.name}</button>`).join('');
+}
+function renderSrFilter() {
+  document.getElementById('sr-filter').innerHTML = `<div class="region-seg">
+      <button class="region-btn${srRegion === 'global' ? ' active' : ''}" data-rg="global">国外</button>
+      <button class="region-btn${srRegion === 'cn' ? ' active' : ''}" data-rg="cn">国内</button>
+    </div>`;
+}
+function renderSrResults() {
+  const body = document.getElementById('sr-body');
+  if (srRegion === 'cn') { body.innerHTML = '<div class="sr-empty">国内<br><b>数据源接入中</b></div>'; return; }
+  if (!srFull) { body.innerHTML = '<div class="sr-empty">品种目录加载中…</div>'; return; }
+  const kw = srKw.trim().toUpperCase();
+  let rows = srFull;
+  if (srType !== 'all') rows = rows.filter(r => r.type === srType);
+  if (kw) rows = rows.filter(r => r.symbol.includes(kw) || (r.name || '').toUpperCase().includes(kw));
+  const shown = rows.slice(0, SR_RENDER_CAP);
+  /* 同名品种来自不同数据源时为多行（仿 TradingView），选中即路由到该行数据源 */
+  let html = shown.map(r => `<div class="sr-row${r.symbol === curSymbol && r.exchange === curExchange ? ' active' : ''}" data-ex="${r.exchange}" data-sym="${r.symbol}">
+      <span class="sr-ico" style="background:${icoFor(r.symbol)}">${(r.symbol[0] || '?').toUpperCase()}</span>
+      <span class="sr-sym">${r.symbol}</span>
+      <span class="sr-desc">${r.name}</span>
+      <span class="sr-type">${TYPE_NAMES[r.type] || r.type || ''}</span>
+      <span class="sr-src">${r.source}</span>
+    </div>`).join('');
+  if (rows.length > shown.length) html += `<div class="sr-more">共 ${rows.length} 个品种，仅显示前 ${shown.length} 个，请输入关键字细化</div>`;
+  body.innerHTML = html || '<div class="sr-empty">无匹配品种</div>';
+}
+function renderSrAll() { renderSrTabs(); renderSrFilter(); renderSrResults(); }
+async function openSymSearch() {
+  srKw = ''; srType = 'all';
+  document.getElementById('sr-input').value = '';
+  srModal.classList.add('show');
+  renderSrAll();
+  if (!srFull) { await loadSrFull(); renderSrAll(); }
+  setTimeout(() => document.getElementById('sr-input').focus(), 30);
+}
+function closeSymSearch() { srModal.classList.remove('show'); }
+
+document.getElementById('sr-tabs').addEventListener('click', e => {
+  const b = e.target.closest('.mkt-pill');
+  if (b && b.dataset.tp !== srType) { srType = b.dataset.tp; renderSrTabs(); renderSrResults(); }
+});
+document.getElementById('sr-filter').addEventListener('click', e => {
+  const b = e.target.closest('.region-btn');
+  if (b && b.dataset.rg !== srRegion) { srRegion = b.dataset.rg; renderSrFilter(); renderSrResults(); }
+});
+document.getElementById('sr-input').addEventListener('input', e => { srKw = e.target.value; renderSrResults(); });
+document.getElementById('sr-body').addEventListener('click', e => {
+  const row = e.target.closest('.sr-row');
+  if (!row) return;
+  const ex = row.dataset.ex, sym = row.dataset.sym;
+  /* 切到该行数据源 + 品种（上层链路无感知） */
+  if (ex !== curExchange) switchExchange(ex, { symbol: sym });
+  else switchSymbol(sym);
+  /* 品种列表尚无该品种时加入首个分组并订阅 */
+  const groups = groupsFor(ex);
+  if (!groups.some(g => g.symbols.some(s => s.sym === sym))) {
+    if (!groups.length) groups.push({ name: MARKET_NAMES[MARKET_OF_EX[ex]] || ex, collapsed: false, symbols: [] });
+    groups[0].symbols.push({ name: sym, sym, price: null, chg: '--' });
+    renderSymbols(); resyncListTopics(); refreshListPrices();
+  }
+  closeSymSearch();
+});
+document.getElementById('sr-close').addEventListener('click', closeSymSearch);
+srModal.addEventListener('click', e => { if (e.target === srModal) closeSymSearch(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && srModal.classList.contains('show')) closeSymSearch(); });
+document.getElementById('symbol-picker').addEventListener('click', openSymSearch);
 
 /* ═══ 拖拽调整栏宽/栏高（分隔条 resize） ═══ */
 const SPLIT_CONF = {
@@ -1792,7 +1929,7 @@ document.getElementById('pos-toggle').addEventListener('click', () => {
   load();
   fetchTopTicker(); setInterval(fetchTopTicker, 15000);
   fetchPositions(); setInterval(fetchPositions, 5000);
-  refreshListPrices(); setInterval(refreshListPrices, 10000);
+  refreshListPrices(); setInterval(refreshListPrices, 30000);   // 价格已走 WS 同频推送，轮询仅兜底涨跌幅
 })();
 </script>
 </body>

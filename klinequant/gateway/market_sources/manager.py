@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from gateway.market_sources.base import MarketSource
 from gateway.ws import ws_manager
@@ -24,6 +25,8 @@ logger = logging.getLogger(__name__)
 VALID_TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "3d", "1w"}
 # 订阅扫描节奏：订阅集合变化最多延迟该秒数反映到插件重连
 _TARGET_POLL_INTERVAL = 1.0
+# 全量品种目录缓存（秒）：终端/交易所目录极少变化，避免每次打开搜索弹窗重新枚举
+SYMBOLS_CACHE_TTL = 1800.0
 
 
 class MarketSourceManager:
@@ -33,6 +36,8 @@ class MarketSourceManager:
         self._sources: dict[str, MarketSource] = {}
         # 去重签名：f"{exchange}_{symbol}_{tf}" -> sig
         self._last_bar: dict[str, str] = {}
+        # 全量品种目录缓存：exchange -> (monotonic ts, rows)
+        self._symbols_cache: dict[str, tuple[float, list[dict]]] = {}
         self._started = False
         self._tasks: list[asyncio.Task] = []
 
@@ -53,6 +58,18 @@ class MarketSourceManager:
         if "binance" in self._sources:
             return "binance"
         return next(iter(self._sources), "")
+
+    async def list_symbols(self, exchange: str) -> list[dict] | None:
+        """指定源全量品种目录（TTL 缓存）；未注册源返回 None，拉取失败向上抛出"""
+        source = self.get(exchange)
+        if source is None:
+            return None
+        cached = self._symbols_cache.get(source.name)
+        if cached and time.monotonic() - cached[0] < SYMBOLS_CACHE_TTL:
+            return cached[1]
+        rows = await source.list_symbols()
+        self._symbols_cache[source.name] = (time.monotonic(), rows)
+        return rows
 
     # ─── 订阅路由 ───
 

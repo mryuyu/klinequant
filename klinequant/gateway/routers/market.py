@@ -2,7 +2,7 @@
 
 API：
     GET /api/market/klines  — K 线数据（按 exchange 路由到市场源插件）
-    GET /api/market/symbols — 交易对列表（含 exchange 维度）
+    GET /api/market/symbols — 全量品种目录（数据源/资产类别维度，品种搜索用）
     GET /api/market/ticker  — 最新行情
     GET /api/market/depth   — 盘口深度（仅 binance 支持）
     GET /api/market/sources — 已注册市场源插件元数据（前端交易所选择器）
@@ -90,20 +90,35 @@ async def get_klines(
 async def get_symbols(
     exchange: Optional[str] = Query(None, description="市场源，缺省返回全部已注册所"),
 ):
-    """获取可用交易对列表（带 exchange 维度）"""
+    """全量可交易品种目录（带数据源/资产类别维度，前端品种搜索弹窗用）
+
+    每行含 exchange（内部路由标识）/ source（数据源展示名）/ type（资产类别），
+    同名品种来自不同数据源时为多行（如 EURUSD 同时存在于 IC Markets 与 IG）。
+    拉取失败回退到插件默认品种，保证弹窗永远有结果。
+    """
     sources = (
         [s for s in [market_manager.get(exchange)] if s]
         if exchange else market_manager.list_sources()
     )
     symbols = []
     for s in sources:
-        for item in s.default_symbols:
+        try:
+            rows = await market_manager.list_symbols(s.name) or []
+        except Exception as e:
+            logger.error(f"Failed to list symbols from {s.name}: {e}")
+            rows = []
+        if not rows:
+            rows = [
+                {"symbol": i["symbol"], "name": i.get("name", i["symbol"]), "type": i.get("type", "")}
+                for i in s.default_symbols
+            ]
+        for item in rows:
             symbols.append({
                 "exchange": s.name,
+                "source": s.label,
                 "symbol": item["symbol"],
                 "name": item.get("name", item["symbol"]),
-                "base": item["symbol"][:3],
-                "quote": item["symbol"][3:] if len(item["symbol"]) > 3 else "",
+                "type": item.get("type", ""),
             })
     return {"symbols": symbols}
 

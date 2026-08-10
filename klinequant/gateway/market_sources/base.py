@@ -81,6 +81,17 @@ class MarketSource(ABC):
         """最新行情摘要（可选实现；默认返回 None 由前端兜底）"""
         return None
 
+    async def list_symbols(self) -> list[dict[str, str]]:
+        """全量可交易品种目录 [{symbol, name, type}]（可选实现；默认返回 default_symbols）
+
+        type 为资产类别（forex/metal/index/commodity/crypto/stock/bond），
+        供前端品种搜索弹窗的资产分类筛选；插件从数据源读取并归类。
+        """
+        return [
+            {"symbol": s["symbol"], "name": s.get("name", s["symbol"]), "type": s.get("type", "")}
+            for s in self.default_symbols
+        ]
+
     def meta(self) -> dict[str, Any]:
         """插件元数据（/api/market/sources 下发给前端）"""
         return {

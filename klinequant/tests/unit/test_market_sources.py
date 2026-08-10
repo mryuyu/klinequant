@@ -63,6 +63,38 @@ def test_meta_contract():
     assert _FakeSource("otc").meta()["supports_volume"] is False   # OTC 所声明无成交量
 
 
+# ─── 全量品种目录：插件默认实现 + manager TTL 缓存 ───
+
+
+def test_base_list_symbols_default():
+    """未覆盖 list_symbols 的插件：回退 default_symbols（type 缺失时为空串）"""
+    import asyncio
+    rows = asyncio.run(_FakeSource("ig").list_symbols())
+    assert rows == [{"symbol": "IGUSD", "name": "IG/USD", "type": ""}]
+
+
+def test_manager_list_symbols_cached():
+    """TTL 内重复调用命中缓存（插件只拉取一次）；未注册源返回 None"""
+    import asyncio
+
+    class _CountingSource(_FakeSource):
+        def __init__(self):
+            super().__init__("cnt")
+            self.calls = 0
+
+        async def list_symbols(self):
+            self.calls += 1
+            return [{"symbol": "CNTUSD", "name": "CNT/USD", "type": "forex"}]
+
+    mgr = MarketSourceManager()
+    src = _CountingSource()
+    mgr.register(src)
+    assert asyncio.run(mgr.list_symbols("cnt"))[0]["symbol"] == "CNTUSD"
+    asyncio.run(mgr.list_symbols("cnt"))
+    assert src.calls == 1
+    assert asyncio.run(mgr.list_symbols("nope")) is None
+
+
 # ─── 价格精度：从订阅到的价格推导，随响应下发（前端只渲染不推导） ───
 
 def test_price_decimals_from_raw_strings():

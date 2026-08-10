@@ -1,4 +1,5 @@
 """本地 MT5 市场源插件单测（fake 驱动注入，不依赖真实终端）"""
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -9,12 +10,13 @@ from gateway.market_sources.mt5_source import TIMEFRAME_MAP, Mt5Source
 class _FakeMt5:
     """驱动 fake：接口与 Mt5Api 一致，返回标准化 row dict（time=epoch 秒）"""
 
-    def __init__(self, symbols=("EURUSD", "GBPUSD"), digits=5, rows=None, tick=None, ok=True):
+    def __init__(self, symbols=("EURUSD", "GBPUSD"), digits=5, rows=None, tick=None, ok=True, catalog=None):
         self.ok = ok
         self.symbols = set(symbols)
         self.digits = digits
         self.rows = rows or []
         self.tick = tick
+        self.catalog = catalog   # symbols_get 返回值（终端全量品种元数据）
         self.selected: list[str] = []
         self.range_calls: list[tuple] = []
         self.shutdown_calls = 0
@@ -36,6 +38,9 @@ class _FakeMt5:
 
     def symbol_info_tick(self, symbol):
         return self.tick
+
+    def symbols_get(self):
+        return self.catalog
 
     def copy_rates_from_pos(self, symbol, timeframe, start_pos, count):
         return self.rows[-count:]
@@ -163,3 +168,40 @@ async def test_reconnect_on_connection_lost():
     drv.ok = True
     src._try_reconnect()
     assert src.available is True
+
+
+# ─── 全量品种目录：path 资产分类 + trade_mode 过滤 ───
+
+
+async def test_list_symbols_classify_by_path():
+    """path 顶层目录归资产类别；Commodities 二级细分；非 FULL 不可交易品种过滤"""
+    catalog = [
+        SimpleNamespace(name="EURUSD", description="Euro vs US Dollar", path="Forex\\EURUSD", trade_mode=4),
+        SimpleNamespace(name="XAUUSD", description="Gold vs US Dollar", path="Commodities\\Metals\\XAUUSD", trade_mode=4),
+        SimpleNamespace(name="XTIUSD", description="Crude Oil", path="Commodities\\Energies\\Energies Spot\\XTIUSD", trade_mode=4),
+        SimpleNamespace(name="US500", description="S&P 500", path="Indices\\Indices Spot\\Major Spot Indices\\US500", trade_mode=4),
+        SimpleNamespace(name="BTCUSD", description="Bitcoin", path="Crypto\\BTCUSD", trade_mode=4),
+        SimpleNamespace(name="AAPL.NASDAQ", description="Apple", path="Stock CFD's\\NASDAQ\\AAPL.NASDAQ", trade_mode=4),
+        SimpleNamespace(name="UST10Y_U6", description="US 10Y Bond", path="Bonds CFDs\\UST10Y_U6", trade_mode=4),
+        SimpleNamespace(name="CLOSED", description="closed", path="Forex\\CLOSED", trade_mode=0),
+    ]
+    src = Mt5Source(driver=_FakeMt5(catalog=catalog))
+    rows = await src.list_symbols()
+    by_type = {r["symbol"]: r["type"] for r in rows}
+    assert by_type == {
+        "EURUSD": "forex", "XAUUSD": "metal", "XTIUSD": "commodity",
+        "US500": "index", "BTCUSD": "crypto", "AAPL.NASDAQ": "stock",
+        "UST10Y_U6": "bond",
+    }
+    assert next(r for r in rows if r["symbol"] == "XAUUSD")["name"] == "Gold vs US Dollar"
+
+
+async def test_list_symbols_fallback_to_defaults():
+    """终端不可用（symbols_get 返回 None）→ 回退插件默认品种（带资产类别）"""
+    src = Mt5Source(driver=_FakeMt5(catalog=None))
+    rows = await src.list_symbols()
+    assert rows == [
+        {"symbol": "EURUSD", "name": "EUR/USD", "type": "forex"},
+        {"symbol": "GBPUSD", "name": "GBP/USD", "type": "forex"},
+    ]
+
