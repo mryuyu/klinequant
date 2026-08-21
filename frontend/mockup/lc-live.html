@@ -369,7 +369,10 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
   <!-- 指标参数调整弹窗（齿轮按钮触发） -->
   <div class="modal-mask" id="ind-modal">
     <div class="modal">
-      <h3 id="ind-modal-title">指标参数</h3>
+      <div class="sr-head" style="padding:0 0 14px">
+        <span class="sr-title" id="ind-modal-title">指标参数</span>
+        <button class="sr-close" id="ind-close" title="关闭">✕</button>
+      </div>
       <div id="ind-fields"></div>
       <div class="modal-btns">
         <button class="m-remove" id="ind-remove">移除</button>
@@ -537,6 +540,33 @@ const IND_META = {
 };
 /* 周期类参数上限动态跟随 K 线总量上限（klineCount，右键菜单可调 100~5000） */
 function fieldMax(f) { return f.max === 'kline' ? klineCount : f.max; }
+
+/* ═══ IND-110：后端 def 式指标目录（/api/indicator/meta 驱动，后端注册新指标前端自动发现） ═══ */
+let BACKEND_META = {};   // name -> {min_periods, display_meta, default_params}
+async function fetchBackendMeta() {
+  try {
+    const json = await (await fetch(`${API}/api/indicator/meta`)).json();
+    for (const it of json.indicators || []) BACKEND_META[it.name] = it;
+  } catch (e) { /* 后端未连时保持内置指标可用 */ }
+}
+/* 已有专属渲染/计算通路的内置指标（不列入自定义组） */
+const FE_HANDLED = new Set(['MA', 'BOLL', 'MACD', 'KDJ', 'RSI']);
+function customCatalog() {
+  const out = {};
+  for (const [name, m] of Object.entries(BACKEND_META)) {
+    if (FE_HANDLED.has(name)) continue;
+    const dm = m.display_meta || {};
+    out[name] = {
+      title: name,
+      desc: dm.desc || `预热 ${m.min_periods} 根`,
+      pane: dm.pane === 'main' ? 'main' : 'sub',
+      h: 100,
+      defaults: m.default_params || {},
+      fields: (dm.fields && dm.fields.length) ? dm.fields : [name],
+    };
+  }
+  return out;
+}
 /* 默认布局（与旧版固定集合一致） */
 const IND_LAYOUT_DEFAULT = [
   { type: 'ma',   params: { short: 7, long: 25 } },
@@ -547,8 +577,10 @@ const IND_LAYOUT_DEFAULT = [
 ];
 /* 加载 indLayout：新格式直接用；旧格式 indParams（固定键集合）迁移为实例列表 */
 let indLayout = [];
-if (savedLayout && Array.isArray(savedLayout.indLayout) && savedLayout.indLayout.every(x => IND_CATALOG[x.type])) {
-  indLayout = savedLayout.indLayout.map(x => ({ type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params } }));
+if (savedLayout && Array.isArray(savedLayout.indLayout) && savedLayout.indLayout.every(x => IND_CATALOG[x.type] || (x.type === 'custom' && x.name))) {
+  indLayout = savedLayout.indLayout.map(x => x.type === 'custom'
+    ? { type: 'custom', name: x.name, params: { ...x.params } }
+    : { type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params } });
 } else {
   indLayout = IND_LAYOUT_DEFAULT.map(x => ({ type: x.type, params: { ...x.params } }));
   if (savedLayout && savedLayout.indParams) {
@@ -676,13 +708,22 @@ function applyIndPush(msg) {
   if (parts[1] !== curExchange || parts[2] !== curSymbol || parts[3] !== curTf) return;
   for (const item of msg.data || []) {
     for (const inst of indInstances) {
-      if (!inst.backend || item.indicator !== IND_BACKEND[inst.type]) continue;
+      if (!inst.backend) continue;
+      const indName = inst.type === 'custom' ? inst.name : IND_BACKEND[inst.type];
+      if (item.indicator !== indName) continue;
       if (JSON.stringify(item.params) !== JSON.stringify(backendParams(inst))) continue;
       const t = Math.floor(item.timestamp / 1000), v = item.values;
       if (inst.type === 'macd') {
         inst.series[0].update({ time: t, value: v.HIST, color: macdHistColor(v.HIST) });
         inst.series[1].update({ time: t, value: v.DIF });
         inst.series[2].update({ time: t, value: v.DEA });
+      } else if (inst.type === 'custom') {
+        /* IND-110：def 式指标逐字段更新末点，缓存供图例末值显示 */
+        inst.fields.forEach((f, i) => {
+          if (v[f] == null) return;
+          inst.series[i].update({ time: t, value: v[f] });
+          (inst.lastVals ||= [])[i] = v[f];
+        });
       }
     }
   }
@@ -761,6 +802,7 @@ applyVolVisibility();
 
 /* ═══ 指标实例动态管理（indLayout 驱动：series/图例/窗格随增删重建） ═══ */
 const MA_COLORS = ['#f0b90b', '#2962ff', '#e91e63', '#9ccc65', '#ba68c8', '#4dd0e1', '#ff8a65', '#aed581'];
+const CUSTOM_COLORS = ['#e6c229', '#42a5f5', '#ab47bc', '#26a69a', '#ef5350', '#8d6e63'];   // IND-110 自定义指标字段配色循环
 let maColorIdx = 0;
 let indInstances = [];   // [{id, type, params, series:[...], legendEl, legendVals:{}, pane}]
 const LINE_BASE = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
@@ -771,12 +813,20 @@ function indName(it) {
   if (it.type === 'macd') return `MACD(${p.fast},${p.slow},${p.signal})`;
   if (it.type === 'kd') return `KD(${p.n},${p.m})`;
   if (it.type === 'rsi') return `RSI(${p.period})`;
+  if (it.type === 'custom') return `${it.name}(${Object.values(it.params).join(',')})`;
   return it.type;
+}
+/* 目录条目：内置类型用 IND_CATALOG；自定义类型由后端 meta 生成（IND-110） */
+function catOf(it) {
+  if (it.type === 'custom') {
+    return customCatalog()[it.name] || { title: it.name, desc: '', pane: 'sub', h: 100, defaults: {}, fields: [it.name] };
+  }
+  return IND_CATALOG[it.type];
 }
 /* 构建单个实例的 series 与图例行；主图指标进 lg-main-items，副图指标独占一行 */
 function buildInstance(it) {
   const id = nextIndId(it.type);
-  const cat = IND_CATALOG[it.type];
+  const cat = catOf(it);
   const inst = { id, type: it.type, params: { ...it.params }, series: [], legendVals: {}, pane: 0 };
   const parts = [];   // 图例片段 [{label, color}]
   if (it.type === 'ma') {
@@ -816,6 +866,17 @@ function buildInstance(it) {
     inst.pane = pane;
     inst.series = [chart.addSeries(LineSeries, { color: '#26c6da', ...LINE_BASE }, pane)];
     parts.push({ key: 'r', label: 'RSI', color: '#26c6da' });
+  } else if (it.type === 'custom') {
+    /* IND-110：def 式指标通用渲染——每个输出字段一条线，主/副图由 display_meta.pane 决定 */
+    inst.name = it.name;
+    inst.fields = cat.fields;
+    inst.backend = true;
+    inst.pane = cat.pane === 'main' ? 0 : chart.panes().length;
+    cat.fields.forEach((f, i) => {
+      const color = CUSTOM_COLORS[i % CUSTOM_COLORS.length];
+      inst.series.push(chart.addSeries(LineSeries, { color, ...LINE_BASE }, inst.pane));
+      parts.push({ key: f, label: f, color });
+    });
   }
   /* 图例 DOM（齿轮置于指标名称前） */
   const rowHtml = `<button class="gear-btn" data-ind-id="${id}" title="调整参数"></button>` +
@@ -870,7 +931,7 @@ function rebuildIndicators() {
   for (const it of indLayout) {
     const inst = buildInstance(it);
     indInstances.push(inst);
-    if (inst.pane > 0) subPending.push({ pane: inst.pane, h: IND_CATALOG[inst.type].h || 100 });
+    if (inst.pane > 0) subPending.push({ pane: inst.pane, h: catOf(inst).h || 100 });
   }
   /* 新副图窗格应用目标高度（首屏未就绪时留给 applyPaneHeights 统一处理） */
   subPaneTargets = subPending;
@@ -918,8 +979,9 @@ setInterval(layoutPaneLegends, 300);
 let klines = [];
 let initialLoaded = false;   // 首屏数据是否就绪（拦截冷启动竞态下的 WS 推送）
 let sbInfo = '';             // 状态栏基础信息（装载完成后更新，WS 延迟由定时器每秒拼接刷新）
-/* 全量计算单个实例并写入 series */
-function renderInstance(inst) {
+/* 全量计算单个实例并写入 series；reset=true（切品种/周期）时后端指标立即清空防旧周期残留，
+   并返回 apply 闭包由调用方等全部就绪后批量显示（避免逐条跳入的“动画计算”观感） */
+function renderInstance(inst, reset = false) {
   const p = inst.params;
   if (inst.type === 'ma') {
     inst.series[0].setData(maSeries(klines, p.short));
@@ -930,8 +992,9 @@ function renderInstance(inst) {
   } else if (inst.type === 'macd') {
     /* IND-103：优先消费后端统一计算（REST 历史序列）；失败回退本地计算 */
     const gen = loadGen;
-    fetchIndHistory(inst, gen).then(data => {
-      if (gen !== loadGen) return;   // 已切换品种/周期，丢弃陈旧数据
+    if (reset) inst.series.forEach(s => s.setData([]));   // 立即清旧周期数据，不残留
+    return fetchIndHistory(inst, gen).then(data => {
+      if (gen !== loadGen) return null;   // 已切换品种/周期，丢弃陈旧数据
       const difS = [], deaS = [], hist = [];
       data.forEach(d => {
         const time = Math.floor(d.timestamp / 1000);
@@ -939,26 +1002,54 @@ function renderInstance(inst) {
         deaS.push({ time, value: d.values.DEA });
         hist.push({ time, value: d.values.HIST, color: macdHistColor(d.values.HIST) });
       });
-      inst.series[0].setData(hist); inst.series[1].setData(difS); inst.series[2].setData(deaS);
-      inst.backend = true;
+      return () => { inst.series[0].setData(hist); inst.series[1].setData(difS); inst.series[2].setData(deaS); inst.backend = true; };
     }).catch(() => {
-      if (gen !== loadGen) return;
+      if (gen !== loadGen) return null;
       const { difS, deaS, hist } = macdSeries(klines, p.fast, p.slow, p.signal);
-      inst.series[0].setData(hist); inst.series[1].setData(difS); inst.series[2].setData(deaS);
-      inst.backend = false;
+      return () => { inst.series[0].setData(hist); inst.series[1].setData(difS); inst.series[2].setData(deaS); inst.backend = false; };
     });
   } else if (inst.type === 'kd') {
     const { K, D } = kdSeries(klines, p.n, p.m);
     inst.series[0].setData(K); inst.series[1].setData(D);
   } else if (inst.type === 'rsi') {
     inst.series[0].setData(rsiSeries(klines, p.period));
+  } else if (inst.type === 'custom') {
+    /* IND-110：def 式指标统一消费后端计算（REST 历史序列），无本地兜底 */
+    const gen = loadGen;
+    if (reset) inst.series.forEach(s => s.setData([]));   // 立即清旧周期数据，不残留
+    const url = `${API}/api/indicator/history?symbol=${curSymbol}&timeframe=${curTf}&exchange=${curExchange}` +
+      `&indicator=${inst.name}&limit=${klines.length}&params=${encodeURIComponent(JSON.stringify(inst.params))}`;
+    return fetch(url).then(r => r.json()).then(json => {
+      if (gen !== loadGen || !json.warmed || !json.data || !json.data.length) return null;
+      const datas = inst.fields.map(() => []);
+      json.data.forEach(d => {
+        const time = Math.floor(d.timestamp / 1000);
+        inst.fields.forEach((f, i) => {
+          const v = d.values[f];
+          if (v != null) datas[i].push({ time, value: v });
+        });
+      });
+      return () => {
+        datas.forEach((s, i) => inst.series[i].setData(s));
+        inst.lastVals = datas.map(s => s.length ? s[s.length - 1].value : null);
+      };
+    }).catch(() => null);   // 后端未连时保持占位（已清空）
   }
+  return null;
 }
-function renderIndData() { indInstances.forEach(renderInstance); }
-function renderChart() {
+/* 批量渲染：后端指标实例全部就绪后一次性显示（本地指标同步即出） */
+function renderIndData(reset = false) {
+  const applies = [];
+  for (const inst of indInstances) {
+    const pr = renderInstance(inst, reset);
+    if (pr) applies.push(pr);
+  }
+  if (applies.length) Promise.all(applies).then(fns => fns.forEach(fn => fn && fn()));
+}
+function renderChart(reset = false) {
   candleSeries.setData(klines.map(k => ({ time: k.time, open: k.open, high: k.high, low: k.low, close: k.close })));
   volumeSeries.setData(klines.map(k => ({ time: k.time, value: k.volume, color: volColor(k.close, k.open) })));
-  renderIndData();
+  renderIndData(reset);
 }
 /* 切换涨跌配色（全局生效）：交换 CSS 变量 + K 线系列改色 + 全量重绘 */
 function applyColorScheme(scheme, persist = true) {
@@ -1019,15 +1110,23 @@ async function load() {
     curPrec = prec;   // 图例 fmt 与坐标轴同精度
     symbolPrec[curSymbol] = prec;   // 记录当前品种精度（供持仓表/品种列表按品种渲染）
     candleSeries.applyOptions({ priceFormat: { type: 'price', precision: prec, minMove: +(10 ** -prec).toFixed(8) } });
-    renderChart();
+    const lvr = chart.timeScale().getVisibleLogicalRange();   // 重置前记录视窗（切品种/周期后保持缩放比例）
+    const span = lvr ? lvr.to - lvr.from : null;
+    renderChart(true);
     if (!panesSized) { panesSized = true; setTimeout(applyPaneHeights, 200); }   // 首屏就绪后应用副图高度（等 autoSize 布局稳定）
-    chart.timeScale().fitContent();
+    const isFirst = firstFit;
+    if (isFirst) { firstFit = false; chart.timeScale().fitContent(); }   // 首屏铺满；此后切换保持原比例 + 最新 K 线右对齐
     initialLoaded = true;   // 首屏就绪，开始接收 WS 增量
+    if (!isFirst && span) {   // 非首屏：显示根数不变（即缩放比例不变），最新 K 线对齐右侧留白
+      const to = klines.length - 1 + curRightOffset;
+      chart.timeScale().setVisibleLogicalRange({ from: to - span, to });
+    }
     lastPrices[curSymbol] = klines[klines.length - 1].close;
     updateTicker(klines[klines.length - 1].close);
     sbInfo = (sourcesMeta[curExchange] && sourcesMeta[curExchange].label) || curExchange;
     renderStatusbar();
   } catch (e) {
+    console.error('load failed:', e);   // 暴露真实错误，避免被兜底文案掩盖
     setSb('✕ 后端未连接（127.0.0.1:8000），请先启动 API Gateway');
   }
 }
@@ -1036,6 +1135,7 @@ async function load() {
 let loadingMore = false;
 let noMoreData = false;
 let loadGen = 0;   // 加载代次：切换品种/周期/重载时作废进行中的翻页
+let firstFit = true;   // 首屏标记：仅首次加载 fitContent 铺满，此后切换保持原缩放比例
 async function loadMore() {
   if (loadingMore || noMoreData || klines.length >= klineCount) return;
   loadingMore = true;
@@ -1138,10 +1238,19 @@ document.querySelectorAll('.gear-btn').forEach(b => b.innerHTML = GEAR_SVG);
 const indModal = document.getElementById('ind-modal');
 let curIndEdit = null;   // 实例 id
 function instById(id) { return indInstances.find(i => i.id === id); }
+/* 参数弹窗 meta：内置走 IND_META；custom 由后端 default_params 动态生成（IND-110） */
+function indModalMeta(inst) {
+  if (inst.type !== 'custom') return IND_META[inst.type];
+  const bp = BACKEND_META[inst.name];
+  return {
+    title: `${inst.name} 参数`,
+    fields: Object.keys(bp?.default_params || {}).map(k => ({ key: k, label: k, min: 1, max: 'kline' })),
+  };
+}
 function openIndModal(id) {
   const inst = instById(id);
   if (!inst) return;
-  const meta = IND_META[inst.type];
+  const meta = indModalMeta(inst);
   curIndEdit = id;
   document.getElementById('ind-modal-title').textContent = meta.title;
   document.getElementById('ind-fields').innerHTML = meta.fields.map(f => `
@@ -1164,11 +1273,18 @@ document.addEventListener('click', e => {
   if (btn && btn.dataset.indId) openIndModal(btn.dataset.indId);
 });
 document.getElementById('ind-cancel').addEventListener('click', () => indModal.classList.remove('show'));
-indModal.addEventListener('click', e => { if (e.target === indModal) indModal.classList.remove('show'); });
+document.getElementById('ind-close').addEventListener('click', () => indModal.classList.remove('show'));
+/* 遮罩关闭：仅当按下点也在遮罩上才关——输入框内选取文本拖出弹窗外松开时 click 目标会落在遮罩，避免误关 */
+function maskDismiss(el) {
+  let downOnMask = false;
+  el.addEventListener('mousedown', e => { downOnMask = e.target === el; });
+  el.addEventListener('click', e => { if (e.target === el && downOnMask) el.classList.remove('show'); downOnMask = false; });
+}
+maskDismiss(indModal);
 document.getElementById('ind-ok').addEventListener('click', () => {
   const inst = instById(curIndEdit);
   if (!inst) { indModal.classList.remove('show'); return; }
-  const meta = IND_META[inst.type];
+  const meta = indModalMeta(inst);
   const next = {};
   for (const f of meta.fields) {
     const el = document.getElementById('ind-f-' + f.key);
@@ -1200,6 +1316,20 @@ document.getElementById('ind-remove').addEventListener('click', () => {
 });
 /* 实例 ↔ indLayout 条目映射（重建后实例重新生成，按顺序+类型定位） */
 function layoutRef(inst) {
+  if (inst.type === 'custom') {
+    /* IND-110：custom 条目按 (type+name) 定位 */
+    let nth = -1;
+    for (const i of indInstances) {
+      if (i.type === 'custom' && i.name === inst.name) nth++;
+      if (i === inst) break;
+    }
+    let cnt = -1;
+    for (const x of indLayout) {
+      if (x.type === 'custom' && x.name === inst.name) cnt++;
+      if (cnt === nth) return x;
+    }
+    return null;
+  }
   let nth = -1;
   for (const i of indInstances) {
     if (i.type === inst.type) nth++;
@@ -1223,22 +1353,35 @@ document.getElementById('ind-btn').addEventListener('click', () => {
       <div><div class="pk-name">${c.title}</div><div class="pk-desc">${c.desc}</div></div>
       <span class="pk-add">＋</span>
     </div>`;
+  /* IND-110：后端 def 式指标动态分组（/api/indicator/meta 驱动） */
+  const cust = Object.entries(customCatalog());
+  const custRow = ([name, c]) => `
+    <div class="pick-row" data-pick="custom" data-name="${name}">
+      <div><div class="pk-name">${c.title}</div><div class="pk-desc">${c.desc}</div></div>
+      <span class="pk-add">＋</span>
+    </div>`;
   document.getElementById('ind-pick-list').innerHTML =
     `<div class="pk-group">主图叠加</div>${mains.map(row).join('')}` +
-    `<div class="pk-group">副图窗格</div>${subs.map(row).join('')}`;
+    `<div class="pk-group">副图窗格</div>${subs.map(row).join('')}` +
+    (cust.length ? `<div class="pk-group">自定义 / 后端</div>${cust.map(custRow).join('')}` : '');
   indPicker.classList.add('show');
 });
 document.getElementById('ind-pick-list').addEventListener('click', e => {
   const r = e.target.closest('.pick-row');
   if (!r) return;
   const type = r.dataset.pick;
-  indLayout.push({ type, params: { ...IND_CATALOG[type].defaults } });
+  if (type === 'custom') {
+    const name = r.dataset.name;
+    indLayout.push({ type: 'custom', name, params: { ...(BACKEND_META[name]?.default_params || {}) } });
+  } else {
+    indLayout.push({ type, params: { ...IND_CATALOG[type].defaults } });
+  }
   rebuildIndicators();
   saveLayout();
   indPicker.classList.remove('show');
 });
 document.getElementById('pick-cancel').addEventListener('click', () => indPicker.classList.remove('show'));
-indPicker.addEventListener('click', e => { if (e.target === indPicker) indPicker.classList.remove('show'); });
+maskDismiss(indPicker);
 refreshIndLabels();
 
 /* ═══ 十字光标图例 ═══ */
@@ -1302,6 +1445,7 @@ function refreshLegend() {
 /* 末根 bar 各图例分量现算（顺序与 buildInstance 的 parts 一致） */
 function calcLastVals(inst) {
   const p = inst.params;
+  if (inst.type === 'custom') return inst.lastVals || inst.fields.map(() => null);   // IND-110：后端驱动，取缓存末值
   if (inst.type === 'ma') {
     const f = klines.length >= p.short ? maSeries(klines.slice(-p.short), p.short)[0]?.value : null;
     const l = klines.length >= p.long ? maSeries(klines.slice(-p.long), p.long)[0]?.value : null;
@@ -1466,6 +1610,7 @@ function applyBar(b) {
 }
 /* 单实例增量更新：只算末根 bar（限定预热窗口，避免全量重算） */
 function updateInstanceLast(inst, t) {
+  if (inst.type === 'custom') return;   // IND-110：def 式指标末根由后端 indicators.* WS 推送
   const p = inst.params, n = klines.length;
   if (inst.type === 'ma') {
     if (n >= p.short) inst.series[0].update({ time: t, value: maSeries(klines.slice(-p.short), p.short)[0].value });
@@ -1924,6 +2069,7 @@ document.getElementById('pos-toggle').addEventListener('click', () => {
 (async () => {
   await initSources();
   updateModeBadge();
+  await fetchBackendMeta();   // IND-110：后端 def 式指标目录（失败不阻塞内置指标）
   rebuildIndicators();   // 按 indLayout 构建指标实例（首屏数据就绪前，series 空数据）
   connectWS();
   load();

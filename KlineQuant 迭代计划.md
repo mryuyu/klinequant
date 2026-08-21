@@ -29,7 +29,7 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 
 | 版本 | 主题 | 核心交付 | 预计工期 | 状态 |
 |------|------|---------|---------|------|
-| v1.1.0 | 体验升级 | UI 重新设计 ✅ + 图表二次开发 + 指标后端统一计算（IND-101~109） | 3-4 周 | 🔄 进行中（UI 完成，IND MACD 样本三端闭环已验证，图表待启动） |
+| v1.1.0 | 体验升级 | UI 重新设计 ✅ + 图表二次开发 + 指标后端统一计算（IND-101~110） | 3-4 周 | 🔄 进行中（UI 完成，IND MACD 样本三端闭环已验证，IND-110 def 式指标语言已落地，图表待启动） |
 | v1.2.0 | 交易增强 | TRD-007/008、SIG-006 | 2-3 周 | ⬜ BACKLOG |
 | v1.3.0 | 回测与策略生态 | BT-005/006、STR-008、画线工具 | 2-3 周 | ⬜ BACKLOG |
 | v2.0.0 | 多市场扩展 | P3-001/002、Docker、文档 | 4-6 周 | ⬜ BACKLOG |
@@ -85,6 +85,7 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | IND-107 | ZigZag 重绘型指标 | 新增第 9 个指标 ZigZag（参数：反转阈值%）：三变量增量状态机（方向/已确认拐点/候选极值），O(1) 推进；标记 `repaint=True`，未收盘 bar 用 IND-101 快照法每 tick 重绘候选段，回撤达标后拐点确认不再变；策略与前端图表共用同一实现（图表实时重绘与策略判断一致） | P0 |
 | IND-108 | 策略盘中触发机制 | 用户策略需求：止损/止盈/K 线形态需盘中（tick 级）触发，现框架仅 `on_bar` 收盘驱动。改造：① StrategyBase 新增 `on_bar_update`（未收盘 bar 每次 high/low/close 变化时回调）与可选 `on_tick`，策略在 on_init 显式声明订阅盘中更新；② 行情分发层将币安 WS kline 流盘中更新路由给已订阅策略（沙箱模式走 ZMQ PUSH 通道）；③ 性能约束：仅订阅制推送 + 单策略回调耗时预算断言（10 品种 × 2 tick/s 下策略回调总耗时 < 50ms/s）；④ 盘中信号执行快路径：on_bar_update 产生的信号复用现有风控→下单链路 | P0 |
 | IND-109 | 自定义指标支持体系 | 三步接入：继承 IndicatorBase + `@register_indicator` 装饰器注册 + 策略 require_indicators 声明；① 命名全局唯一校验（注册表已支持，策略自带指标加前缀避免冲突）；② 增量接口分级：自实现 `update_bar` O(1) 递推（高频核心/状态机类）或通用窗口兜底（未实现增量接口时引擎自动取尾部 max(min_periods×3, 300) 根小窗口 polars 重算，每 tick 成本固定，**添加门槛不变**）；指标内部状态必须**可快照**（IND-101 未收盘 bar 快照法），禁止持有外部可变引用；③ 指标类声明 `display_meta`（参数 schema/主图或副图/默认颜色/值域范围 range/**字段级默认线型 style**，如 MA 实线/EMA 虚线/BOLL 上下轨点线，同图叠加开箱即可区分）随 meta 接口下发，前端仅设参数不硬编码；**注册契约**：命名全局唯一（策略自带指标必须加策略前缀避免冲突），参数必须 JSON 可序列化（兼作 LRU 缓存 key / WS 路由 key / 前端弹窗渲染源）；**注册时序**：策略热加载时先注册指标类、再预热策略；**生命周期**：策略卸载时指标类保留在 Registry（避免其他策略/前端订阅断裂），仅取消该策略的订阅引用计数；④ 单测模板（IND-T 系列）：全量正确性 + 窗口兜底 vs 全量一致性；v1.x 仅支持 Python 类注册，不做前端上传/沙箱执行 | P1 |
+| IND-110 | def 式指标语言（tracing eDSL 计算图） | ✅ 已完成（2026-08-22）：作者只 `def` 一个函数即可写指标，**零增量代码**。① 原语库 `core/indicator_engine/graph/nodes.py`（约 620 行）：每原语双语义——`batch()` 返回 polars Expr（预热批量）+ `incr()` O(1) 标量递推（实时）+ `snapshot()/restore()`（IND-101 快照法）；已提供 ema/sma/rolling_max/rolling_min/rolling_std/shift/cum_sum/maximum/minimum/where/abs_ + 四则运算/比较运算符重载；② 图调度 `Graph`：trace 一次构图（创建序=拓扑序），min_periods 结构推导（Ema=child、Sma/Rolling=child+period-1、Shift=child+n、Binary=max），图级预热门控（任一输出字段 None 则整体不输出，不产失真数据）；③ 适配层 `dsl.py`：`GraphIndicator(IndicatorBase)` 声明 `supports_incremental=True` 走引擎增量路径（绕开内置列名硬编码），`@pyindicator(name, pane, range, desc)` 装饰器注册，参数默认值来自函数签名（形参 open/high/low/close/volume 映射输入，其余形参成为指标参数）；④ 直代码约束：分支/循环可依赖参数、不可依赖行情数据，数据依赖选择用 `where(cond,a,b)`；null 语义对齐 polars（EMA 用 ewm_mean(adjust=False, ignore_nulls=True)，窗口含 null 输出 null）；⑤ 自定义目录 `klinequant/custom_indicators/`：pkgutil 自动加载，样例 TRIX（副图）/DEMA（主图叠加），网关 state.py 初始化时导入注册；⑥ 前端 lc-live.html：`/api/indicator/meta` 驱动 BACKEND_META，选择面板新增“自定义/后端”分组自动发现，通用渲染（每字段一条线、pane 由 display_meta 决定）+ REST 历史 + WS 增量逐字段更新 + 参数弹窗由 default_params 动态生成 + indLayout 持久化兼容 `{type:'custom', name}`；⑦ 单测 8 用例：原语批量 vs 增量逐点一致（EMA/SMA/RollingMax/Std/Shift+null 对齐）、TRIX/DEMA 注册与 meta、快照同 ts 幂等、引擎集成，全量 558 passed | P0 |
 
 **盘中止损止盈的双轨约定**：固定价格止损/止盈优先走交易所侧条件单/OCO（TRD-007，v1.2.0，不依赖进程存活，更可靠）；基于指标的动态止损（移动止损、ZigZag/ATR 驱动）由策略盘中触发（IND-108）——两者不互斥，回测中均按盘中触发模拟。
 
@@ -100,6 +101,12 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | v1.1-M2.6 盘中触发可用 | IND-107/108 完成：ZigZag 重绘指标与图表/策略一致，盘中信号（止损/止盈/形态）全链路验证 |
 | v1.1-M3 全站换新 | ✅ UI-001~005 已完成（lc-live.html 基线，v1.1.0-mockup~v1.3.0-mockup 系列发布）；正式版 Vue 前端同步改造随 IND-103 跟进 |
 | v1.1-M4 发布 | 全量回归 + 前端构建 + 打包 + GitHub tag `v1.1.0` |
+
+### 2.4 已知问题（BUG 记录）
+
+| 编号 | 日期 | 问题 | 修复方向 | 状态 |
+|------|------|------|---------|------|
+| BUG-001 | 2026-08-22 | 修改单个指标参数时全量指标销毁重建+重渲染（lc-live.html `rebuildIndicators` 全量链路）：本地指标全部重算、后端指标全部重拉历史，K 线数量大（接近 5000 根上限）时可见重建闪烁与卡顿 | 单实例重建：`layoutRef` 已能定位 indLayout 条目，仅销毁重建被改实例，图例行 DOM 原位替换、MA 颜色轮转不重置，其余实例 series 不动（约 30 行改动） | ⏸️ 未修复（调参为低频操作，待体感卡顿明显时优先处理） |
 
 ---
 
@@ -172,7 +179,7 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 |------|------|---------|------|
 | UI-001~005 | UI 重新设计 | v1.1.0 | ✅ 已完成（lc-live.html 基线，v1.3.0-mockup） |
 | CH-001~008 | 图表二次开发 | v1.1.0 | 🔄 规划中 |
-| IND-101~109 | 指标后端统一计算 + 真增量引擎 + 策略端接线 + ZigZag/盘中触发 + 自定义指标体系 | v1.1.0 | 🔄 进行中（MACD 样本三端闭环已验证：IND-101/102 完成 + IND-103/106 样本级接通，单测 519 passed） |
+| IND-101~110 | 指标后端统一计算 + 真增量引擎 + 策略端接线 + ZigZag/盘中触发 + 自定义指标体系 + def 式指标语言 | v1.1.0 | 🔄 进行中（MACD 样本三端闭环已验证：IND-101/102 完成 + IND-103/106 样本级接通；IND-110 def 式指标语言已完成，单测 558 passed） |
 | TRD-007 | OCO 止盈止损 | v1.2.0 | ⬜ BACKLOG |
 | TRD-008 | 仓位自动计算 | v1.2.0 | ⬜ BACKLOG |
 | SIG-006 | 信号可视化编辑 | v1.2.0 | ⬜ BACKLOG |
@@ -215,3 +222,4 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | 2026-08-09 | v2.0 | 指标契约定稿（讨论定案：同一窗格叠加多指标/多参数可实现）：① IND-102 明确计算契约 key=(指标名, 参数组合)，天然支持多参数/多实例，窗格分组纯展示层概念后端零改动；display_meta 扩展 range 值域类型字段（0-100/无界/零轴对称）；② IND-103 indLayout 结构升级为 [{name, params, group?}]，同 group 副图指标共享 pane/Y 轴/图例区（如 KD+RSI），添加交互提供「新窗格/并入现有窗格」选项 + 值域不兼容提示，series 颜色全局色板轮转；③ IND-109 补充策略自定义指标注册规则：命名唯一加前缀、参数 JSON 可序列化、状态可快照、先注册后预热、卸载后 Registry 保留 + 订阅引用计数 |
 | 2026-08-09 | v2.1 | 指标契约定稿二（MACD 倍数族样本驱动：base 2/5/3 × mults 1/4/16/64）：① IND-102 历史深度规则——按订阅集合最大参数需求拉取（warmup_max），REST 返回剔除预热段的有效序列，预热不足标记降级不输出失真数据；② IND-103 新增 family 指标族机制（base+mults 展开、弹窗只编 base、确认全族联动重算）+ fields 字段绘制选择器（HIST 仅 1x）+ 共享 pane 零轴参考线（priceLine(0) 只画一条）+ 线型体系（弹窗下拉含实线/点线/虚线/大虚线/稀点线/阶梯线用户自选，实例级覆盖优先）；③ IND-106 补充同名多实例 df 列命名 slug 规则（macd_f128_s320_g192_dif），倍数族策略侧循环展开不加新语法；④ IND-109 display_meta 增字段级默认线型 style（MA 实线/EMA 虚线开箱区分）；⑤ M2.5 里程碑增 MACD 倍数族端到端验收样例；⑥ MKT-IB 增补验收硬性项：历史深度 ≥ 长周期参数预热需求（IG demo 20 根深度不足问题正是引入盈透等新数据源的动机，IG 侧预热不足降级不阻塞） |
 | 2026-08-09 | v2.2 | IND 首个里程碑落地（MACD 样本三端闭环已验证）：① IND-101 完成——MACD O(1) 真增量递推（对齐 polars ewm_mean(adjust=False)）+ 快照法修正语义（快照=当前 bar 之前状态，新 ts 隐式提交，同 ts 重复推送幂等，不依赖 is_closed 标记），逐步对拍/幂等/乱序/reset 重放 8 用例全过；② IND-102 完成——/api/indicator/meta（display_meta 契约下发）+ /api/indicator/history（计算契约 key 幂等预热、拉取深度 min(1000, need+min_periods)、剔除预热段有效序列、预热不足降级）+ WS indicators.{exchange}.{symbol}.{tf} 增量推送（publish_bar 桥接，无注册指标零开销）；③ IND-106 样本级接通——require_indicators 声明 + MarketClient.get_indicator_history + 管理器声明日志（df 自动注入待策略启动链路后续消费）；④ IND-103 MACD 样本——lc-live.html MACD 副图改后端 REST 历史 + WS 增量（本地计算兜底 + loadGen 防竞态）；⑤ 三端闭环验证：全量回归 519 passed（新增网关 7 用例）+ 浏览器实测后端渲染非兜底、WS 实时跳动；遗留：其余 7 指标增量改造、一致性对拍（IND-104）、负载（IND-105）、倍数族端到端样例 |
+| 2026-08-22 | v2.3 | IND-110 def 式指标语言落地（用户拍板：策略研究自定义指标零增量改造，Python def 一个函数即可）：① 后端新增原语计算图（graph/nodes.py 双语义原语 + Graph 调度 + dsl.py GraphIndicator/pyindicator），作者零增量代码，预热走 polars 批量、实时走 O(1) 图增量推进，快照法复用 IND-101 协议；② custom_indicators/ 目录 pkgutil 自动加载，样例 TRIX（副图）/DEMA（主图叠加）；③ 前端 lc-live.html 接入 /api/indicator/meta 动态目录：选择面板“自定义/后端”分组自动发现、每字段一条线通用渲染、WS 增量逐字段更新、参数弹窗由 default_params 动态生成、indLayout 兼容 custom 条目持久化；④ 新增单测 8 用例（批量 vs 增量逐点一致、null 对齐、快照幂等、引擎集成），全量 558 passed；遗留：原语库扩展（cross/true_range 等）、Vue 正式版前端同步 |

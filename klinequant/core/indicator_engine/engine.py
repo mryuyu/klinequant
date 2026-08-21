@@ -195,7 +195,9 @@ class IndicatorEngine:
 
             if indicator.is_warmed_up and values is not None:
                 indicator._last_values = values
+                # 双键写入：指标名（单实例兼容）+ ind_key（多实例精确，如 MACD 倍数族）
                 results[indicator.name] = values
+                results[self.ind_key(indicator.name, indicator.params)] = values
                 logger.info(
                     f"Warmed up {indicator} for {key}: {len(historical_df)} bars"
                 )
@@ -365,28 +367,43 @@ class IndicatorEngine:
         items = list(series)[-limit:] if limit else list(series)
         return [{"timestamp": ts, "values": vals} for ts, vals in items]
 
+    def indicators_for(
+        self, symbol: str, exchange: str, timeframe: str
+    ) -> List[IndicatorBase]:
+        """指定品种/周期的指标实例列表（含同名多参数实例，IND-106 接线用）"""
+        return list(self._indicators.get((symbol, exchange, timeframe), []))
+
     def get_indicator_value(
         self,
         indicator_name: str,
         symbol: str,
         exchange: str,
         timeframe: str,
+        params: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """获取指定指标的当前值"""
+        """获取指定指标的当前值
+
+        Args:
+            params: 多实例场景按参数组合精确定位；None 时返回首个同名实例
+        """
         key = (symbol, exchange, timeframe)
         for indicator in self._indicators.get(key, []):
-            if indicator.name == indicator_name:
-                return indicator.last_values
+            if indicator.name != indicator_name:
+                continue
+            if params is not None and indicator.params != dict(params):
+                continue
+            return indicator.last_values
         return None
 
     def get_all_values(
         self, symbol: str, exchange: str, timeframe: str
     ) -> Dict[str, Optional[Dict[str, Any]]]:
-        """获取指定品种/周期的所有指标当前值"""
+        """获取指定品种/周期的所有指标当前值（同名多实例额外提供 ind_key 键）"""
         key = (symbol, exchange, timeframe)
         result = {}
         for indicator in self._indicators.get(key, []):
             result[indicator.name] = indicator.last_values
+            result[self.ind_key(indicator.name, indicator.params)] = indicator.last_values
         return result
 
     def get_kline_cache(
