@@ -38,9 +38,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ig-streaming = [
-    "lightstreamer-client-lib>=1.0",  # IG 外汇实时流（JVM 内核）；缺失时 IG 插件自动降级 REST 轮询
-]
 mt5 = [
     "MetaTrader5>=5.0",             # 本地 MT5 终端接入（仅 Windows）；缺失时 mt5 插件跳过注册
 ]

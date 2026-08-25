@@ -166,19 +166,12 @@ def bootstrap_sources() -> None:
 
     enabled = {
         s.strip().lower()
-        for s in os.getenv("KQ_MARKET_SOURCES", "binance,ig,mt5").split(",")
+        for s in os.getenv("KQ_MARKET_SOURCES", "binance,mt5").split(",")
         if s.strip()
     }
     if "binance" in enabled:
         from gateway.market_sources.binance_source import BinanceSource
         market_manager.register(BinanceSource())
-    if "ig" in enabled:
-        from gateway.market_sources.ig_source import IgSource
-        ig = IgSource()
-        if ig.available:
-            market_manager.register(ig)
-        else:
-            logger.warning("IG source skipped: IG_API_KEY/IG_IDENTIFIER/IG_PASSWORD missing in .env")
     if "mt5" in enabled:
         from gateway.market_sources.mt5_source import Mt5Source
         mt5 = Mt5Source()

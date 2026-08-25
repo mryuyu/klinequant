@@ -7,7 +7,8 @@ from core.indicator_engine.graph import ema, pyindicator, shift
 
 
 @pyindicator(name="TRIX", pane="sub", range="zero_symmetric",
-             desc="三重指数平滑动量")
+             desc="三重指数平滑动量",
+             style=[{"color": "#ba68c8"}])   # 字段级默认色（前端可被用户自选覆盖）
 def trix(close, period=12):
     e3 = ema(ema(ema(close, period), period), period)
     prev = shift(e3, 1)

@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Callable, Dict, Optional, Type
+import re
+from typing import Any, Callable, Dict, List, Optional, Type
 
 import polars as pl
 
@@ -53,6 +54,95 @@ from .nodes import (
 logger = logging.getLogger(__name__)
 
 INPUT_COLUMNS = ("open", "high", "low", "close", "volume")
+
+# 字段级默认样式契约（display_meta.style）：color=#RRGGBB；
+# line_style 对齐 lightweight-charts LineStyle：0 实线 / 1 点线 / 2 虚线 / 3 大虚线。
+# plot: line（默认）/ histogram；histogram 字段可声明 hist_colors 四槽色：
+#   [零轴上增, 零轴上缩, 零轴下增, 零轴下缩]，空槽回退前端涨跌方案色。
+# 前端消费优先级：用户自选 > 后端声明 > 前端默认色槽；未声明字段不受影响。
+_HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+_LINE_STYLES = (0, 1, 2, 3)
+_PLOT_TYPES = ("line", "histogram")
+
+
+def _validate_style(name: str, style: Optional[List[Dict[str, Any]]]):
+    if style is None:
+        return None
+    if not isinstance(style, list):
+        raise ValueError(f"指标 {name} 的 style 必须是列表（按 fields 顺序）")
+    out = []
+    for idx, s in enumerate(style):
+        if not isinstance(s, dict):
+            raise ValueError(f"指标 {name} 的 style[{idx}] 必须是 dict")
+        item: Dict[str, Any] = {}
+        plot = s.get("plot", "line")
+        if plot not in _PLOT_TYPES:
+            raise ValueError(f"指标 {name} 的 style[{idx}].plot 必须为 line/histogram")
+        if plot != "line":
+            item["plot"] = plot
+        color = s.get("color")
+        if color is not None:
+            if not (isinstance(color, str) and _HEX_COLOR.fullmatch(color)):
+                raise ValueError(f"指标 {name} 的 style[{idx}].color 必须为 #RRGGBB")
+            item["color"] = color
+        ls = s.get("line_style")
+        if ls is not None:
+            if ls not in _LINE_STYLES:
+                raise ValueError(
+                    f"指标 {name} 的 style[{idx}].line_style 必须为 0实线/1点线/2虚线/3大虚线"
+                )
+            item["line_style"] = ls
+        hc = s.get("hist_colors")
+        if hc is not None:
+            if not (isinstance(hc, list) and len(hc) == 4):
+                raise ValueError(
+                    f"指标 {name} 的 style[{idx}].hist_colors 必须为 4 槽列表"
+                    "（零轴上增/上缩/下增/下缩）"
+                )
+            norm = []
+            for c in hc:
+                if c is None:
+                    norm.append(None)
+                elif isinstance(c, str) and _HEX_COLOR.fullmatch(c):
+                    norm.append(c)
+                else:
+                    raise ValueError(
+                        f"指标 {name} 的 style[{idx}].hist_colors 元素必须为 #RRGGBB 或 null"
+                    )
+            item["hist_colors"] = norm
+        out.append(item)
+    return out
+
+
+# 副图固定参考线契约（display_meta.price_lines）：如 KD 的 80/20 超买超卖线、零轴。
+# 每项：price（必填，数值）、color 可选 #RRGGBB（缺省前端灰色）、line_style 可选 0~3（缺省虚线）。
+def _validate_price_lines(name: str, price_lines: Optional[List[Dict[str, Any]]]):
+    if price_lines is None:
+        return None
+    if not isinstance(price_lines, list):
+        raise ValueError(f"指标 {name} 的 price_lines 必须是列表")
+    out = []
+    for idx, s in enumerate(price_lines):
+        if not isinstance(s, dict):
+            raise ValueError(f"指标 {name} 的 price_lines[{idx}] 必须是 dict")
+        price = s.get("price")
+        if not isinstance(price, (int, float)) or isinstance(price, bool):
+            raise ValueError(f"指标 {name} 的 price_lines[{idx}].price 必须为数值")
+        item: Dict[str, Any] = {"price": price}
+        color = s.get("color")
+        if color is not None:
+            if not (isinstance(color, str) and _HEX_COLOR.fullmatch(color)):
+                raise ValueError(f"指标 {name} 的 price_lines[{idx}].color 必须为 #RRGGBB")
+            item["color"] = color
+        ls = s.get("line_style")
+        if ls is not None:
+            if ls not in _LINE_STYLES:
+                raise ValueError(
+                    f"指标 {name} 的 price_lines[{idx}].line_style 必须为 0实线/1点线/2虚线/3大虚线"
+                )
+            item["line_style"] = ls
+        out.append(item)
+    return out
 
 
 # ─── 原语函数（作者面） ───
@@ -134,6 +224,8 @@ class GraphDef:
         range_: str,
         desc: str,
         min_periods_override: Optional[int],
+        style: Optional[List[Dict[str, Any]]] = None,
+        price_lines: Optional[List[Dict[str, Any]]] = None,
     ):
         self.fn = fn
         self.name = name
@@ -141,6 +233,8 @@ class GraphDef:
         self.range = range_
         self.desc = desc
         self.min_periods_override = min_periods_override
+        self.style = _validate_style(name, style)
+        self.price_lines = _validate_price_lines(name, price_lines)
 
         sig = inspect.signature(fn)
         self.input_names = [
@@ -199,12 +293,17 @@ class GraphDef:
 
     @property
     def display_meta(self) -> Dict[str, Any]:
-        return {
+        meta = {
             "fields": self.fields,
             "range": self.range,
             "pane": self.pane,
             "desc": self.desc,
         }
+        if self.style is not None:
+            meta["style"] = self.style   # 字段级默认颜色/线型，前端渲染默认样式
+        if self.price_lines is not None:
+            meta["price_lines"] = self.price_lines   # 副图固定参考线（如 80/20 超买超卖、零轴）
+        return meta
 
 
 class GraphIndicator(IndicatorBase):
@@ -309,6 +408,8 @@ def pyindicator(
     range: str = "unbounded",
     min_periods: Optional[int] = None,
     desc: str = "",
+    style: Optional[List[Dict[str, Any]]] = None,
+    price_lines: Optional[List[Dict[str, Any]]] = None,
 ):
     """装饰器：把 def 函数注册为计算图指标
 
@@ -318,6 +419,15 @@ def pyindicator(
         range: 值域类型 unbounded / bounded_0_100 / zero_symmetric / price
         min_periods: 预热根数覆盖（缺省按图结构自动推导）
         desc: 指标说明（前端选择面板展示）
+        style: 字段级默认样式（按 fields 顺序，可只声明部分字段），如：
+            [{"color": "#ba68c8", "line_style": 2},
+             {"plot": "histogram", "hist_colors": ["#0f9d8f", None, None, "#EF5350"]}]
+            color 为 #RRGGBB；line_style：0 实线 / 1 点线 / 2 虚线 / 3 大虚线；
+            plot=histogram 时前端按柱渲染，hist_colors 四槽 = 零轴上增/上缩/下增/下缩（null 槽回退方案色）。
+            前端优先级：用户自选 > 此处声明 > 前端默认色槽
+        price_lines: 副图固定参考线（水平线），如：
+            [{"price": 80}, {"price": 20, "color": "#787b86", "line_style": 2}]
+            price 必填；color 缺省灰色；line_style 缺省虚线（2）
     """
 
     def wrapper(fn: Callable) -> Callable:
@@ -329,6 +439,8 @@ def pyindicator(
             range_=range,
             desc=desc or doc_first,
             min_periods_override=min_periods,
+            style=style,
+            price_lines=price_lines,
         )
         get_registry().register(make_indicator_cls(gdef))
         logger.info(f"Registered graph indicator {gdef.name} from {fn.__name__}")

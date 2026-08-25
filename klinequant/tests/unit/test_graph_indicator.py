@@ -118,6 +118,42 @@ def test_shift_ema_null_alignment():
         assert a == pytest.approx(b, rel=1e-12)
 
 
+# ─── display_meta.style 契约校验 ───
+
+def test_style_contract_validation():
+    """style 声明校验：#RRGGBB / 线型枚举；未声明返回 None"""
+    from core.indicator_engine.graph.dsl import _validate_style
+
+    assert _validate_style("X", None) is None
+    assert _validate_style("X", [{"color": "#f0b90b", "line_style": 2}]) == [
+        {"color": "#f0b90b", "line_style": 2}
+    ]
+    assert _validate_style("X", [{}]) == [{}]   # 空项合法（该字段仅占位）
+    with pytest.raises(ValueError):
+        _validate_style("X", [{"color": "red"}])
+    with pytest.raises(ValueError):
+        _validate_style("X", [{"line_style": 9}])
+
+
+def test_price_lines_contract_validation():
+    """price_lines 声明校验：price 必填数值；color/line_style 可选校验；未声明返回 None"""
+    from core.indicator_engine.graph.dsl import _validate_price_lines
+
+    assert _validate_price_lines("X", None) is None
+    assert _validate_price_lines("X", [{"price": 80}]) == [{"price": 80}]
+    assert _validate_price_lines("X", [{"price": 0, "color": "#787b86", "line_style": 2}]) == [
+        {"price": 0, "color": "#787b86", "line_style": 2}
+    ]
+    with pytest.raises(ValueError):
+        _validate_price_lines("X", [{}])   # price 缺失
+    with pytest.raises(ValueError):
+        _validate_price_lines("X", [{"price": True}])   # bool 非合法数值
+    with pytest.raises(ValueError):
+        _validate_price_lines("X", [{"price": 80, "color": "gray"}])
+    with pytest.raises(ValueError):
+        _validate_price_lines("X", [{"price": 80, "line_style": 7}])
+
+
 # ─── 样例指标：TRIX 全量重放 vs 批量逐点一致 ───
 
 def test_sample_trix_registered_and_consistent():
@@ -130,6 +166,8 @@ def test_sample_trix_registered_and_consistent():
     assert ind.default_params == {"period": 12}
     meta = ind.display_meta
     assert meta["fields"] == ["TRIX"] and meta["pane"] == "sub"
+    assert meta["style"] == [{"color": "#ba68c8"}]   # 字段级默认样式契约（display_meta.style）
+    assert "price_lines" not in meta   # 未声明参考线时不输出该键
 
     df = _gen_df(400)
     inc = [None if v is None else v["TRIX"] for _, v in _replay(ind, df)]
@@ -146,11 +184,20 @@ def test_sample_dema_overlay_meta():
     ind = get_registry().create("DEMA", None)
     assert ind.display_meta["pane"] == "main"
     assert ind.display_meta["fields"] == ["DEMA"]
+    assert "style" not in ind.display_meta   # 未声明样式时不输出 style 键（前端走默认色槽）
     df = _gen_df()
     inc = [v for _, v in _replay(ind, df)]
     batch = _batch_col(ind, df, "DEMA")
     for a, b in zip(batch, inc):
         assert a == pytest.approx(b["DEMA"], rel=1e-12)
+
+
+def test_sample_macd_multi_price_lines():
+    """MACD_MULTI 声明零轴参考线，随 display_meta 下发"""
+    import custom_indicators  # noqa: F401
+
+    ind = get_registry().create("MACD_MULTI", None)
+    assert ind.display_meta["price_lines"] == [{"price": 0}]
 
 
 # ─── 快照法：未收盘 bar 同 ts 重复推送幂等 ───
