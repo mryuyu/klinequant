@@ -50,7 +50,7 @@ async def get_history(
     timeframe: str = Query("1h", description="K线周期"),
     indicator: str = Query("MACD", description="指标名（注册表名称，大写）"),
     params: Optional[str] = Query(None, description="参数 JSON，如 {\"fast_period\":12}"),
-    limit: int = Query(300, ge=1, le=2000, description="返回根数（显示需求）"),
+    limit: int = Query(300, ge=1, le=5000, description="返回根数（显示需求，上限对齐前端 klineCount 与预热深度 _MAX_WARMUP_TOTAL）"),
     exchange: Optional[str] = Query(None, description="市场源，缺省默认所"),
 ):
     """指标历史序列：注册+预热（拉取深度=显示需求+预热根数）后返回有效序列"""
