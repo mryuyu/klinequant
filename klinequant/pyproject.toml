@@ -41,6 +41,9 @@ dependencies = [
 mt5 = [
     "MetaTrader5>=5.0",             # 本地 MT5 终端接入（仅 Windows）；缺失时 mt5 插件跳过注册
 ]
+ths = [
+    "thsdk>=1.7",                   # 同花顺 A 股行情（协议逆向库，仅限个人研究）；缺失时 ths 插件跳过注册
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

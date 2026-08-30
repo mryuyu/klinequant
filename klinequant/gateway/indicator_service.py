@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional
 
 import polars as pl
 
+from gateway.market_sources.derived import fetch_derived_klines, is_derived
 from gateway.state import state
 from gateway.ws import ws_manager
 from protocol.types import Kline
@@ -57,7 +58,11 @@ async def _fetch_depth(
     end_time: Optional[int] = None
     while len(bars) < target:
         n = min(_PAGE_FETCH_LIMIT, target - len(bars))
-        page = await source.fetch_klines(symbol, timeframe, limit=n, end_time=end_time)
+        if is_derived(timeframe):
+            # 派生档位走与路由同款聚合入口（拉日 K 聚合，翻页语义一致）
+            page = await fetch_derived_klines(source, symbol, timeframe, limit=n, end_time=end_time)
+        else:
+            page = await source.fetch_klines(symbol, timeframe, limit=n, end_time=end_time)
         if not page:
             break
         bars = page + bars  # 新页更早，前插

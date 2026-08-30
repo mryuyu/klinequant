@@ -196,6 +196,11 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 /* 品种列表栏（最右独立栏） */
 .symbols-col { border-left:1px solid var(--border); background:var(--bg-panel); display:flex; flex-direction:column; min-height:0; }
 .tf-btn:disabled { opacity:0.3; cursor:default; }
+/* 自定义周期输入弹层（fixed 定位于「自定」按钮下方） */
+.tf-custom-pop { position:fixed; z-index:120; display:none; background:var(--bg-elevated); border:1px solid var(--border); border-radius:6px; padding:10px; box-shadow:0 6px 20px rgba(0,0,0,.45); }
+.tf-custom-pop input { width:112px; padding:5px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg-panel); color:var(--text); font-size:12px; font-family:var(--font-ui); outline:none; }
+.tf-custom-pop button { margin-left:6px; padding:5px 12px; border:none; border-radius:4px; background:var(--accent-dim); color:var(--accent); font-size:12px; cursor:pointer; font-family:var(--font-ui); }
+.tf-custom-hint { margin-top:6px; font-size:11px; color:var(--down); max-width:220px; line-height:1.5; }
 .sc-head { display:flex; align-items:center; justify-content:space-between; padding:12px 12px 8px; }
 .sc-title { font-weight:700; font-size:14px; }
 .sc-actions { display:flex; gap:4px; }
@@ -326,11 +331,23 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
         <button class="tf-btn" data-tf="1h">1时</button>
         <button class="tf-btn" data-tf="4h">4时</button>
         <button class="tf-btn" data-tf="1d">日线</button>
+        <button class="tf-btn" data-tf="1w">周线</button>
+        <button class="tf-btn" data-tf="1M">月线</button>
+        <button class="tf-btn" data-tf="1Q">季线</button>
+        <button class="tf-btn" data-tf="1Y">年线</button>
+        <button class="tf-btn" id="tf-custom-btn" title="自定义周期：数字+单位（d/w/M）">自定</button>
         <div class="toolbar-sep"></div>
         <button class="tool-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20L20 4"/></svg>画线</button>
         <button class="tool-btn" id="ind-btn" title="添加指标"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>指标</button>
         <div style="flex:1"></div>
         <button class="tool-btn" id="fit-btn" title="右键图表可设置 K 线数量 / 右侧留白">自动适配</button>
+      </div>
+
+      <!-- 自定义周期输入弹层（点击「自定」开关） -->
+      <div id="tf-custom-pop" class="tf-custom-pop" style="display:none">
+        <input id="tf-custom-input" type="text" maxlength="4" placeholder="如 2d / 3w / 2M">
+        <button id="tf-custom-ok">确定</button>
+        <div id="tf-custom-hint" class="tf-custom-hint"></div>
       </div>
 
       <div class="chart-wrap">
@@ -478,6 +495,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 <div class="ctx-menu" id="ctx-menu">
   <div class="ctx-title">图表设置</div>
   <div class="ctx-row"><span>K线总量上限</span><input id="ctx-kc" class="ctx-input" type="number" min="100" max="5000" step="100"></div>
+  <div class="ctx-row"><span>拉取全部</span><input id="ctx-kc-all" type="checkbox" checked></div>
   <div class="ctx-row"><span>右侧留白</span><input id="ctx-ro" class="ctx-input" type="number" min="0" max="100"></div>
   <div class="ctx-row"><span>成交量</span><input id="ctx-vol" type="checkbox" checked></div>
   <div class="ctx-row"><span>涨跌配色</span><select id="ctx-scheme" class="ctx-input"><option value="gd">绿涨红跌</option><option value="cn">红涨绿跌</option></select></div>
@@ -496,9 +514,9 @@ let curSymbol = 'BTCUSDT';
 let curTf = '15m';
 let curExchange = 'binance';    // 当前市场源（binance/ig，后端插件注册表驱动）
 const sourcesMeta = {};         // exchange -> 插件元数据（label/周期支持/默认品种/成交量）
-let klineCount = 1000;          // K 线总量上限：可自定义，默认 1000
-const INIT_BARS = 300;          // 首屏加载根数（懒加载分页）
+let klineCount = 0;           // K 线总量上限：0=不限（默认拉取全部历史，翻到数据源尽头为止）；>0=用户显式设置的上限
 const PAGE_SIZE = 1000;         // 每次翻页拉取根数（币安单次上限）
+const PRELOAD_HARD_CAP = 30000; // 预载硬上限：超出部分（如分钟级跨年深度）转左滑懒加载兜底，防首屏卡死
 let curRightOffset = 20;        // 图表右侧预留空 K 线数：可调，默认 20
 let showVol = true;             // 成交量显示开关（右键菜单切换，持久化）
 const lastPrices = {};          // symbol -> 最新价（供持仓表/品种列表用）
@@ -536,7 +554,22 @@ const histColor = (v, prev, colors) => {
 
 /* ═══ 布局持久化（localStorage：面板尺寸/折叠/K线数/右侧留白/周期/品种） ═══ */
 const LS_KEY = 'kq-layout-live';
-const TF_VALID = ['1m', '5m', '15m', '1h', '4h', '1d'];
+const TF_VALID = ['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M', '1Q', '1Y'];
+/* 自定义周期：倍率 2~99 + 单位 d/w/M（分钟/小时级原生档已覆盖；前端只做格式初筛，最终合法性以后端响应为准） */
+const TF_CUSTOM_RE = /^(\d{1,2})(d|w|M)$/;
+function tfValid(tf) {
+  if (TF_VALID.includes(tf)) return true;
+  const m = TF_CUSTOM_RE.exec(tf || '');
+  return !!m && +m[1] >= 2;
+}
+/* 周期展示文案统一映射（1w=周线、1M=月线、1Q=季线、1Y=年线、2d=2日…） */
+const TF_UNIT_CN = { m: '分', h: '时', d: '日', w: '周', M: '月', Q: '季', Y: '年' };
+function tfLabel(tf) {
+  const FIX_CN = { '1d': '日线', '1w': '周线', '1M': '月线', '1Q': '季线', '1Y': '年线' };
+  if (FIX_CN[tf]) return FIX_CN[tf];
+  const m = /^(\d+)(m|h|d|w|M)$/.exec(tf || '');
+  return m ? `${+m[1]}${TF_UNIT_CN[m[2]]}` : tf;
+}
 let savedLayout = null;
 try { savedLayout = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); } catch (e) {}
 if (savedLayout) {
@@ -545,8 +578,9 @@ if (savedLayout) {
   if (savedLayout.symW) root.style.setProperty('--sym-w', savedLayout.symW);
   if (savedLayout.posH) root.style.setProperty('--pos-h', savedLayout.posH);
   if (typeof savedLayout.rightOffset === 'number') curRightOffset = savedLayout.rightOffset;
-  if (savedLayout.klineCount) klineCount = savedLayout.klineCount;
-  if (savedLayout.tf && TF_VALID.includes(savedLayout.tf)) curTf = savedLayout.tf;
+  /* 旧版本默认值 1000 非用户显式选择 → 迁移为不限；其余显式设置尊重保留 */
+  if (savedLayout.klineCount && savedLayout.klineCount !== 1000) klineCount = savedLayout.klineCount;
+  if (savedLayout.tf && tfValid(savedLayout.tf)) curTf = savedLayout.tf;
   if (savedLayout.symbol) curSymbol = savedLayout.symbol;
   if (savedLayout.exchange) curExchange = savedLayout.exchange;
   if (savedLayout.posCollapsed) document.getElementById('pos-bar')?.classList.add('collapsed');
@@ -570,11 +604,20 @@ function saveLayout() {
     }));
   } catch (e) {}
 }
-// 同步 UI 控件与恢复后的状态
+/* 展示码（路由码→纯数字交易所码）：后端 catalog 的 code 字段下发，前端只缓存不推导。
+   须在布局恢复块（模块执行期立即调用 dispOf）之前声明，否则 TDZ 中断整个脚本 */
+let symCode = {};
+function dispOf(sym) { return symCode[sym] || sym; }   // 未命中兜底原码（旧布局恢复/非目录品种）
+function refreshSymLabels() {
+  document.getElementById('top-symbol').textContent = dispOf(curSymbol);
+  document.querySelector('.watermark').textContent = dispOf(curSymbol);
+}
+// 同步 UI 控件与恢复后的状态（自定义倍率周期需先插入其激活按钮，只保留最近使用一个）
 {
+  if (tfValid(curTf) && !TF_VALID.includes(curTf)) ensureCustomTfBtn(curTf);
   document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === curTf));
-  document.getElementById('top-symbol').textContent = curSymbol;
-  document.querySelector('.watermark').textContent = curSymbol;
+  document.getElementById('top-symbol').textContent = dispOf(curSymbol);
+  document.querySelector('.watermark').textContent = dispOf(curSymbol);
 }
 
 /* ═══ 指标目录 + indLayout（有序实例列表：布局持久化/渲染/参数弹窗同源，对齐后端 display_meta 契约） ═══ */
@@ -604,8 +647,8 @@ const IND_META = {
   rsi:  { title: 'RSI 相对强弱参数', fields: [
     { key: 'period', label: '周期', min: 2, max: 'kline' }] },
 };
-/* 周期类参数上限动态跟随 K 线总量上限（klineCount，右键菜单可调 100~5000） */
-function fieldMax(f) { return f.max === 'kline' ? klineCount : f.max; }
+/* 周期类参数上限动态跟随 K 线总量上限（右键菜单可调；不限模式跟随实际已加载根数） */
+function fieldMax(f) { return f.max === 'kline' ? (klineCount > 0 ? klineCount : Math.max(klines.length, 2)) : f.max; }
 
 /* ═══ IND-110：后端 def 式指标目录（/api/indicator/meta 驱动，后端注册新指标前端自动发现） ═══ */
 let BACKEND_META = {};   // name -> {min_periods, display_meta, default_params}
@@ -744,7 +787,8 @@ function applyIndPush(msg) {
 /* 中式时间显示：周几 + 年/月/日 + 时间(24小时制)；日线及以上周期只显示日期。
    十字线标签用完整格式，X 轴刻度用紧凑格式（轴空间有限） */
 const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-const TF_DATE_ONLY = new Set(['1d', '3d', '1w']);   // 日线及以上：不显示时间
+const TF_DATE_ONLY = new Set(['1d', '3d', '1w', '1M', '1Q', '1Y']);   // 日线及以上：不显示时间（含派生四档）
+const tfIsDateOnly = tf => TF_DATE_ONLY.has(tf) || TF_CUSTOM_RE.test(tf || '');   // 自定义倍率（2d/3w/2M…）同样只显示日期
 const fmtTimeCn = (ts, dateOnly) => {
   const d = new Date(ts * 1000);
   const p2 = n => String(n).padStart(2, '0');
@@ -761,7 +805,7 @@ const chart = createChart(container, {
   },
   localization: {
     /* 十字线时间标签：中式完整格式（日线及以上只到日期） */
-    timeFormatter: t => fmtTimeCn(t, TF_DATE_ONLY.has(curTf)),
+    timeFormatter: t => fmtTimeCn(t, tfIsDateOnly(curTf)),
   },
   grid: { vertLines: { color: '#1c2030' }, horzLines: { color: '#1c2030' } },
   crosshair: {
@@ -1486,12 +1530,16 @@ function detectPrecision(bars) {
 async function load() {
   loadGen++;                // 作废进行中的翻页请求
   initialLoaded = false;    // 重新拉取期间暂不接收 WS bar
-  setSb(`◉ 拉取 ${curSymbol} ${curTf} K 线…`);
+  setSb(`◉ 拉取 ${curSymbol} ${tfLabel(curTf)} K 线…`);
   noMoreData = false;
   try {
-    /* 首屏只拉 INIT_BARS 根，翻屏时再懒加载更早数据 */
-    const need = Math.min(INIT_BARS, klineCount);
+    /* 数据加载约定：默认加载全部历史——首屏页立即渲染，后台自动续载至数据源尽头/用户上限，
+       前端只按屏幕/翻页显示；超预载硬上限的极端深度留左滑懒加载兜底 */
+    const gen = loadGen;
+    const cap = Math.min(klineCount > 0 ? klineCount : Infinity, PRELOAD_HARD_CAP);
+    const need = Math.min(PAGE_SIZE, cap);
     const firstPage = await fetchPage(need, null);
+    if (gen !== loadGen) return;   // 拉取期间已切换，丢弃
     klines = firstPage.bars;
     if (!klines.length) { setSb('✕ 未返回 K 线数据'); return; }
     if (klines.length < need) noMoreData = true;
@@ -1516,39 +1564,72 @@ async function load() {
     updateTicker(klines[klines.length - 1].close);
     sbInfo = (sourcesMeta[curExchange] && sourcesMeta[curExchange].label) || curExchange;
     renderStatusbar();
+    if (!noMoreData && klines.length < cap) autoPreload(gen, cap);   // 后台续载更早历史（不阻塞首屏）
   } catch (e) {
     console.error('load failed:', e);   // 暴露真实错误，避免被兜底文案掩盖
     setSb('✕ 后端未连接（127.0.0.1:8000），请先启动 API Gateway');
   }
 }
 
-/* ═══ 懒加载翻页：左滑接近边界时加载更早 K 线 ═══ */
+/* ═══ 历史续载：后台自动预载至数据源尽头（约定：默认加载全部）；左滑懒加载同路兜底 ═══ */
 let loadingMore = false;
 let noMoreData = false;
-let loadGen = 0;   // 加载代次：切换品种/周期/重载时作废进行中的翻页
+let loadGen = 0;   // 加载代次：切换品种/周期/重载时作废进行中的翻页/预载
 let firstFit = true;   // 首屏标记：仅首次加载 fitContent 铺满，此后切换保持原缩放比例
-async function loadMore() {
-  if (loadingMore || noMoreData || klines.length >= klineCount) return;
-  loadingMore = true;
-  const gen = loadGen, sym = curSymbol, tf = curTf;
+let userTouchedChart = false;   // 用户是否交互过图表（决定预载收尾是否重新铺满全量）
+document.getElementById('chart').addEventListener('pointerdown', () => { userTouchedChart = true; });
+document.getElementById('chart').addEventListener('wheel', () => { userTouchedChart = true; }, { passive: true });
+function preloadCap() { return Math.min(klineCount > 0 ? klineCount : Infinity, PRELOAD_HARD_CAP); }
+/* 翻页前置一页（锚点校验防混入）；返回剩余可拉根数（0=已到头），异常抛出由调用方处理 */
+async function pullOlderPage(gen) {
+  const sym = curSymbol, tf = curTf;
   const anchorTime = klines[0].time;   // 数据锚点：完成后校验数据未被重置
-  setSb(`◉ 加载更早 K 线… ${klines.length}/${klineCount}`);
-  try {
-    const need = Math.min(PAGE_SIZE, klineCount - klines.length);
-    let page = (await fetchPage(need, anchorTime * 1000 - 1)).bars;
-    if (gen !== loadGen || sym !== curSymbol || tf !== curTf) return;   // 已切换，丢弃旧数据防混入
-    if (!klines.length || klines[0].time !== anchorTime) return;        // 数据已重置，丢弃
-    page = page.filter(k => k.time < anchorTime);                       // 防时间戳重叠
-    if (!page.length) {                                                 // 无更早数据
-      noMoreData = true;
-      return;
-    }
-    if (page.length < need) noMoreData = true;
+  const need = Math.min(PAGE_SIZE, preloadCap() - klines.length);
+  let page = (await fetchPage(need, anchorTime * 1000 - 1)).bars;
+  if (gen !== loadGen || sym !== curSymbol || tf !== curTf) return -1;   // 已切换，丢弃旧数据防混入（返回 -1 中止）
+  if (!klines.length || klines[0].time !== anchorTime) return -1;        // 数据已重置，丢弃
+  page = page.filter(k => k.time < anchorTime);                          // 防时间戳重叠
+  if (!page.length) { noMoreData = true; return 0; }
+  if (page.length < need) noMoreData = true;
+  const lvr = chart.timeScale().getVisibleLogicalRange();
+  klines = page.concat(klines);
+  renderChart();
+  if (noMoreData && !userTouchedChart) {
+    /* 全量就绪且用户未交互：铺满显示全部历史（“默认显示所有数据”约定）；
+       已交互则保持视窗稳定（下方 else 分支平移补偿） */
+    chart.timeScale().fitContent();
+  } else if (lvr) {
     /* 逻辑坐标平移补偿：prepend N 根后索引整体 +N，视窗锁定原时间窗口不跳动 */
-    const lvr = chart.timeScale().getVisibleLogicalRange();
-    klines = page.concat(klines);
-    renderChart();
-    if (lvr) chart.timeScale().setVisibleLogicalRange({ from: lvr.from + page.length, to: lvr.to + page.length });
+    chart.timeScale().setVisibleLogicalRange({ from: lvr.from + page.length, to: lvr.to + page.length });
+  }
+  return preloadCap() - klines.length;
+}
+/* 后台自动续载：首屏渲染后循环翻页直至数据源尽头/上限（每页状态栏显示进度） */
+async function autoPreload(gen, cap) {
+  while (!noMoreData && klines.length < cap) {
+    if (gen !== loadGen) return;   // 已切换，中止
+    loadingMore = true;
+    setSb(`◉ 加载历史… ${klines.length} 根${klineCount > 0 ? '/' + klineCount : '（全量）'}`);
+    try {
+      const remaining = await pullOlderPage(gen);
+      if (remaining < 0) return;
+    } catch (e) {
+      console.error('preload failed:', e);
+      setSb('✕ 历史续载中断（左滑可重试）');
+      return;   // 网络异常中止；剩余深度留左滑懒加载兜底
+    } finally {
+      loadingMore = false;
+    }
+    await new Promise(r => setTimeout(r, 60));   // 页间小间隔，避免请求风暴
+  }
+  renderStatusbar();   // 预载完成，状态栏恢复基础信息 + 链路状态
+}
+/* 左滑懒加载：超预载硬上限的极端深度 / 续载中断后的兜底 */
+async function loadMore() {
+  if (loadingMore || noMoreData || klines.length >= preloadCap()) return;
+  loadingMore = true;
+  try {
+    await pullOlderPage(loadGen);
   } catch (e) {
     setSb('✕ 加载更早 K 线失败');
   } finally {
@@ -1556,7 +1637,7 @@ async function loadMore() {
   }
 }
 chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-  if (!range || !initialLoaded || klines.length < 10 || loadingMore || noMoreData || klines.length >= klineCount) return;
+  if (!range || !initialLoaded || loadingMore || noMoreData || klines.length >= preloadCap()) return;
   const span = range.to - range.from;
   const fullyVisible = span >= klines.length - 1;
   if (range.from < 10 && (!fullyVisible || range.from < -1)) loadMore();
@@ -1564,15 +1645,16 @@ chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
 function switchSymbol(sym) {
   if (sym === curSymbol) return;
   curSymbol = sym;
-  document.getElementById('top-symbol').textContent = sym;
-  document.querySelector('.watermark').textContent = sym;
+  document.getElementById('top-symbol').textContent = dispOf(sym);
+  document.querySelector('.watermark').textContent = dispOf(sym);
   renderSymbols();
   load();
   subscribeWS();
   fetchTopTicker();
   saveLayout();
 }
-document.querySelectorAll('.tf-btn').forEach(b => b.addEventListener('click', () => {
+function onTfBtnClick() {
+  const b = this;
   if (b.disabled) return;   // 当前市场源不支持的周期禁点
   document.querySelectorAll('.tf-btn').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
@@ -1580,15 +1662,67 @@ document.querySelectorAll('.tf-btn').forEach(b => b.addEventListener('click', ()
   load();
   subscribeWS();
   saveLayout();
-}));
+}
+document.querySelectorAll('.tf-btn:not(#tf-custom-btn)').forEach(b => b.addEventListener('click', onTfBtnClick));
+/* 自定义周期：动态插入激活按钮（「自定」入口之前，只保留最近使用一个） */
+function ensureCustomTfBtn(tf) {
+  const anchor = document.getElementById('tf-custom-btn');
+  if (!anchor) return;
+  document.querySelectorAll('.tf-btn.custom').forEach(x => x.remove());
+  const b = document.createElement('button');
+  b.className = 'tf-btn custom';
+  b.dataset.tf = tf;
+  b.textContent = tfLabel(tf);
+  b.title = `自定义周期 ${tf}`;
+  anchor.before(b);
+  b.addEventListener('click', onTfBtnClick);
+}
+/* 自定义周期输入弹层：前端只做格式初筛，最终合法性以后端响应为准 */
+const tfCustomPop = document.getElementById('tf-custom-pop');
+const tfCustomInput = document.getElementById('tf-custom-input');
+const tfCustomHint = document.getElementById('tf-custom-hint');
+document.getElementById('tf-custom-btn').addEventListener('click', () => {
+  const open = tfCustomPop.style.display === 'none';
+  tfCustomPop.style.display = open ? 'block' : 'none';
+  if (open) {
+    const r = document.getElementById('tf-custom-btn').getBoundingClientRect();
+    tfCustomPop.style.left = `${r.left}px`;
+    tfCustomPop.style.top = `${r.bottom + 6}px`;
+    tfCustomInput.value = tfValid(curTf) && !TF_VALID.includes(curTf) ? curTf : '';
+    tfCustomHint.textContent = '';
+    tfCustomInput.focus();
+  }
+});
+function applyCustomTf() {
+  const tf = tfCustomInput.value.trim();
+  if (!tfValid(tf)) {
+    tfCustomHint.textContent = '格式：数字+单位（d/w/M），倍率 2~99，如 2d、3w、2M';
+    return;
+  }
+  tfCustomPop.style.display = 'none';
+  ensureCustomTfBtn(tf);
+  document.querySelectorAll('.tf-btn').forEach(x => x.classList.toggle('active', x.dataset.tf === tf));
+  curTf = tf;
+  load();
+  subscribeWS();
+  saveLayout();
+}
+document.getElementById('tf-custom-ok').addEventListener('click', applyCustomTf);
+tfCustomInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyCustomTf(); });
+document.addEventListener('pointerdown', e => {
+  if (!tfCustomPop.contains(e.target) && e.target.id !== 'tf-custom-btn') tfCustomPop.style.display = 'none';
+}, true);
 document.getElementById('fit-btn').addEventListener('click', () => chart.timeScale().fitContent());
 /* K 线数量 / 右侧留白：图表区右键菜单（直接输入数字） */
 const ctxMenu = document.getElementById('ctx-menu');
 const ctxKc = document.getElementById('ctx-kc');
+const ctxKcAll = document.getElementById('ctx-kc-all');
 const ctxRo = document.getElementById('ctx-ro');
 document.getElementById('chart').addEventListener('contextmenu', e => {
   e.preventDefault();
-  ctxKc.value = klineCount;
+  ctxKcAll.checked = klineCount === 0;
+  ctxKc.disabled = klineCount === 0;
+  if (klineCount > 0) ctxKc.value = klineCount;
   ctxRo.value = curRightOffset;
   document.getElementById('ctx-vol').checked = showVol;
   document.getElementById('ctx-scheme').value = colorScheme;
@@ -1603,6 +1737,16 @@ ctxKc.addEventListener('change', () => {
   ctxKc.value = v;
   if (v === klineCount) return;
   klineCount = v;
+  load();
+  saveLayout();
+});
+/* 拉取全部开关：勾选=不限（0），取消=恢复数字上限输入 */
+ctxKcAll.addEventListener('change', () => {
+  ctxKc.disabled = ctxKcAll.checked;
+  const nv = ctxKcAll.checked ? 0 : Math.min(5000, Math.max(100, parseInt(ctxKc.value) || 1000));
+  if (!ctxKcAll.checked) ctxKc.value = nv;
+  if (nv === klineCount) return;
+  klineCount = nv;
   load();
   saveLayout();
 });
@@ -2027,7 +2171,7 @@ function applyBar(b) {
   const bar = { time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume };
   const last = klines[klines.length - 1];
   if (last && t === last.time) klines[klines.length - 1] = bar;
-  else if (!last || t > last.time) { klines.push(bar); if (klines.length > klineCount) klines.shift(); }
+  else if (!last || t > last.time) { klines.push(bar); if (klineCount > 0 && klines.length > klineCount) klines.shift(); }
   else return;
   candleSeries.update(bar);
   volumeSeries.update({ time: t, value: bar.volume, color: volColor(bar.close, bar.open) });
@@ -2171,15 +2315,15 @@ function switchExchange(ex, opts = {}) {
   const belongs = symGroups.some(g => g.symbols.some(s => s.sym && s.sym === curSymbol && (!s.ex || s.ex === ex)));
   if (opts.symbol) {
     curSymbol = opts.symbol;
-    document.getElementById('top-symbol').textContent = curSymbol;
-    document.querySelector('.watermark').textContent = curSymbol;
+    document.getElementById('top-symbol').textContent = dispOf(curSymbol);
+    document.querySelector('.watermark').textContent = dispOf(curSymbol);
   } else if (!opts.keepSymbol && !belongs && meta.default_symbols.length) {
     curSymbol = meta.default_symbols[0].symbol;
-    document.getElementById('top-symbol').textContent = curSymbol;
-    document.querySelector('.watermark').textContent = curSymbol;
+    document.getElementById('top-symbol').textContent = dispOf(curSymbol);
+    document.querySelector('.watermark').textContent = dispOf(curSymbol);
   }
-  /* 周期：该所不支持当前周期时切到首个支持项 */
-  if (meta.timeframes && meta.timeframes.length && !meta.timeframes.includes(curTf)) {
+  /* 周期：该所不支持当前周期时切到首个支持项（派生层保证固定档+自定义倍率全源可用，不回退） */
+  if (meta.timeframes && meta.timeframes.length && !meta.timeframes.includes(curTf) && !tfValid(curTf)) {
     curTf = meta.timeframes[0];
     document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === curTf));
   }
@@ -2193,11 +2337,12 @@ function switchExchange(ex, opts = {}) {
   refreshListPrices();
   saveLayout();
 }
-/* 周期按钮可用性：插件不支持的周期置灰禁点 */
+/* 周期按钮可用性：插件不支持的周期置灰禁点（派生层下固定档/自定义倍率视为全源可用） */
 function applyTfAvailability() {
   const m = sourcesMeta[curExchange];
   document.querySelectorAll('.tf-btn').forEach(b => {
-    const ok = !m || !m.timeframes.length || m.timeframes.includes(b.dataset.tf);
+    if (!b.dataset.tf) return;   // 「自定」入口本身无周期，恒可点
+    const ok = !m || !m.timeframes.length || m.timeframes.includes(b.dataset.tf) || tfValid(b.dataset.tf);
     b.disabled = !ok;
   });
 }
@@ -2349,8 +2494,9 @@ async function loadSrFull() {
   } catch (e) {
     /* 后端未连接：回退源元数据默认品种，保证弹窗可用 */
     srFull = Object.entries(sourcesMeta).flatMap(([ex, m]) =>
-      ((m && m.default_symbols) || []).map(s => ({ exchange: ex, source: m.label, symbol: s.symbol, name: s.name, type: s.type || '' })));
+      ((m && m.default_symbols) || []).map(s => ({ exchange: ex, source: m.label, region: m.region || 'global', symbol: s.symbol, name: s.name, type: s.type || '', code: s.code || s.symbol })));
   }
+  symCode = Object.fromEntries((srFull || []).filter(r => r.code).map(r => [r.symbol, r.code]));
 }
 function renderSrTabs() {
   const present = new Set((srFull || []).map(r => r.type).filter(Boolean));
@@ -2367,12 +2513,13 @@ function renderSrFilter() {
 }
 function renderSrResults() {
   const body = document.getElementById('sr-body');
-  if (srRegion === 'cn') { body.innerHTML = '<div class="sr-empty">国内<br><b>数据源接入中</b></div>'; return; }
   if (!srFull) { body.innerHTML = '<div class="sr-empty">品种目录加载中…</div>'; return; }
   const kw = srKw.trim().toUpperCase();
   let rows = srFull;
+  /* 国内/国外分段按源元数据 region 过滤（后端 sources.region 下发，缺省国外） */
+  rows = rows.filter(r => (r.region || 'global') === srRegion);
   if (srType !== 'all') rows = rows.filter(r => r.type === srType);
-  if (kw) rows = rows.filter(r => r.symbol.includes(kw) || (r.name || '').toUpperCase().includes(kw));
+  if (kw) rows = rows.filter(r => r.symbol.includes(kw) || (r.name || '').toUpperCase().includes(kw) || (r.code || '').includes(kw));
   const shown = rows.slice(0, SR_RENDER_CAP);
   /* 收藏为全局列表：已入列按数据源+品种判重（跨所同名品种是不同条目） */
   const addedSyms = new Set(symGroups.flatMap(g => g.symbols).filter(s => s.sym).map(s => `${s.ex || ''}|${s.sym}`));
@@ -2381,14 +2528,14 @@ function renderSrResults() {
     const added = srMode === 'add' && addedSyms.has(`${r.exchange}|${r.symbol}`);
     return `<div class="sr-row${r.symbol === curSymbol && r.exchange === curExchange && srMode === 'switch' ? ' active' : ''}${added ? ' added' : ''}" data-ex="${r.exchange}" data-sym="${r.symbol}">
       <span class="sr-ico" style="background:${icoFor(r.symbol)}">${(r.symbol[0] || '?').toUpperCase()}</span>
-      <span class="sr-sym">${r.symbol}</span>
+      <span class="sr-sym">${r.code || r.symbol}</span>
       <span class="sr-desc">${r.name}</span>
       <span class="sr-type">${TYPE_NAMES[r.type] || r.type || ''}</span>
       <span class="sr-src">${added ? '✓ 已添加' : r.source}</span>
     </div>`;
   }).join('');
   if (rows.length > shown.length) html += `<div class="sr-more">共 ${rows.length} 个品种，仅显示前 ${shown.length} 个，请输入关键字细化</div>`;
-  body.innerHTML = html || '<div class="sr-empty">无匹配品种</div>';
+  body.innerHTML = html || `<div class="sr-empty">${srRegion === 'cn' ? '国内' : '国外'}<br><b>无匹配品种</b></div>`;
 }
 function renderSrAll() { renderSrTabs(); renderSrFilter(); renderSrResults(); }
 async function openSymSearch(mode, targetGroup = null) {
@@ -2507,6 +2654,7 @@ document.getElementById('pos-toggle').addEventListener('click', () => {
 /* ═══ 启动（所有定义就绪后；先拉市场源注册表再初始化图表链路） ═══ */
 (async () => {
   await initSources();
+  loadSrFull().then(refreshSymLabels).catch(() => {});   // 展示码目录：顶栏/水印改显纯数字（不阻塞首屏）
   await fetchBackendMeta();   // IND-110：后端 def 式指标目录（失败不阻塞内置指标）
   rebuildIndicators();   // 按 indLayout 构建指标实例（首屏数据就绪前，series 空数据）
   connectWS();

@@ -18,6 +18,7 @@ import httpx
 from fastapi import APIRouter, Query
 
 from gateway.market_sources.binance_source import BINANCE_REST_BASE, HTTP_PROXY
+from gateway.market_sources.derived import fetch_derived_klines, is_derived
 from gateway.market_sources.manager import market_manager
 
 logger = logging.getLogger(__name__)
@@ -52,14 +53,22 @@ async def get_klines(
     if source is None:
         logger.error(f"Unknown market source: {exchange}")
         return {"symbol": symbol, "timeframe": timeframe, "exchange": ex, "count": 0, "data": []}
-    if timeframe not in source.supported_timeframes:
+    # 派生档位（1M/1Q/1Y/自定义倍率）由网关从日 K 聚合，不走源原生支持表；
+    # 1w 各源原生直供。翻页（end_time）语义不变，前端懒加载/预载零改动。
+    derived = is_derived(timeframe)
+    if not derived and timeframe not in source.supported_timeframes:
         logger.warning(f"[{ex}] unsupported timeframe: {timeframe}")
         return {"symbol": symbol, "timeframe": timeframe, "exchange": ex, "count": 0, "data": []}
 
     try:
-        data = await source.fetch_klines(
-            symbol, timeframe, limit=limit, end_time=end_time or None
-        )
+        if derived:
+            data = await fetch_derived_klines(
+                source, symbol, timeframe, limit=limit, end_time=end_time or None
+            )
+        else:
+            data = await source.fetch_klines(
+                symbol, timeframe, limit=limit, end_time=end_time or None
+            )
         # start_time 过滤（插件接口统一用 end_time 翻页，起始过滤在网关侧做）
         if start_time:
             data = [k for k in data if k["timestamp"] >= start_time]
@@ -92,7 +101,8 @@ async def get_symbols(
 ):
     """全量可交易品种目录（带数据源/资产类别维度，前端品种搜索弹窗用）
 
-    每行含 exchange（内部路由标识）/ source（数据源展示名）/ type（资产类别），
+    每行含 exchange（内部路由标识）/ source（数据源展示名）/ type（资产类别）/ region（国内/国外）/
+    code（面向用户的展示码，A 股为 6 位纯数字，缺省同 symbol），
     同名品种来自不同数据源时为多行（如 EURUSD 同时存在于 IC Markets 与 IG）。
     拉取失败回退到插件默认品种，保证弹窗永远有结果。
     """
@@ -109,16 +119,21 @@ async def get_symbols(
             rows = []
         if not rows:
             rows = [
-                {"symbol": i["symbol"], "name": i.get("name", i["symbol"]), "type": i.get("type", "")}
+                {
+                    "symbol": i["symbol"], "name": i.get("name", i["symbol"]),
+                    "type": i.get("type", ""), "code": i.get("code", i["symbol"]),
+                }
                 for i in s.default_symbols
             ]
         for item in rows:
             symbols.append({
                 "exchange": s.name,
                 "source": s.label,
+                "region": s.region,
                 "symbol": item["symbol"],
                 "name": item.get("name", item["symbol"]),
                 "type": item.get("type", ""),
+                "code": item.get("code", item["symbol"]),
             })
     return {"symbols": symbols}
 

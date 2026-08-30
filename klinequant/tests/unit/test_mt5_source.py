@@ -197,11 +197,11 @@ async def test_list_symbols_classify_by_path():
 
 
 async def test_list_symbols_fallback_to_defaults():
-    """终端不可用（symbols_get 返回 None）→ 回退插件默认品种（带资产类别）"""
+    """终端不可用（symbols_get 返回 None）→ 回退插件默认品种（带资产类别；code 缺省同 symbol）"""
     src = Mt5Source(driver=_FakeMt5(catalog=None))
     rows = await src.list_symbols()
     assert rows == [
-        {"symbol": "EURUSD", "name": "EUR/USD", "type": "forex"},
-        {"symbol": "GBPUSD", "name": "GBP/USD", "type": "forex"},
+        {"symbol": "EURUSD", "name": "EUR/USD", "type": "forex", "code": "EURUSD"},
+        {"symbol": "GBPUSD", "name": "GBP/USD", "type": "forex", "code": "GBPUSD"},
     ]
 

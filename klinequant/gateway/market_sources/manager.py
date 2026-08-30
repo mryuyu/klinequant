@@ -18,6 +18,7 @@ import logging
 import time
 
 from gateway.market_sources.base import MarketSource
+from gateway.market_sources.derived import bucket_label, daily_need, is_derived, parse_tf
 from gateway.ws import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,9 @@ class MarketSourceManager:
         self._sources: dict[str, MarketSource] = {}
         # 去重签名：f"{exchange}_{symbol}_{tf}" -> sig
         self._last_bar: dict[str, str] = {}
+        # 派生周期实时聚合状态：f"{exchange}_{symbol}_{tf}" -> 当前桶累积
+        # {label, open, high, low, close, base_vol(已完结日量), day_ts, day_vol(当日累计量)}
+        self._derived_state: dict[str, dict] = {}
         # 全量品种目录缓存：exchange -> (monotonic ts, rows)
         self._symbols_cache: dict[str, tuple[float, list[dict]]] = {}
         self._started = False
@@ -91,6 +95,9 @@ class MarketSourceManager:
                 continue
             if tf in VALID_TIMEFRAMES:
                 targets.add((symbol, tf))
+            elif is_derived(tf):
+                # 派生周期源无原生供给：映射为隐式 1d 订阅，由日 K 实时流驱动网关聚合（源侧零改动）
+                targets.add((symbol, "1d"))
         return targets
 
     def active_targets(self, exchange: str) -> set[tuple[str, str]]:
@@ -129,7 +136,91 @@ class MarketSourceManager:
             await on_bar(exchange, symbol, timeframe, payload)
         except Exception as e:
             logger.debug(f"Indicator bridge error: {e}")
+        # 派生周期实时聚合：日 K bar 更新时合成各订阅派生周期的最新 bar（指标 on_bar 随之自动驱动）
+        if timeframe == "1d":
+            try:
+                await self._feed_derived(exchange, symbol, payload)
+            except Exception as e:
+                logger.debug(f"Derived aggregation error: {e}")
         return True
+
+    # ─── 派生周期实时聚合 ───
+
+    def _derived_subs(self, exchange: str, symbol: str) -> list[str]:
+        """当前订阅了该品种的派生周期列表（WS 主题解析）"""
+        out = []
+        prefix = f"klines.{exchange}.{symbol}."
+        for topic, subs in list(ws_manager._subscriptions.items()):
+            if subs and topic.startswith(prefix):
+                tf = topic[len(prefix):]
+                if is_derived(tf):
+                    out.append(tf)
+        return out
+
+    async def _seed_derived_state(
+        self, exchange: str, symbol: str, tf: str, day_bar: dict, parsed: tuple[int, str],
+    ) -> dict | None:
+        """冷启动/桶翻滚补齐：拉桶起始日至昨日的日 K 预填（防月线最新 bar 开盘价/量基线缺失）"""
+        source = self._sources.get(exchange)
+        if source is None:
+            return None
+        day_ts = int(day_bar["timestamp"])
+        label = bucket_label(day_ts, parsed)
+        try:
+            days = await source.fetch_klines(symbol, "1d", limit=min(daily_need(tf, 1), 1000), end_time=day_ts - 1)
+        except Exception as e:
+            logger.warning(f"Derived seed fetch failed [{exchange}] {symbol}/{tf}: {e}")
+            return None
+        days = [b for b in (days or []) if label <= int(b["timestamp"]) < day_ts]
+        if not days:
+            return None   # 当日即桶首日，无需预填（直接用实时日 K）
+        return {
+            "label": label,
+            "open": float(days[0]["open"]),
+            "high": max(float(b["high"]) for b in days),
+            "low": min(float(b["low"]) for b in days),
+            "close": float(days[-1]["close"]),
+            "base_vol": sum(float(b.get("volume") or 0) for b in days),
+            "day_ts": None,
+            "day_vol": 0.0,
+        }
+
+    async def _feed_derived(self, exchange: str, symbol: str, day_bar: dict) -> None:
+        """日 K 实时 bar 喂入聚合器：为每个订阅的派生周期合成并发布最新 bar"""
+        for tf in self._derived_subs(exchange, symbol):
+            parsed = parse_tf(tf)
+            if parsed is None:
+                continue
+            day_ts = int(day_bar["timestamp"])
+            label = bucket_label(day_ts, parsed)
+            key = f"{exchange}_{symbol}_{tf}"
+            st = self._derived_state.get(key)
+            if st is None or st["label"] != label:
+                st = await self._seed_derived_state(exchange, symbol, tf, day_bar, parsed) or {
+                    "label": label,
+                    "open": float(day_bar["open"]),
+                    "high": float(day_bar["high"]),
+                    "low": float(day_bar["low"]),
+                    "close": float(day_bar["close"]),
+                    "base_vol": 0.0,
+                    "day_ts": None,
+                    "day_vol": 0.0,
+                }
+                self._derived_state[key] = st
+            if st["day_ts"] != day_ts:
+                st["base_vol"] += st["day_vol"]   # 上日累计量结转，防当日量重复叠加
+                st["day_ts"] = day_ts
+            st["day_vol"] = float(day_bar.get("volume") or 0)
+            st["high"] = max(st["high"], float(day_bar["high"]))
+            st["low"] = min(st["low"], float(day_bar["low"]))
+            st["close"] = float(day_bar["close"])
+            bar = {
+                "timestamp": label,
+                "open": st["open"], "high": st["high"], "low": st["low"], "close": st["close"],
+                "volume": st["base_vol"] + st["day_vol"],
+                "event_ms": int(time.time() * 1000),
+            }
+            await self.publish_bar(exchange, symbol, tf, bar)
 
     # ─── 启动与分发 ───
 
@@ -166,7 +257,7 @@ def bootstrap_sources() -> None:
 
     enabled = {
         s.strip().lower()
-        for s in os.getenv("KQ_MARKET_SOURCES", "binance,mt5").split(",")
+        for s in os.getenv("KQ_MARKET_SOURCES", "binance,mt5,ths").split(",")
         if s.strip()
     }
     if "binance" in enabled:
@@ -178,4 +269,17 @@ def bootstrap_sources() -> None:
         if mt5.available:
             market_manager.register(mt5)
         else:
-            logger.warning("MT5 source skipped: 本机 MT5 终端未连接（需终端已登录运行，或配置 MT5_TERMINAL_PATH）")
+            logger.warning(
+                "MT5 source skipped: 本机 MT5 终端未连接"
+                "（需终端已登录运行，或配置 MT5_TERMINAL_PATH）"
+            )
+    if "ths" in enabled:
+        from gateway.market_sources.ths_source import ThsSource
+        ths = ThsSource()
+        if ths.available:
+            market_manager.register(ths)
+        else:
+            logger.warning(
+                "THS source skipped: 同花顺行情服务器连接失败"
+                "（检查网络或 THS_USERNAME/THS_PASSWORD）"
+            )

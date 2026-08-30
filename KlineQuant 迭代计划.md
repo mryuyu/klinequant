@@ -2,7 +2,7 @@
 
 > **版本**：v2.1  
 > **创建日期**：2026-07-30  
-> **最后更新**：2026-08-28（新增 MKT-THS 国内 A 股数据源任务：thsdk 同花顺协议 SDK 正式账户实测通过，国内股票数据源选型定案）  
+> **最后更新**：2026-08-31（高周期与自定义周期落地：周/月/季/年四档补齐 + 自定义倍率周期（2~99×d/w/M），后端派生周期层从日 K 统一聚合（REST 历史 + WS 实时），全源全周期可用；此前 MKT-THS 插件完成，盘中实时聚合待交易时段验证）  
 > **当前基线**：v1.3.0-mockup（轻量版行情终端，lc-live.html 唯一迭代基线）+ MKT-PLG 已推送（commit f34374c）+ MACD_MULTI 已交付（2026-08-26 推送）  
 > **仓库**：https://github.com/mryuyu/klinequant  
 > **版本命名规范**：`主版本.次版本.修订号-后缀`，后缀 `-paper` = 模拟盘可用，`-live` = 实盘已验证，无后缀 = 正式版
@@ -107,6 +107,7 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | 编号 | 日期 | 问题 | 修复方向 | 状态 |
 |------|------|------|---------|------|
 | BUG-001 | 2026-08-22 | 修改单个指标参数时全量指标销毁重建+重渲染（lc-live.html `rebuildIndicators` 全量链路）：本地指标全部重算、后端指标全部重拉历史，K 线数量大（接近 5000 根上限）时可见重建闪烁与卡顿 | 单实例重建：`layoutRef` 已能定位 indLayout 条目，仅销毁重建被改实例，图例行 DOM 原位替换、MA 颜色轮转不重置，其余实例 series 不动（约 30 行改动） | ⏸️ 未修复（调参为低频操作，待体感卡顿明显时优先处理） |
+| BUG-002 | 2026-08-31 | A 股目录只含上市中品种，退市股搜不到且历史 K 线取不到（实测：目录 5802 个含“退”字 0；已退市 000003/600799/000693 K 线返回空，对照 600519 正常）。根因：thsdk `stock_cn_lists()`/`index_list()` 为同花顺实时行情目录，本身不含退市品种，后端未做过滤 | 需接带历史归档的数据源补齐退市股历史（新市场源插件或本地归档库）；短期无用户可感知的错误行为，暂不处理 | ⏸️ 未修复（数据源限制，待需求明确后评估） |
 
 ---
 
@@ -190,7 +191,8 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | P3-001 | A 股适配（QMT） | v2.0.0 | ⬜ BACKLOG |
 | P3-002 | 期货适配（CTP） | v2.0.0 | ⬜ BACKLOG |
 | MKT-PLG | 市场源插件框架 + IG 外汇接入 | 提前落地（v1.1 期） | ✅ 已实现并验证（IG demo 全链路通过，2026-08-08） |
-| MKT-THS | 国内 A 股数据源（thsdk） | v2.0.0（可提前） | ⬜ 规划中（正式账户实测通过，待实现插件） |
+| MKT-THS | 国内 A 股数据源（thsdk） | v2.0.0（已提前） | ✅ 已实现（2026-08-31：插件+注册+单测+联调完成，盘中实时聚合待交易时段验证） |
+| MKT-TF | 高周期与自定义周期（周/月/季/年 + 自定义倍率） | 提前落地（v1.1 期） | ✅ 已实现（2026-08-31：后端派生周期层 derived.py 从日 K 统一聚合，1w 各源原生直供；路由拦截+指标预热透传+WS 实时聚合（日 K 驱动+冷启动预填）；前端四档按钮+自定义弹层；单测 587 passed，REST/WS/浏览器冒烟全通） |
 | MKT-IB | 盈透证券 API 接入 | 提前落地（v1.1 期，下一轮任务） | ⬜ 规划中（接入方式与 Paper 账户待确认） |
 | DOC | 用户手册/API 文档 | v2.0.0 | ⬜ BACKLOG |
 | DOCKER | Docker 部署方案 | v2.0.0 | ⬜ BACKLOG（非必需） |
@@ -229,3 +231,4 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | 2026-08-28 | v2.5 | IND-103 收尾前端零计算：① lc-live.html 剩余 MA/BOLL/KD/RSI 全部切换后端 IndicatorEngine（复用 MACD 模式：REST 历史 + WS 增量），MA 双均线一实例对应两个后端订阅（短/长周期各自契约）；② 删除 9 个前端本地计算函数（maSeries/ema/macdSeries/bollSeries/bollLast/kdSeries/kdLast/rsiSeries/rsiLast）与 updateInstanceLast，同步移除 MACD 本地兜底（K 线本身依赖后端，兜底无意义），图例末值改取后端历史/推送维护的 lastVals 缓存；③ 顺带修复两处隐患：`/api/indicator/history` 的 limit 上限由 2000 提升至 5000（对齐前端 klineCount 上限与预热深度 _MAX_WARMUP_TOTAL，此前懒加载超限触发 422）+ venv 中 httpx 被降至 0.25.2 导致币安 REST 全线失败（代码 `proxy=` 需 ≥0.27），已升级 0.28.1；④ IND-103 剩余：指标目录动态化（删除 IND_CATALOG/IND_META）与正式版 Vue 前端跟进；后端单测 553 passed |
 | 2026-08-28 | v2.6 | 品种列表收藏夹化 + K 线价格标签倒计时合并（纯前端）：① lc-live.html 品种列表重构为 TradingView 式全局收藏夹——废除按数据源分片（symGroupsByEx/groupsFor），单一列表跨数据源（每行记录自身 exchange，可跨所混排，WS 价格订阅/涨跌幅/点击切换均按行自身源），与图表品种/切所完全解耦；修复搜索弹窗选中品种强制入列 Bug，弹窗拆 switch/add 双模式（顶栏选择只切图、右栏＋/分组头右键才入列），已入列置灰防重；② 收藏夹本地持久化（localStorage kq-watchlist，增删/折叠落盘），列表底部新增「新建分组」行内入口（Enter/失焦确认、Esc 取消、空名/重名不建），移除假数据示例组；③ 移除顶栏品种市场标签（SPOT/加密）及 MARKET_NAMES/MARKET_OF_EX 常量（分类已在搜索弹窗资产类别页签）；④ K 线收盘倒计时并入当前价标签：关闭 LC 内置轴标签/价线（lastValueVisible/priceLineVisible），自定义 .price-tag 同框两行（价格按品种精度 + 倒计时，底色随涨跌/中式配色），当前价虚线改手动 createPriceLine（隐藏轴标签）逐 bar/每秒同步 |
 | 2026-08-28 | v2.7 | 补记 v2.4~v2.6 已推送：commit 70f09ef，tag v1.7.0-mockup，远程 origin/main（mryuyu/klinequant）；其中 v2.4 为选型记录（无代码变更），代码变更为 IND-103 前端零计算收尾 + 品种列表收藏夹化 + 价格标签倒计时合并 |
+| 2026-08-31 | v2.8 | MKT-THS 插件实现完成（填补「国内·股票」空市场）：① 新增 `gateway/market_sources/ths_source.py`——ThsApi 驱动层（threading.Lock 串行 + 0.03s 限频节流 + 限频/断连重试与 30s 冷却重连，全部调用经 asyncio.to_thread）；品种编码归一化（6 位简码→USHA/USZA，13 前缀白名单校验，指数代码段含字母如 USHI1A0001 实测修正）；周期映射 1m/5m/15m/30m/60m→1h/1d→day/1w→week，end_time 翻页走区间查询，前复权，A 股精度下限 2 位；② 盘中实时链路：stream_loop 快照轮询（按市场前缀分批规避批量限制）→ 累计量差分建 m1 桶（收盘时刻惯例 + 午休归上午尾桶 + 盘后归收盘桶）→ 当日 m1 聚合 5m~1h，1d 用快照当日累计合成，1w 惰性周 K 种子 + 当日增量；非交易时段休眠 30s；③ 注册与配置：manager bootstrap 增 ths 分支（连接失败跳过不阻塞），.env 增 THS_USERNAME/THS_PASSWORD，pyproject optional-dependencies 增 `ths = ["thsdk>=1.7"]`；④ 联调验证（真实账户）：/api/market/sources 出现 ths，1d/1m/1w K 线、ticker（涨跌幅 0.39%）、品种目录 5222 股票 + 580 指数、指标链路（MACD on ths warmed:true）全通，指数代码 USHI1A0001/USZI399300 复验通过；单测 9 用例、全量 562 passed；⑤ 前端接入：源元数据新增 region 字段（base.py global 缺省，ths=cn），/api/market/sources 与 /api/market/symbols 每行下发，lc-live.html 品种搜索弹窗「国内」分段由硬编码占位改为 region 过滤（实测 cn 5802 / global 7413）；⑥ A 股纯数字展示码（用户习惯需求，展示码/路由码分离）：内部链路（REST/WS/curSymbol/判重键）继续用 THSCODE 零改动，后端新增 _display_code（股票/深指数取末 6 位；沪指数 1B 段「00」+ 末 4 位实测规则，上证50→000016/科创50→000688；无算术规则段走实测静态表：上证指数 1A0001→000001、A股/Ｂ股指数→000002/000003、行业指数 1B0001~0005→000004~000008 防与上证指数撞码，领先指标/创业成交无交易所码兜底原码段），随 /api/market/symbols 每行 code 字段下发（非国内源缺省 = symbol）；前端 lc-live.html 维护 symCode 映射只渲染不推导：搜索弹窗代码列/顶栏/水印改显纯数字（搜索匹配含 code），实测 5802 品种 5799 纯数字；撞码 000001（平安银行/上证指数/重复条目）列表双行+类型标签区分不猜；遗留：盘中 WS 实时聚合待交易时段验证，Vue 正式版前端后续同步 |

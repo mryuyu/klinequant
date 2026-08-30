@@ -46,9 +46,11 @@ def test_register_get_default_exchange():
 def test_meta_contract():
     meta = _FakeSource("fx").meta()
     assert meta["exchange"] == "fx"
-    assert meta["timeframes"] == ["1h", "1m"]
+    # 派生层统一下发：原生档位 + 1w + 1M/1Q/1Y（网关从日 K 聚合，前端按钮不逐源禁用）
+    assert meta["timeframes"] == ["1M", "1Q", "1Y", "1h", "1m", "1w"]
     assert meta["default_symbols"][0]["symbol"] == "FXUSD"
     assert _FakeSource("otc").meta()["supports_volume"] is False   # OTC 所声明无成交量
+    assert meta["region"] == "global"                          # 区域缺省国外（国内源自行覆盖为 cn）
 
 
 # ─── 全量品种目录：插件默认实现 + manager TTL 缓存 ───
@@ -58,7 +60,8 @@ def test_base_list_symbols_default():
     """未覆盖 list_symbols 的插件：回退 default_symbols（type 缺失时为空串）"""
     import asyncio
     rows = asyncio.run(_FakeSource("fx").list_symbols())
-    assert rows == [{"symbol": "FXUSD", "name": "FX/USD", "type": ""}]
+    # code 缺省同 symbol（非国内源展示码 = 路由码，前端零分支）
+    assert rows == [{"symbol": "FXUSD", "name": "FX/USD", "type": "", "code": "FXUSD"}]
 
 
 def test_manager_list_symbols_cached():

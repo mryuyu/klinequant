@@ -12,6 +12,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from gateway.market_sources.derived import DERIVED_FIXED
+
 
 def price_decimals(values, cap: int = 8) -> int:
     """从订阅到的原始价格推导显示小数位（前端只渲染不推导）
@@ -42,6 +44,8 @@ class MarketSource(ABC):
     supported_timeframes: set[str] = set()
     #: 是否提供成交量（外汇等 OTC 市场为 False，前端据此隐藏 VOL）
     supports_volume: bool = True
+    #: 市场区域（global=国外 / cn=国内，前端品种搜索弹窗国内/国外分段用）
+    region: str = "global"
     #: 默认品种列表 [{symbol, name}]（前端品种列表初始化）
     default_symbols: list[dict[str, str]] = []
     #: 无订阅者时的默认监控集 [(symbol, timeframe)]，保持旧行为
@@ -88,16 +92,25 @@ class MarketSource(ABC):
         供前端品种搜索弹窗的资产分类筛选；插件从数据源读取并归类。
         """
         return [
-            {"symbol": s["symbol"], "name": s.get("name", s["symbol"]), "type": s.get("type", "")}
+            {
+                "symbol": s["symbol"], "name": s.get("name", s["symbol"]),
+                "type": s.get("type", ""), "code": s.get("code", s["symbol"]),
+            }
             for s in self.default_symbols
         ]
 
     def meta(self) -> dict[str, Any]:
-        """插件元数据（/api/market/sources 下发给前端）"""
+        """插件元数据（/api/market/sources 下发给前端）
+
+        周期可用性：派生层让所有源拥有全部周期（1w 原生直供；1M/1Q/1Y 及
+        自定义倍率由网关从日 K 聚合），此处统一下发声明，前端按钮不再逐源禁用。
+        """
+        tfs = set(self.supported_timeframes) | {"1w"} | set(DERIVED_FIXED)
         return {
             "exchange": self.name,
             "label": self.label,
+            "region": self.region,
             "supports_volume": self.supports_volume,
-            "timeframes": sorted(self.supported_timeframes),
+            "timeframes": sorted(tfs),
             "default_symbols": self.default_symbols,
         }
