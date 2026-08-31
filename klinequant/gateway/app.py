@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -111,13 +112,67 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def on_startup():
         logger.info("KlineQuant Gateway starting...")
-        # 市场源插件框架：注册启用的插件（KQ_MARKET_SOURCES）并启动订阅分发
-        bootstrap_sources()
-        await market_manager.start()
+        # 市场源插件后台初始化：部分源登录（如 ths）可达分钟级，同步等待会阻塞
+        # startup 事件、uvicorn 拒接连接致首页打不开；改后台任务，页面/接口先行就绪，
+        # 源未就绪时 /api/market/sources 返回空、路由返回空数据，前端自适配（刷新重试）
+        import asyncio
+
+        # 事件循环看门狗：独立线程心跳探活，循环被同步调用堵住 >10s 时 dump 全线程栈，
+        # 让下次复现直接暴露阻塞点（2026-08-31 曾发生 4 分钟全量静默无栈可查）
+        import faulthandler
+        import threading
+
+        faulthandler.enable()   # C 扩展（thsdk/MT5）段错误时也留栈到 stderr
+
+        loop = asyncio.get_running_loop()
+        # asyncio debug 默认关闭（2026-08-31 实证：每个 Future/回调都抓全栈 +
+        # linecache.checkcache 文件 stat，大页拉取高并发时事件循环线程自身被拖垮，
+        # 停摆 18~47s 导致前端 WS 静默看门狗误判断连）；排障时 GATEWAY_ASYNCIO_DEBUG=1 重开。
+        # 看门狗 + faulthandler 保持常开（开销可忽略），阻塞时仍能 dump 全线程栈。
+        if os.getenv("GATEWAY_ASYNCIO_DEBUG", "0") == "1":
+            loop.set_debug(True)   # 慢回调告警（>slow_callback_duration 记录协程来源）
+        loop.slow_callback_duration = 0.5   # 多请求并发时调度延迟可达 0.3~0.5s 属正常，只看更高量级
+        hb = {"at": loop.time()}
+
+        def _poke():
+            hb["at"] = loop.time()
+
+        def _watch():
+            while True:
+                time.sleep(5)
+                stalled = loop.time() - hb["at"]
+                if stalled > 10.0:
+                    logger.warning(
+                        "EVENT LOOP BLOCKED %.0fs — dumping all thread stacks", stalled
+                    )
+                    faulthandler.dump_traceback(all_threads=True)
+                try:
+                    loop.call_soon_threadsafe(_poke)
+                except RuntimeError:
+                    return   # 循环已关闭（退出中）
+
+        app.state._watchdog = threading.Thread(
+            target=_watch, name="loop-watchdog", daemon=True
+        )
+        app.state._watchdog.start()
+
+        async def _bootstrap():
+            try:
+                # 源构造/登录为同步阻塞型（均已带超时护栏），移出事件循环防卡全部请求
+                await asyncio.to_thread(bootstrap_sources)
+                await market_manager.start()
+                logger.info("Market sources ready")
+            except Exception:
+                logger.exception("Market source bootstrap failed")
+
+        app.state.bootstrap_task = asyncio.create_task(_bootstrap())
 
     @app.on_event("shutdown")
     async def on_shutdown():
         logger.info("KlineQuant Gateway shutting down...")
+        boot = getattr(app.state, "bootstrap_task", None)
+        if boot is not None and not boot.done():
+            boot.cancel()   # 初始化未完成即退出：取消后台任务防悬挂
         from gateway.state import state
         await state.close()
 

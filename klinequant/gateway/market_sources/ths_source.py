@@ -44,6 +44,8 @@ _HEARTBEAT_INTERVAL = 60.0  # 盘外心跳间隔（秒）：会话空闲数十�
 _MIN_SPACING = 0.03         # 驱动层调用最小间隔（秒，官方限频 20ms + 冗余）
 _CALL_TIMEOUT = 8.0         # 驱动单次调用超时（秒）：会话静默劣化后单次调用可退化到数十秒，
                             # 超时即视为断连强制重连，避免拖死上层全部请求
+_CONNECT_TIMEOUT = 15.0     # 登录超时（秒）：劣化后重连登录可挂 55s+ 且持全局锁堵死所有请求，
+                            # 超时丢弃重试交给冷却后下次（防新登录与僵尸登录互踢，冷却 30s 内不重复尝试）
 _MIN_PREC = 2               # A 股最小价格变动 0.01 元，精度下限 2 位
 _MAX_CHUNK = 8000           # thsdk 单次拉取实测上限（超出截断），更深历史靠区间分页拼接
 
@@ -170,14 +172,25 @@ class ThsApi:
             return False
         self._last_connect_at = now
         try:
-            ths = _THS()   # 凭证自动读 THS_USERNAME/THS_PASSWORD 环境变量
-            r = ths.connect()
+            # 登录超时护栏（同调用护栏）：挂死登录不得持锁堵死全部请求；
+            # 僵尸登录线程任其自然退出，冷却期内不启新登录防互踢
+            def _login():
+                t = _THS()   # 凭证自动读 THS_USERNAME/THS_PASSWORD 环境变量
+                return t, t.connect()
+
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
+                ths, r = ex.submit(_login).result(timeout=_CONNECT_TIMEOUT)
+            finally:
+                ex.shutdown(wait=False)
             if r.success:
                 self._ths = ths
                 self.connected = True
                 self.is_guest = str(ths.ops.get("username", "")).startswith("thsguest_")
                 return True
             logger.warning(f"THS connect failed: {r.error}")
+        except concurrent.futures.TimeoutError:
+            logger.warning("THS connect timeout >%.0fs, retry after cooldown", _CONNECT_TIMEOUT)
         except Exception as e:  # pragma: no cover
             logger.warning(f"THS connect error: {e}")
         return False

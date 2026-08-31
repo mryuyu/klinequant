@@ -496,8 +496,6 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 
 <div class="ctx-menu" id="ctx-menu">
   <div class="ctx-title">图表设置</div>
-  <div class="ctx-row"><span>K线总量上限</span><input id="ctx-kc" class="ctx-input" type="number" min="100" max="5000" step="100"></div>
-  <div class="ctx-row"><span>拉取全部</span><input id="ctx-kc-all" type="checkbox" checked></div>
   <div class="ctx-row"><span>右侧留白</span><input id="ctx-ro" class="ctx-input" type="number" min="0" max="100"></div>
   <div class="ctx-row"><span>成交量</span><input id="ctx-vol" type="checkbox" checked></div>
   <div class="ctx-row"><span>涨跌配色</span><select id="ctx-scheme" class="ctx-input"><option value="gd">绿涨红跌</option><option value="cn">红涨绿跌</option></select></div>
@@ -516,10 +514,8 @@ let curSymbol = 'BTCUSDT';
 let curTf = '15m';
 let curExchange = 'binance';    // 当前市场源（binance/ig，后端插件注册表驱动）
 const sourcesMeta = {};         // exchange -> 插件元数据（label/周期支持/默认品种/成交量）
-let klineCount = 0;           // K 线总量上限：0=不限（默认拉取全部历史，翻到数据源尽头为止）；>0=用户显式设置的上限
 const PAGE_SIZE = 1000;         // 首屏首拉根数（保快速首绘）
-const PRELOAD_PAGE_SIZE = 5000; // 后台续载/左滑懒加载页大小（后端已支持大页；源插件内部分页）
-const PRELOAD_HARD_CAP = 30000; // 预载硬上限：超出部分（如分钟级跨年深度）转左滑懒加载兜底，防首屏卡死
+const PRELOAD_PAGE_SIZE = 5000; // 左滑按需加载页大小（后端已支持大页；源插件内部分页）
 let curRightOffset = 20;        // 图表右侧预留空 K 线数：可调，默认 20
 let showVol = true;             // 成交量显示开关（右键菜单切换，持久化）
 const lastPrices = {};          // symbol -> 最新价（供持仓表/品种列表用）
@@ -581,8 +577,6 @@ if (savedLayout) {
   if (savedLayout.symW) root.style.setProperty('--sym-w', savedLayout.symW);
   if (savedLayout.posH) root.style.setProperty('--pos-h', savedLayout.posH);
   if (typeof savedLayout.rightOffset === 'number') curRightOffset = savedLayout.rightOffset;
-  /* 旧版本默认值 1000 非用户显式选择 → 迁移为不限；其余显式设置尊重保留 */
-  if (savedLayout.klineCount && savedLayout.klineCount !== 1000) klineCount = savedLayout.klineCount;
   if (savedLayout.tf && tfValid(savedLayout.tf)) curTf = savedLayout.tf;
   if (savedLayout.symbol) curSymbol = savedLayout.symbol;
   if (savedLayout.exchange) curExchange = savedLayout.exchange;
@@ -598,7 +592,6 @@ function saveLayout() {
       posH: st.getPropertyValue('--pos-h'),
       posCollapsed: document.getElementById('pos-bar')?.classList.contains('collapsed') || false,
       rightOffset: curRightOffset,
-      klineCount,
       tf: curTf,
       symbol: curSymbol,
       exchange: curExchange,
@@ -650,8 +643,8 @@ const IND_META = {
   rsi:  { title: 'RSI 相对强弱参数', fields: [
     { key: 'period', label: '周期', min: 2, max: 'kline' }] },
 };
-/* 周期类参数上限动态跟随 K 线总量上限（右键菜单可调；不限模式跟随实际已加载根数） */
-function fieldMax(f) { return f.max === 'kline' ? (klineCount > 0 ? klineCount : Math.max(klines.length, 2)) : f.max; }
+/* 周期类参数上限动态跟随实际已加载根数（按需加载：滚动加深后更大参数自动可用） */
+function fieldMax(f) { return f.max === 'kline' ? Math.max(klines.length, 2) : f.max; }
 
 /* ═══ IND-110：后端 def 式指标目录（/api/indicator/meta 驱动，后端注册新指标前端自动发现） ═══ */
 let BACKEND_META = {};   // name -> {min_periods, display_meta, default_params}
@@ -731,7 +724,10 @@ function macdHistColor(v, prev, colors) { return histColor(v, prev, colors); }
 async function fetchIndSeries(indicator, params, gen) {
   const url = `${API}/api/indicator/history?symbol=${curSymbol}&timeframe=${curTf}&exchange=${curExchange}` +
     `&indicator=${indicator}&limit=${Math.min(klines.length, 30000)}&params=${encodeURIComponent(JSON.stringify(params))}`;   // limit 上限对齐后端 le=30000（防 422 静默致指标全部不显示）
-  const r = await fetch(url);
+  let r;
+  try {
+    r = await fetch(url, { signal: AbortSignal.timeout(30000) });   // 同 fetchPage：后端劣化/不可用时不无限等待，失败降级为占位下次重建再拉
+  } catch (e) { console.error('indicator history timeout:', indicator, params); return null; }
   if (!r.ok) { console.error('indicator history failed:', r.status, indicator, params); return null; }
   const json = await r.json();
   if (gen !== loadGen || !json.warmed || !json.data || !json.data.length) return null;
@@ -1540,11 +1536,10 @@ async function load() {
   setSb(`◉ 拉取 ${curSymbol} ${tfLabel(curTf)} K 线…`);
   noMoreData = false;
   try {
-    /* 数据加载约定：默认加载全部历史——首屏页立即渲染，后台自动续载至数据源尽头/用户上限，
-       前端只按屏幕/翻页显示；超预载硬上限的极端深度留左滑懒加载兜底 */
+    /* 数据加载约定：按屏按需加载——首屏渲染后即完成，不后台预载更深历史（防切周期反复全量重绘卡顿）；
+       更早历史由左滑按需续载（loadMore），直至数据源尽头 */
     const gen = loadGen;
-    const cap = Math.min(klineCount > 0 ? klineCount : Infinity, PRELOAD_HARD_CAP);
-    const need = Math.min(PAGE_SIZE, cap);
+    const need = PAGE_SIZE;
     const firstPage = await fetchPage(need, null);
     if (gen !== loadGen) return;   // 拉取期间已切换，丢弃
     klines = firstPage.bars;
@@ -1571,7 +1566,6 @@ async function load() {
     updateTicker(klines[klines.length - 1].close);
     sbInfo = (sourcesMeta[curExchange] && sourcesMeta[curExchange].label) || curExchange;
     renderStatusbar();
-    if (!noMoreData && klines.length < cap) autoPreload(gen, cap);   // 后台续载更早历史（不阻塞首屏）
   } catch (e) {
     console.error('load failed:', e);   // 暴露真实错误，避免被兜底文案掩盖
     if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
@@ -1582,73 +1576,55 @@ async function load() {
   }
 }
 
-/* ═══ 历史续载：后台自动预载至数据源尽头（约定：默认加载全部）；左滑懒加载同路兜底 ═══ */
+/* ═══ 历史按需加载：左滑触发分页续载，直至数据源尽头（无后台预载，防切周期卡顿） ═══ */
 let loadingMore = false;
 let noMoreData = false;
-let loadGen = 0;   // 加载代次：切换品种/周期/重载时作废进行中的翻页/预载
-let firstFit = true;   // 首屏标记：仅首次加载 fitContent 铺满，此后切换保持原缩放比例
-let userTouchedChart = false;   // 用户是否交互过图表（决定预载收尾是否重新铺满全量）
+let loadGen = 0;   // 加载代次：切换品种/周期/重载时作废进行中的翻页
 document.getElementById('chart').addEventListener('pointerdown', () => { userTouchedChart = true; });
 document.getElementById('chart').addEventListener('wheel', () => { userTouchedChart = true; }, { passive: true });
-function preloadCap() { return Math.min(klineCount > 0 ? klineCount : Infinity, PRELOAD_HARD_CAP); }
+let firstFit = true;   // 首屏标记：仅首次加载 fitContent 铺满，此后切换保持原缩放比例
+let userTouchedChart = false;   // 用户是否交互过图表（决定全量就绪后是否重新铺满）
 /* 翻页前置一页（锚点校验防混入）；返回剩余可拉根数（0=已到头），异常抛出由调用方处理 */
 async function pullOlderPage(gen) {
   const sym = curSymbol, tf = curTf;
   const anchorTime = klines[0].time;   // 数据锚点：完成后校验数据未被重置
-  const need = Math.min(PRELOAD_PAGE_SIZE, preloadCap() - klines.length);
+  const need = PRELOAD_PAGE_SIZE;
   let page = (await fetchPage(need, anchorTime * 1000 - 1)).bars;
   if (gen !== loadGen || sym !== curSymbol || tf !== curTf) return -1;   // 已切换，丢弃旧数据防混入（返回 -1 中止）
   if (!klines.length || klines[0].time !== anchorTime) return -1;        // 数据已重置，丢弃
   page = page.filter(k => k.time < anchorTime);                          // 防时间戳重叠
   if (!page.length) { noMoreData = true; return 0; }
   if (page.length < need) noMoreData = true;
-  const lvr = chart.timeScale().getVisibleLogicalRange();
+  const vtr = chart.timeScale().getVisibleRange();   // 时间区间锚点：补根后按时间还原视图（比逻辑坐标平移稳，不受 prepend 后库内部左缘重定位影响）
   klines = page.concat(klines);
   renderChart();
   if (noMoreData && !userTouchedChart) {
     /* 全量就绪且用户未交互：铺满显示全部历史（“默认显示所有数据”约定）；
-       已交互则保持视窗稳定（下方 else 分支平移补偿） */
+       已交互则保持视窗稳定（下方 else 分支时间锚点还原） */
     chart.timeScale().fitContent();
-  } else if (lvr) {
-    /* 逻辑坐标平移补偿：prepend N 根后索引整体 +N，视窗锁定原时间窗口不跳动 */
-    chart.timeScale().setVisibleLogicalRange({ from: lvr.from + page.length, to: lvr.to + page.length });
+  } else if (vtr) {
+    /* 视图锚定原时间窗口不跳动。此前用逻辑坐标平移补偿，prepend 后视图仍贴左缘，
+       导致 loadMore 级联触发一次左滑拉空全部历史（2026-08-31 后端请求日志实证） */
+    chart.timeScale().setVisibleRange(vtr);
   }
-  return preloadCap() - klines.length;
+  return noMoreData ? 0 : 1;   // 0=已到头；非 0=仍有更早数据可拉
 }
-/* 后台自动续载：首屏渲染后循环翻页直至数据源尽头/上限（每页状态栏显示进度） */
-async function autoPreload(gen, cap) {
-  while (!noMoreData && klines.length < cap) {
-    if (gen !== loadGen) return;   // 已切换，中止
-    loadingMore = true;
-    setSb(`◉ 加载历史… ${klines.length} 根${klineCount > 0 ? '/' + klineCount : '（全量）'}`);
-    try {
-      const remaining = await pullOlderPage(gen);
-      if (remaining < 0) return;
-    } catch (e) {
-      console.error('preload failed:', e);
-      setSb('✕ 历史续载中断（左滑可重试）');
-      return;   // 网络异常中止；剩余深度留左滑懒加载兜底
-    } finally {
-      loadingMore = false;
-    }
-    await new Promise(r => setTimeout(r, 60));   // 页间小间隔，避免请求风暴
-  }
-  renderStatusbar();   // 预载完成，状态栏恢复基础信息 + 链路状态
-}
-/* 左滑懒加载：超预载硬上限的极端深度 / 续载中断后的兜底 */
+/* 左滑按需加载：视窗接近左边界时分页续载更早历史，直至数据源尽头 */
 async function loadMore() {
-  if (loadingMore || noMoreData || klines.length >= preloadCap()) return;
+  if (loadingMore || noMoreData) return;
   loadingMore = true;
+  setSb(`◉ 加载更早历史… 已有 ${klines.length} 根`);   // “已有”口径：触发时已加载量，本页另拉 5000 根
   try {
     await pullOlderPage(loadGen);
+    setSb(`◉ 已加载更早历史，共 ${klines.length} 根${noMoreData ? '（已到数据源尽头）' : ''}`);   // 完成后展示新总量，避免停留触发时的旧口径
   } catch (e) {
-    setSb('✕ 加载更早 K 线失败');
+    setSb('✕ 加载更早 K 线失败（左滑可重试）');
   } finally {
     loadingMore = false;
   }
 }
 chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-  if (!range || !initialLoaded || loadingMore || noMoreData || klines.length >= preloadCap()) return;
+  if (!range || !initialLoaded || loadingMore || noMoreData) return;
   const span = range.to - range.from;
   const fullyVisible = span >= klines.length - 1;
   if (range.from < 10 && (!fullyVisible || range.from < -1)) loadMore();
@@ -1724,16 +1700,11 @@ document.addEventListener('pointerdown', e => {
   if (!tfCustomPop.contains(e.target) && e.target.id !== 'tf-custom-btn') tfCustomPop.style.display = 'none';
 }, true);
 document.getElementById('fit-btn').addEventListener('click', () => chart.timeScale().fitContent());
-/* K 线数量 / 右侧留白：图表区右键菜单（直接输入数字） */
+/* 右侧留白等：图表区右键菜单 */
 const ctxMenu = document.getElementById('ctx-menu');
-const ctxKc = document.getElementById('ctx-kc');
-const ctxKcAll = document.getElementById('ctx-kc-all');
 const ctxRo = document.getElementById('ctx-ro');
 document.getElementById('chart').addEventListener('contextmenu', e => {
   e.preventDefault();
-  ctxKcAll.checked = klineCount === 0;
-  ctxKc.disabled = klineCount === 0;
-  if (klineCount > 0) ctxKc.value = klineCount;
   ctxRo.value = curRightOffset;
   document.getElementById('ctx-vol').checked = showVol;
   document.getElementById('ctx-scheme').value = colorScheme;
@@ -1743,24 +1714,6 @@ document.getElementById('chart').addEventListener('contextmenu', e => {
 });
 document.addEventListener('click', e => { if (!ctxMenu.contains(e.target)) ctxMenu.classList.remove('show'); });
 window.addEventListener('keydown', e => { if (e.key === 'Escape') { ctxMenu.classList.remove('show'); indModal.classList.remove('show'); indPicker.classList.remove('show'); } });
-ctxKc.addEventListener('change', () => {
-  const v = Math.min(5000, Math.max(100, parseInt(ctxKc.value) || 5000));
-  ctxKc.value = v;
-  if (v === klineCount) return;
-  klineCount = v;
-  load();
-  saveLayout();
-});
-/* 拉取全部开关：勾选=不限（0），取消=恢复数字上限输入 */
-ctxKcAll.addEventListener('change', () => {
-  ctxKc.disabled = ctxKcAll.checked;
-  const nv = ctxKcAll.checked ? 0 : Math.min(5000, Math.max(100, parseInt(ctxKc.value) || 1000));
-  if (!ctxKcAll.checked) ctxKc.value = nv;
-  if (nv === klineCount) return;
-  klineCount = nv;
-  load();
-  saveLayout();
-});
 document.getElementById('ctx-vol').addEventListener('change', e => {
   showVol = e.target.checked;
   applyVolVisibility();
@@ -2128,7 +2081,7 @@ function renderStatusbar() {
   } else {
     icon = sigSvg(0, 'var(--down)'); label = '断开';
   }
-  document.getElementById('sb-status').innerHTML = `◉ ${sbInfo} · ${icon} ${label}`;
+  document.getElementById('sb-status').innerHTML = `◉ ${sbInfo} · ${klines.length} 根 · ${icon} ${label}`;   // 已加载根数常驻，便于核验按需加载深度
 }
 setInterval(renderStatusbar, 1000);
 
@@ -2182,7 +2135,7 @@ function applyBar(b) {
   const bar = { time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume };
   const last = klines[klines.length - 1];
   if (last && t === last.time) klines[klines.length - 1] = bar;
-  else if (!last || t > last.time) { klines.push(bar); if (klineCount > 0 && klines.length > klineCount) klines.shift(); }
+  else if (!last || t > last.time) { klines.push(bar); }   // 按需加载：新根只追加不裁剪（已加载深度不受影响）
   else return;
   candleSeries.update(bar);
   volumeSeries.update({ time: t, value: bar.volume, color: volColor(bar.close, bar.open) });
@@ -2357,12 +2310,18 @@ function applyTfAvailability() {
     b.disabled = !ok;
   });
 }
-/* 启动时拉取后端已注册市场源插件（前端交易所选择器数据源） */
+/* 启动时拉取后端已注册市场源插件（前端交易所选择器数据源）。
+   后端市场源为后台初始化（如 ths 登录可达分钟级）：源列表空则自动重试至就绪，免手工刷新 */
 async function initSources() {
-  try {
-    const j = await (await fetch(`${API}/api/market/sources`)).json();
-    (j.sources || []).forEach(s => { sourcesMeta[s.exchange] = s; });
-  } catch (e) {}
+  for (let attempt = 0; attempt < 60 && !Object.keys(sourcesMeta).length; attempt++) {
+    try {
+      const j = await (await fetch(`${API}/api/market/sources`, { signal: AbortSignal.timeout(10000) })).json();
+      (j.sources || []).forEach(s => { sourcesMeta[s.exchange] = s; });
+    } catch (e) {}
+    if (Object.keys(sourcesMeta).length) break;
+    setSb(`◉ 等待市场源就绪…（${attempt + 1}）`);
+    await new Promise(r => setTimeout(r, 2000));
+  }
   if (!sourcesMeta[curExchange]) curExchange = Object.keys(sourcesMeta)[0] || 'binance';
   /* 恢复的品种不属于当前所（如 exchange=ig 但 symbol=BTCUSDT）：回退到该所默认首个品种（收藏夹为全局列表，不受影响） */
   const meta = sourcesMeta[curExchange];
