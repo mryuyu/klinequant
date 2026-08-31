@@ -219,7 +219,9 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .wl-row:hover { background:var(--bg-elevated); }
 .wl-row.active { background:var(--accent-dim); }
 .wl-ico { width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:800; color:#0b0e14; }
-.wl-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wl-name { display:flex; flex-direction:column; min-width:0; line-height:1.25; }
+.wl-code { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wl-desc { color:var(--text-sub); font-size:10.5px; font-weight:400; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .wl-val { font-family:var(--font-mono); }
 .wl-chg { font-family:var(--font-mono); font-size:11.5px; min-width:56px; text-align:right; }
 .wl-del { opacity:0; color:var(--text-sub); font-size:13px; text-align:center; cursor:pointer; }
@@ -515,7 +517,8 @@ let curTf = '15m';
 let curExchange = 'binance';    // 当前市场源（binance/ig，后端插件注册表驱动）
 const sourcesMeta = {};         // exchange -> 插件元数据（label/周期支持/默认品种/成交量）
 let klineCount = 0;           // K 线总量上限：0=不限（默认拉取全部历史，翻到数据源尽头为止）；>0=用户显式设置的上限
-const PAGE_SIZE = 1000;         // 每次翻页拉取根数（币安单次上限）
+const PAGE_SIZE = 1000;         // 首屏首拉根数（保快速首绘）
+const PRELOAD_PAGE_SIZE = 5000; // 后台续载/左滑懒加载页大小（后端已支持大页；源插件内部分页）
 const PRELOAD_HARD_CAP = 30000; // 预载硬上限：超出部分（如分钟级跨年深度）转左滑懒加载兜底，防首屏卡死
 let curRightOffset = 20;        // 图表右侧预留空 K 线数：可调，默认 20
 let showVol = true;             // 成交量显示开关（右键菜单切换，持久化）
@@ -727,8 +730,10 @@ function backendSubs(inst) {
 function macdHistColor(v, prev, colors) { return histColor(v, prev, colors); }
 async function fetchIndSeries(indicator, params, gen) {
   const url = `${API}/api/indicator/history?symbol=${curSymbol}&timeframe=${curTf}&exchange=${curExchange}` +
-    `&indicator=${indicator}&limit=${klines.length}&params=${encodeURIComponent(JSON.stringify(params))}`;
-  const json = await (await fetch(url)).json();
+    `&indicator=${indicator}&limit=${Math.min(klines.length, 30000)}&params=${encodeURIComponent(JSON.stringify(params))}`;   // limit 上限对齐后端 le=30000（防 422 静默致指标全部不显示）
+  const r = await fetch(url);
+  if (!r.ok) { console.error('indicator history failed:', r.status, indicator, params); return null; }
+  const json = await r.json();
   if (gen !== loadGen || !json.warmed || !json.data || !json.data.length) return null;
   return json.data;
 }
@@ -1504,7 +1509,9 @@ function applyColorScheme(scheme, persist = true) {
 /* 拉取一页 K 线（endTime 可选，往前翻页用）；同时携带后端下发的价格精度 */
 async function fetchPage(need, endTime) {
   const url = `${API}/api/market/klines?symbol=${curSymbol}&timeframe=${curTf}&limit=${need}&exchange=${curExchange}${endTime ? `&end_time=${endTime}` : ''}`;
-  const resp = await fetch(url);
+  /* 30s 超时护栏：后端市场源会话劣化时单次拉取可挂死数十秒，
+     无超时的 fetch 会让“拉取 K 线”状态永久停留；超时后走 catch 展示失败可重试 */
+  const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
   const json = await resp.json();
   return {
     bars: (json.data || []).map(k => ({
@@ -1567,7 +1574,11 @@ async function load() {
     if (!noMoreData && klines.length < cap) autoPreload(gen, cap);   // 后台续载更早历史（不阻塞首屏）
   } catch (e) {
     console.error('load failed:', e);   // 暴露真实错误，避免被兜底文案掩盖
-    setSb('✕ 后端未连接（127.0.0.1:8000），请先启动 API Gateway');
+    if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+      setSb('✕ 拉取超时（数据源响应过慢），切换品种/周期重试');
+    } else {
+      setSb('✕ 后端未连接（127.0.0.1:8000），请先启动 API Gateway');
+    }
   }
 }
 
@@ -1584,7 +1595,7 @@ function preloadCap() { return Math.min(klineCount > 0 ? klineCount : Infinity, 
 async function pullOlderPage(gen) {
   const sym = curSymbol, tf = curTf;
   const anchorTime = klines[0].time;   // 数据锚点：完成后校验数据未被重置
-  const need = Math.min(PAGE_SIZE, preloadCap() - klines.length);
+  const need = Math.min(PRELOAD_PAGE_SIZE, preloadCap() - klines.length);
   let page = (await fetchPage(need, anchorTime * 1000 - 1)).bars;
   if (gen !== loadGen || sym !== curSymbol || tf !== curTf) return -1;   // 已切换，丢弃旧数据防混入（返回 -1 中止）
   if (!klines.length || klines[0].time !== anchorTime) return -1;        // 数据已重置，丢弃
@@ -2043,7 +2054,7 @@ function updateListPrice(ex, sym, price) {
   const prev = entry.price;
   entry.price = price;
   lastPrices[sym] = price;
-  const el = document.querySelector(`.wl-row[data-ex="${entry.ex || ''}"][data-sym="${entry.name}"] .wl-val`);
+  const el = document.querySelector(`.wl-row[data-ex="${entry.ex || ''}"][data-real="${entry.sym}"] .wl-val`);
   if (el) {
     el.textContent = fmtSym(sym, price);
     if (prev != null && price !== prev) el.className = 'wl-val ' + (price > prev ? 'up' : 'down');
@@ -2277,12 +2288,12 @@ const LS_WL = 'kq-watchlist';
 /* 首次启动的默认收藏（可随意增删）；此后完全以用户操作为准并持久化 */
 const DEFAULT_WL_GROUPS = [
   { name: '加密货币', collapsed: false, symbols: [
-    { name: 'BTC/USDT', sym: 'BTCUSDT', ex: 'binance' },
-    { name: 'ETH/USDT', sym: 'ETHUSDT', ex: 'binance' },
-    { name: 'BNB/USDT', sym: 'BNBUSDT', ex: 'binance' },
-    { name: 'SOL/USDT', sym: 'SOLUSDT', ex: 'binance' },
-    { name: 'XRP/USDT', sym: 'XRPUSDT', ex: 'binance' },
-    { name: 'DOGE/USDT', sym: 'DOGEUSDT', ex: 'binance' },
+    { name: 'BTCUSDT', sym: 'BTCUSDT', ex: 'binance', desc: '比特币' },
+    { name: 'ETHUSDT', sym: 'ETHUSDT', ex: 'binance', desc: '以太坊' },
+    { name: 'BNBUSDT', sym: 'BNBUSDT', ex: 'binance', desc: '币安币' },
+    { name: 'SOLUSDT', sym: 'SOLUSDT', ex: 'binance', desc: 'Solana' },
+    { name: 'XRPUSDT', sym: 'XRPUSDT', ex: 'binance', desc: '瑞波币' },
+    { name: 'DOGEUSDT', sym: 'DOGEUSDT', ex: 'binance', desc: '狗狗币' },
   ]},
 ];
 function loadWl() {
@@ -2292,15 +2303,15 @@ function loadWl() {
       return sv.map(g => ({ name: String(g.name || '未命名'), collapsed: !!g.collapsed,
         symbols: (Array.isArray(g.symbols) ? g.symbols : [])
           .filter(s => s && s.sym)
-          .map(s => ({ name: String(s.name || s.sym), sym: String(s.sym), ex: String(s.ex || curExchange), price: null, chg: '--' })) }));
+          .map(s => ({ name: String(s.name || s.sym), sym: String(s.sym), ex: String(s.ex || curExchange), desc: String(s.desc || ''), price: null, chg: '--' })) }));
     }
   } catch (e) {}
-  return DEFAULT_WL_GROUPS.map(g => ({ ...g, symbols: g.symbols.map(s => ({ ...s, price: null, chg: '--' })) }));
+  return DEFAULT_WL_GROUPS.map(g => ({ ...g, symbols: g.symbols.map(s => ({ ...s, desc: s.desc || '', price: null, chg: '--' })) }));
 }
 function saveWl() {
   try {
     localStorage.setItem(LS_WL, JSON.stringify(symGroups.map(g =>
-      ({ name: g.name, collapsed: g.collapsed, symbols: g.symbols.map(s => ({ name: s.name, sym: s.sym, ex: s.ex })) }))));
+      ({ name: g.name, collapsed: g.collapsed, symbols: g.symbols.map(s => ({ name: s.name, sym: s.sym, ex: s.ex, desc: s.desc || '' })) }))));
   } catch (e) {}
 }
 let symGroups = loadWl();
@@ -2380,7 +2391,7 @@ function renderSymbols() {
   const kw = symFilter.trim().toLowerCase();
   let html = '';
   symGroups.forEach((g, gi) => {
-    const list = kw ? g.symbols.filter(s => s.name.toLowerCase().includes(kw)) : g.symbols;
+    const list = kw ? g.symbols.filter(s => (s.name.toLowerCase().includes(kw) || (s.desc || '').toLowerCase().includes(kw))) : g.symbols;
     html += `<div class="wl-group-head ${g.collapsed && !kw ? 'collapsed' : ''}" data-g="${gi}">
       <span class="caret">▼</span><span>${g.name}</span><span class="cnt">${list.length}</span></div>`;
     if (g.collapsed && !kw) return;
@@ -2392,12 +2403,14 @@ function renderSymbols() {
         ? (s.sym ? fmtSym(s.sym, s.price) : s.price.toLocaleString('en-US', { minimumFractionDigits: (String(s.price).split('.')[1] || '').length }))
         : '--';
       const activeCls = s.sym && s.sym === curSymbol && (!s.ex || s.ex === curExchange) ? ' active' : '';
-      html += `<div class="wl-row${activeCls}" data-ex="${s.ex || ''}" data-sym="${s.name}">
-        <span class="wl-ico" style="background:${icoFor(s.name)}">${s.name[0].toUpperCase()}</span>
-        <span class="wl-name">${s.name}</span>
+      /* 展示码优先取后端目录 code（A 股去前缀纯数字）；desc 为中文品种描述（股票即股票名称） */
+      const label = dispOf(s.sym);
+      html += `<div class="wl-row${activeCls}" data-ex="${s.ex || ''}" data-real="${s.sym}" data-sym="${s.name}">
+        <span class="wl-ico" style="background:${icoFor(s.name)}">${(label[0] || '?').toUpperCase()}</span>
+        <span class="wl-name"><span class="wl-code">${label}</span>${s.desc ? `<span class="wl-desc">${s.desc}</span>` : ''}</span>
         <span class="wl-val">${priceTxt}</span>
         <span class="wl-chg ${chgCls}">${s.chg}</span>
-        <span class="wl-del" data-del="${gi}|${s.name}" title="删除">✕</span>
+        <span class="wl-del" data-del="${gi}|${s.ex || ''}|${s.sym}" title="删除">✕</span>
       </div>`;
     });
   });
@@ -2434,9 +2447,10 @@ document.getElementById('sym-list').addEventListener('click', e => {
   if (e.target.closest('#wl-add-group')) { wlAddingGroup = true; renderSymbols(); return; }
   const del = e.target.closest('[data-del]');
   if (del) {
-    const [gi, name] = del.dataset.del.split('|');
+    /* 按数据源+路由码定位（展示码可能撞码，如 000001 上证指数/平安银行） */
+    const [gi, dex, dsym] = del.dataset.del.split('|');
     const g = symGroups[+gi];
-    g.symbols = g.symbols.filter(s => s.name !== name);
+    g.symbols = g.symbols.filter(s => !((s.ex || '') === dex && s.sym === dsym));
     if (!g.symbols.length) symGroups.splice(+gi, 1);
     saveWl();
     renderSymbols();
@@ -2453,7 +2467,7 @@ document.getElementById('sym-list').addEventListener('click', e => {
   // 点击品种行 → 切到该行自身数据源 + 品种（收藏行数据源可与当前图表不同）
   const row = e.target.closest('.wl-row');
   if (row) {
-    const s = symGroups.flatMap(g => g.symbols).find(x => x.name === row.dataset.sym && (x.ex || '') === row.dataset.ex);
+    const s = symGroups.flatMap(g => g.symbols).find(x => x.sym === row.dataset.real && (x.ex || '') === row.dataset.ex);
     if (s && s.sym) {
       if (s.ex && s.ex !== curExchange) switchExchange(s.ex, { symbol: s.sym });
       else switchSymbol(s.sym);
@@ -2497,6 +2511,15 @@ async function loadSrFull() {
       ((m && m.default_symbols) || []).map(s => ({ exchange: ex, source: m.label, region: m.region || 'global', symbol: s.symbol, name: s.name, type: s.type || '', code: s.code || s.symbol })));
   }
   symCode = Object.fromEntries((srFull || []).filter(r => r.code).map(r => [r.symbol, r.code]));
+    /* 旧收藏回填：name 曾存带前缀路由码→改为目录展示码；补中文描述（股票即股票名称） */
+    let wlChanged = false;
+    symGroups.forEach(g => g.symbols.forEach(s => {
+      const cat = srFull.find(r => r.exchange === s.ex && r.symbol === s.sym);
+      if (!cat) return;
+      if (cat.code && cat.code !== s.sym && s.name === s.sym) { s.name = cat.code; wlChanged = true; }
+      if (!s.desc && cat.name && cat.name !== s.sym) { s.desc = cat.name; wlChanged = true; }
+    }));
+    if (wlChanged) { saveWl(); renderSymbols(); }
 }
 function renderSrTabs() {
   const present = new Set((srFull || []).map(r => r.type).filter(Boolean));
@@ -2566,9 +2589,11 @@ document.getElementById('sr-body').addEventListener('click', e => {
   if (!row || row.classList.contains('added')) return;
   const ex = row.dataset.ex, sym = row.dataset.sym;
   if (srMode === 'add') {
-    /* 添加模式：仅加入目标分组并订阅价格，不切换图表品种（列表由用户显式管理） */
+    /* 添加模式：仅加入目标分组并订阅价格，不切换图表品种（列表由用户显式管理）。
+       name 取目录展示码（A 股去前缀纯数字），desc 为中文品种描述（股票即股票名称） */
     if (!srTargetGroup) return;
-    srTargetGroup.symbols.push({ name: sym, sym, ex, price: null, chg: '--' });
+    const cat = (srFull || []).find(r => r.exchange === ex && r.symbol === sym);
+    srTargetGroup.symbols.push({ name: (cat && cat.code) || sym, sym, ex, desc: (cat && cat.name && cat.name !== sym) ? cat.name : '', price: null, chg: '--' });
     saveWl();
     renderSymbols(); resyncListTopics(); refreshListPrices();
     renderSrResults();   // 该行标记“已添加”，可继续添加其它品种

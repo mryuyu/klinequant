@@ -120,8 +120,13 @@ def aggregate_daily(bars: list[dict], tf: str) -> list[dict]:
     return out
 
 
-def daily_need(tf: str, limit: int) -> int:
-    """派生周期 limit 根所需日 K 拉取量（每桶交易日估算 × 2 冗余，封顶防滥用）"""
+def daily_need(tf: str, limit: int, paging: bool = False) -> int:
+    """派生周期 limit 根所需日 K 拉取量（每桶交易日估算 × 2 冗余）
+
+    首页受 FETCH_DAILY_CAP 封顶防滥用；翻页（paging）按调用方请求量放行——
+    老品种月/季/年线要覆盖上市日（如 1991 年），日 K 需求远超 5000，
+    翻页本身已受前端 PAGE_SIZE 约束无滥用风险。
+    """
     parsed = parse_tf(tf)
     if parsed is None:
         raise ValueError(f"not a derived timeframe: {tf}")
@@ -134,7 +139,9 @@ def daily_need(tf: str, limit: int) -> int:
             per = n * 5 + 1
         else:   # NM 月倍率
             per = n * 22
-    return min(limit * per * 2, FETCH_DAILY_CAP)
+    need = limit * per * 2
+    # 翻页亦设宽上限（A 股全史 ≈ 9000 交易日，×2 冗余足够），避免无界拉取
+    return min(need, FETCH_DAILY_CAP * 4) if paging else min(need, FETCH_DAILY_CAP)
 
 
 async def fetch_derived_klines(
@@ -143,13 +150,26 @@ async def fetch_derived_klines(
     """派生周期历史 K 线：拉日 K 聚合（/klines 路由与指标预热共用入口）
 
     end_time 翻页语义不变（对日 K 区间查询后聚合，桶标签 <= end_time 过滤）。
+    日 K 单批受封顶约束时内部自动续拉更早批次，直到凑满 limit 根或数据源见底，
+    保证老品种月/季/年线一次请求即覆盖上市日（前端 noMoreData 语义不被首批封顶误导）。
     """
-    need = daily_need(tf, limit)
-    bars = await source.fetch_klines(symbol, "1d", limit=need, end_time=end_time)
-    out = aggregate_daily(bars or [], tf)
+    dailies: list[dict] = []
+    cursor = end_time
+    for _ in range(8):   # 批次上限防御（宽上限下 A 股全史两批内到底）
+        need = daily_need(tf, limit, paging=cursor is not None)
+        page = await source.fetch_klines(symbol, "1d", limit=need, end_time=cursor)
+        if not page:
+            break
+        dailies = page + dailies
+        if len(aggregate_daily(dailies, tf)) >= limit:
+            break
+        if len(page) < need:   # 未凑满但源已到底（返回量不足请求量）
+            break
+        cursor = min(int(b["timestamp"]) for b in page) - 1
+    out = aggregate_daily(dailies, tf)
     if end_time:
         out = [b for b in out if b["timestamp"] <= end_time]
     # 价格精度沿用源侧推导（日 K 价格批次累积，前端只渲染）
-    for b in (bars or [])[-20:]:
+    for b in dailies[-20:]:
         source._track_prec(symbol, [b["open"], b["high"], b["low"], b["close"]])
     return out[-limit:]

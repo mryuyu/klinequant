@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gateway.app import create_app
+from gateway.market_sources import kline_cache
 from gateway.market_sources.base import MarketSource
 from gateway.market_sources.manager import market_manager
 from gateway.state import state
@@ -69,11 +70,13 @@ def client():
 
 @pytest.fixture(autouse=True)
 def _isolate():
-    """每个用例独立引擎实例 + 清理假市场源注册"""
+    """每个用例独立引擎实例 + 清理假市场源注册与 K 线进程缓存"""
     state._indicator_engine = None
+    kline_cache.clear()
     yield
     market_manager._sources.pop("mockex", None)
     state._indicator_engine = None
+    kline_cache.clear()
 
 
 MACD_PARAMS = {"fast_period": 12, "slow_period": 26, "signal_period": 9}
@@ -167,7 +170,7 @@ class TestIndicatorHistory:
         data = resp.json()
         assert data["warmed"] is True
         assert data["count"] == 1200
-        # 目标深度 1200+34=1234：首预热后分页 1000+234，共 3 次拉取
+        # 目标深度 1200+34=1234：缓存层尾刷 3 根 + 缺口单页补齐（1140 根），共 3 次拉取
         assert src.fetch_calls == 3
         fetched = bars[-1234:]
         expect = _macd_full_last([b["close"] for b in fetched])

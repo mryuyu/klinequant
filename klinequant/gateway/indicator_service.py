@@ -8,8 +8,8 @@
 
 历史深度规则（迭代计划 v2.1）：历史拉取量 = max(显示需求, warmup_max)，
 REST 序列只含预热完成后的有效值（引擎侧剔除预热段）。
-前端 K 线懒加载翻页后显示需求增大，本模块向后分页加深预热深度
-（单页上限 1000，总量上限 _MAX_WARMUP_TOTAL）。
+前端 K 线懒加载翻页后显示需求增大，本模块向后分页加深预热深度；
+拉取统一走进程级 K 线缓存（kline_cache），与 REST 行情共享存量。
 """
 from __future__ import annotations
 
@@ -19,17 +19,19 @@ from typing import Any, Dict, Optional
 
 import polars as pl
 
-from gateway.market_sources.derived import fetch_derived_klines, is_derived
+from gateway.market_sources.kline_cache import cached_klines
 from gateway.state import state
 from gateway.ws import ws_manager
 from protocol.types import Kline
 
 logger = logging.getLogger(__name__)
 
-# 单页拉取上限（市场源 REST 单页上限 1000）
+# 加深阈值（一页 1000 根：差距不足一页时不值得重拉）
 _PAGE_FETCH_LIMIT = 1000
-# 预热总深度上限（前端 K 线数量上限 5000，超出部分无显示需求）
-_MAX_WARMUP_TOTAL = 5000
+# 预热总深度上限（对齐前端 PRELOAD_HARD_CAP：默认全量加载后 K 线可达 3 万根）
+_MAX_WARMUP_TOTAL = 30000
+# 已预热但显示需求继续增长时的加深阈值：差距不足一页时不重拉（预热完成态不回退，
+# 避免每次翻页都差几根触发全量重拉）；差距够大才按新目标重拉至数据源尽头/上限
 
 
 def _bars_to_df(bars: list[dict]) -> pl.DataFrame:
@@ -46,30 +48,6 @@ def _bars_to_df(bars: list[dict]) -> pl.DataFrame:
         "is_closed": [bool(b.get("is_closed", True)) for b in bars],
     })
 
-
-async def _fetch_depth(
-    source,
-    symbol: str,
-    timeframe: str,
-    target: int,
-) -> list[dict]:
-    """从最新向过去分页拉取 target 根 K 线（单页 _PAGE_FETCH_LIMIT）"""
-    bars: list[dict] = []
-    end_time: Optional[int] = None
-    while len(bars) < target:
-        n = min(_PAGE_FETCH_LIMIT, target - len(bars))
-        if is_derived(timeframe):
-            # 派生档位走与路由同款聚合入口（拉日 K 聚合，翻页语义一致）
-            page = await fetch_derived_klines(source, symbol, timeframe, limit=n, end_time=end_time)
-        else:
-            page = await source.fetch_klines(symbol, timeframe, limit=n, end_time=end_time)
-        if not page:
-            break
-        bars = page + bars  # 新页更早，前插
-        end_time = int(page[0]["timestamp"]) - 1
-        if len(page) < n:
-            break  # 无更早数据
-    return bars
 
 
 async def ensure_warmed(
@@ -88,7 +66,9 @@ async def ensure_warmed(
     engine = state.indicator_engine
     indicator = engine.ensure_indicator(name, params, symbol, exchange, timeframe)
     series_len = len(engine.get_series(name, params, symbol, exchange, timeframe))
-    if indicator.is_warmed_up and series_len >= need:
+    if series_len >= need:
+        return indicator
+    if indicator.is_warmed_up and need - series_len < _PAGE_FETCH_LIMIT:
         return indicator
 
     from gateway.market_sources.manager import market_manager
@@ -99,7 +79,9 @@ async def ensure_warmed(
 
     target = min(_MAX_WARMUP_TOTAL, need + indicator.min_periods)
     try:
-        bars = await _fetch_depth(source, symbol, timeframe, target)
+        # 走进程级 K 线缓存：与 REST 行情共享存量，同品种同周期重复预热零拉取；
+        # 缺口由缓存层自动向前补页（派生周期同样适用）
+        bars = await cached_klines(source, symbol, timeframe, target)
     except Exception as e:
         logger.error(f"Indicator warmup fetch failed [{exchange}] {symbol}/{timeframe}: {e}")
         return indicator

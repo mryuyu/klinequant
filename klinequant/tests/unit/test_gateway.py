@@ -84,8 +84,8 @@ class TestMarketAPI:
 
     def test_klines_param_validation(self, client):
         """K线接口参数校验"""
-        # limit > 1000 应被拒绝
-        resp = client.get("/api/market/klines?symbol=BTCUSDT&limit=2000")
+        # limit > 30000（对齐 PRELOAD_HARD_CAP）应被拒绝
+        resp = client.get("/api/market/klines?symbol=BTCUSDT&limit=30001")
         assert resp.status_code == 422
 
     def test_symbols_endpoint(self, client):

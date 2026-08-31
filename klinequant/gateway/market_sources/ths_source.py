@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
 import threading
@@ -38,8 +39,13 @@ _BJ = timezone(timedelta(hours=8))   # 不依赖 zoneinfo（A 股无夏令时，
 POLL_INTERVAL = float(os.getenv("THS_POLL_INTERVAL", "2.0"))   # 快照轮询间隔（秒）
 TICKER_CACHE_TTL = 2.0      # ticker 缓存（秒）：与轮询节奏相当，合并前端并发请求
 RECONNECT_COOLDOWN = 30.0   # 重连冷却（秒）
+_HEARTBEAT_INTERVAL = 60.0  # 盘外心跳间隔（秒）：会话空闲数十分钟后会静默劣化（单次调用退化到数十秒），
+                            # 盘外无轮询流量，靠小额拉取保活防休眠
 _MIN_SPACING = 0.03         # 驱动层调用最小间隔（秒，官方限频 20ms + 冗余）
+_CALL_TIMEOUT = 8.0         # 驱动单次调用超时（秒）：会话静默劣化后单次调用可退化到数十秒，
+                            # 超时即视为断连强制重连，避免拖死上层全部请求
 _MIN_PREC = 2               # A 股最小价格变动 0.01 元，精度下限 2 位
+_MAX_CHUNK = 8000           # thsdk 单次拉取实测上限（超出截断），更深历史靠区间分页拼接
 
 # 前端周期 → thsdk klines interval（thsdk 原生：1m/5m/15m/30m/60m/day/week）
 INTERVAL_MAP = {
@@ -198,7 +204,23 @@ class ThsApi:
                     time.sleep(wait)
                 self._last_call = time.monotonic()
                 try:
-                    r = fn(self._ths)
+                    # 超时护栏：正常调用 <1s；劣化会话单次可达数十秒，届时丢弃本连接，
+                    # 由下次调用经 _ensure_locked 重连（SDK 线程不可强杀，任其自然退出）。
+                    # 每次新建执行器（非复用）：挂死线程会占据单线程池队列，令后续调用排队挂死；
+                    # 新建开销（~1ms）相对 30ms 调用间隔可忽略；不用 with 语句，
+                    # 其 shutdown(wait=True) 会被挂死线程反向卡住。
+                    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    try:
+                        r = ex.submit(fn, self._ths).result(timeout=_CALL_TIMEOUT)
+                    finally:
+                        ex.shutdown(wait=False)
+                except concurrent.futures.TimeoutError:
+                    logger.warning("THS call timeout >%.0fs, forcing reconnect", _CALL_TIMEOUT)
+                    # 劣化会话的 disconnect 同样可能挂死：不走 _mark_broken，
+                    # 直接丢弃引用（旧连接任其自然关闭）
+                    self.connected = False
+                    self._ths = None
+                    return None
                 except Exception as e:
                     logger.debug(f"THS call exception: {e}")
                     self._mark_broken()
@@ -337,15 +359,46 @@ class ThsSource(MarketSource):
             raise ValueError(f"THS unsupported timeframe: {timeframe}")
         code = _normalize_code(symbol)
         if end_time:
-            # 翻页加深：按 end_time（含）向前回溯（窗口留 2 倍冗余防缺口）
+            # 翻页加深：按 end_time（含）向前回溯（窗口留 2 倍冗余防缺口）。
+            # thsdk 单次限 _MAX_CHUNK 根，需求超出时按时间区间分页拼接，
+            # 否则老品种（如 1991 上市）深分页永远卡在单次上限处。
             dt_to = datetime.fromtimestamp(end_time / 1000, tz=timezone.utc)
-            dt_from = dt_to - timedelta(seconds=TF_SECONDS[timeframe] * limit * 2)
-            rows = await asyncio.to_thread(
-                self._driver.klines, code, interval, None, dt_from, dt_to
-            )
+            tf_sec = TF_SECONDS[timeframe]
+            chunks: list[dict] = []
+            seen_ts: set[int] = set()
+            remaining = limit
+            while remaining > 0:
+                take = min(remaining, _MAX_CHUNK)
+                dt_from = dt_to - timedelta(seconds=tf_sec * take * 2)
+                page = await asyncio.to_thread(
+                    self._driver.klines, code, interval, None, dt_from, dt_to
+                )
+                if page is None:
+                    break   # 无数据（窗口越过上市日）或中段失败：已拿部分照常返回，
+                    # 空窗返回 []（非报错），供上层判定源尽头
+                new = 0
+                for r in page:
+                    ts = _to_epoch_ms(r["时间"])
+                    if ts not in seen_ts:
+                        seen_ts.add(ts)
+                        chunks.append(r)
+                        new += 1
+                if not new:
+                    break   # 无新增（窗口前已无更早数据）
+                remaining = limit - len(chunks)
+                # 无条件继续前翻：thsdk 存在低于 _MAX_CHUNK 的隐式单次截断（保留最新段，
+                # 实测日线约 6000 根），截断与“到达尽头”在单页内不可区分（最旧根都未触窗起点），
+                # 只能靠继续前翻验证：还有更早数据则非空续拉，否则空页自然终止。
+                dt_to = datetime.fromtimestamp(
+                    min(_to_epoch_ms(r["时间"]) for r in page) / 1000, tz=timezone.utc
+                ) - timedelta(seconds=1)
+            rows = sorted(chunks, key=lambda r: _to_epoch_ms(r["时间"]))
         else:
-            rows = await asyncio.to_thread(self._driver.klines, code, interval, limit)
+            rows = await asyncio.to_thread(
+                self._driver.klines, code, interval, min(limit, _MAX_CHUNK)
+            )
         if rows is None:
+            # 裸拉无参路径：无窗口兜底，None 视为真实失败（非尽头）
             raise RuntimeError(f"THS klines failed for {code}/{timeframe}")
         bars = [self._to_bar(r) for r in rows]
         for b in bars[-20:]:
@@ -392,7 +445,12 @@ class ThsSource(MarketSource):
         while True:
             now_bj = datetime.now(_BJ)
             if not self._session_open(now_bj):
-                await asyncio.sleep(30)
+                # 盘外：心跳保活（小额日 K 拉取）防会话空闲劣化；失败交给下次心跳/使用时重连
+                try:
+                    await asyncio.to_thread(self._driver.klines, "USHI1A0001", "day", 1)
+                except Exception:
+                    pass
+                await asyncio.sleep(_HEARTBEAT_INTERVAL)
                 continue
             targets = market_manager.active_targets(self.name)
             if not targets:

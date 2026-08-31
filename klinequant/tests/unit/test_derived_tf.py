@@ -129,10 +129,16 @@ def test_aggregate_reject_native():
 def test_daily_need():
     assert daily_need("1M", 10) == 10 * 22 * 2
     assert daily_need("1Q", 5) == 5 * 65 * 2
-    assert daily_need("1Y", 1000) == FETCH_DAILY_CAP   # 封顶
+    assert daily_need("1Y", 1000) == FETCH_DAILY_CAP   # 首页封顶
     assert daily_need("2d", 100) == 100 * 2 * 2        # per = round(10/7)+1 = 2
     with pytest.raises(ValueError):
         daily_need("1d", 10)
+
+
+def test_daily_need_paging():
+    """翻页放行：老品种月/季/年线覆盖上市日（如 1991）需远超首页封顶的日 K"""
+    assert daily_need("1M", 1000, paging=True) == FETCH_DAILY_CAP * 4   # 宽上限封顶
+    assert daily_need("1M", 10, paging=True) == 10 * 22 * 2             # 小需求原样放行
 
 
 # ─── fetch_derived_klines（假源） ───
@@ -160,6 +166,26 @@ async def test_fetch_derived_limit_and_call():
     assert len(out) == 1 and out[0]["timestamp"] == _bj_ms(2026, 8, 1)   # 只留末桶
     assert src.calls[0][1] == "1d"                                        # 拉日 K 聚合
     assert src.prec                                                       # 精度批次累积
+
+
+async def test_fetch_derived_paging_need():
+    """带 end_time 翻页时日 K 需求按翻页宽上限放行（不受首页 5000 封顶卡死）"""
+    days = [_day(_bj_ms(2026, 8, d), 1, 1, 1, 1, 1) for d in (30, 31)]
+    src = _FakeSource(days)
+    await fetch_derived_klines(src, "TEST", "1M", limit=1000, end_time=_bj_ms(2026, 8, 31))
+    assert src.calls[0][2] == FETCH_DAILY_CAP * 4
+
+
+async def test_fetch_derived_multi_batch(monkeypatch):
+    """首批受封顶不足时自动续拉更早批次（首页月线也能拿全上市至今）"""
+    import gateway.market_sources.derived as derived_mod
+    monkeypatch.setattr(derived_mod, "FETCH_DAILY_CAP", 5)
+    days = [_day(_bj_ms(2025, 12, d), 1, 1, 1, 1, 1) for d in range(1, 32)]
+    days += [_day(_bj_ms(2026, 1, d), 1, 1, 1, 1, 1) for d in range(1, 32)]
+    src = _FakeSource(days)
+    out = await fetch_derived_klines(src, "TEST", "1M", limit=2)
+    assert [b["timestamp"] for b in out] == [_bj_ms(2025, 12, 1), _bj_ms(2026, 1, 1)]
+    assert len(src.calls) >= 2   # 首批受封顶触发了续拉
 
 
 async def test_fetch_derived_end_time_filter():

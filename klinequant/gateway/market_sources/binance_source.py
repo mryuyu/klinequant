@@ -82,30 +82,47 @@ class BinanceSource(MarketSource):
         limit: int = 200,
         end_time: int | None = None,
     ) -> list[dict]:
-        params: dict = {"symbol": symbol.upper(), "interval": timeframe, "limit": limit}
-        if end_time:
-            params["endTime"] = end_time
-        async with httpx.AsyncClient(proxy=HTTP_PROXY or None, timeout=10.0) as client:
-            resp = await client.get(f"{BINANCE_REST_BASE}/api/v3/klines", params=params)
-            resp.raise_for_status()
-            raw = resp.json()
-        # 从订阅到的原始字符串价格推导品种显示精度（随 klines 响应下发，前端只渲染）
-        self._track_prec(
-            symbol,
-            [p for k in raw for p in (k[1], k[2], k[3], k[4])],
-        )
-        return [
-            {
-                "timestamp": int(k[0]),
-                "open": float(k[1]),
-                "high": float(k[2]),
-                "low": float(k[3]),
-                "close": float(k[4]),
-                "volume": float(k[5]),
-                "event_ms": 0,
-            }
-            for k in raw
-        ]
+        # 币安 REST 单次限 1000 根：需求超出时按 endTime 分页拼接，
+        # 否则派生周期深分页会被静默截断（返回量不足被误判为数据源尽头）
+        chunks: list[dict] = []
+        cursor = end_time
+        remaining = limit
+        while remaining > 0:
+            take = min(remaining, 1000)
+            params: dict = {"symbol": symbol.upper(), "interval": timeframe, "limit": take}
+            if cursor:
+                params["endTime"] = cursor
+            async with httpx.AsyncClient(proxy=HTTP_PROXY or None, timeout=10.0) as client:
+                resp = await client.get(f"{BINANCE_REST_BASE}/api/v3/klines", params=params)
+                resp.raise_for_status()
+                raw = resp.json()
+            # 从订阅到的原始字符串价格推导品种显示精度（随 klines 响应下发，前端只渲染）
+            self._track_prec(
+                symbol,
+                [p for k in raw for p in (k[1], k[2], k[3], k[4])],
+            )
+            page = [
+                {
+                    "timestamp": int(k[0]),
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5]),
+                    "event_ms": 0,
+                }
+                for k in raw
+            ]
+            if not page:
+                break
+            chunks = page + chunks
+            if len(page) < take:
+                break   # 返回量不足请求量 → 已到上市/数据源尽头
+            remaining = limit - len(chunks)
+            if remaining <= 0:
+                break
+            cursor = page[0]["timestamp"] - 1
+        return chunks[-limit:]
 
     async def fetch_ticker(self, symbol: str) -> dict | None:
         async with httpx.AsyncClient(proxy=HTTP_PROXY or None, timeout=10.0) as client:

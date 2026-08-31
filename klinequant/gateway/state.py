@@ -76,7 +76,7 @@ class AppState:
             from core.indicator_engine.engine import IndicatorEngine
             import core.indicator_engine.indicators  # noqa: F401
             import custom_indicators  # noqa: F401  def 式自定义指标自动注册（IND-110）
-            self._indicator_engine = IndicatorEngine()
+            self._indicator_engine = IndicatorEngine(max_cache_size=30000)   # 对齐前端 PRELOAD_HARD_CAP：深历史指标序列不被截断
             self._indicator_engine.start()
         return self._indicator_engine
 

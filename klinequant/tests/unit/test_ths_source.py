@@ -160,6 +160,29 @@ async def test_fetch_klines_end_time_paging():
     assert count is None and start is not None and end_arg is not None   # 翻页走区间查询
 
 
+async def test_fetch_klines_deep_paging_across_chunk_cap(monkeypatch):
+    """超单次拉取上限的深分页：区间分页拼接拿全更早历史（上市至今覆盖）"""
+    import gateway.market_sources.ths_source as ths_mod
+    monkeypatch.setattr(ths_mod, "_MAX_CHUNK", 2)   # 模拟 thsdk 单次上限截断
+    days = [datetime(2026, 8, d) for d in range(24, 29)]   # 5 根连续日 K
+    rows = [_kline_row(d, i + 1, i + 1, i + 1, i + 1, i + 1) for i, d in enumerate(days)]
+
+    class _WindowedDriver(_FakeThsDriver):
+        """区间查询按 [start, end] 过滤 + 单次上限截断（仿 thsdk 实测行为）"""
+        def klines(self, code, interval, count=None, start=None, end=None):
+            self.klines_calls.append((code, interval, count, start, end))
+            if count is not None:
+                return rows[-count:]
+            hit = [r for r in rows if start <= r["时间"].replace(tzinfo=_BJ) <= end]
+            return hit[-ths_mod._MAX_CHUNK:]
+
+    src = ThsSource(driver=_WindowedDriver())
+    bars = await src.fetch_klines(
+        "600519", "1d", limit=5, end_time=_bj_ms(days[-1].replace(tzinfo=_BJ))
+    )
+    assert [b["close"] for b in bars] == [1.0, 2.0, 3.0, 4.0, 5.0]   # 5 根全量拿齐
+
+
 # ─── fetch_ticker：快照字段映射 + 缓存 ───
 
 async def test_fetch_ticker_from_snapshot():

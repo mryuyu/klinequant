@@ -18,7 +18,8 @@ import httpx
 from fastapi import APIRouter, Query
 
 from gateway.market_sources.binance_source import BINANCE_REST_BASE, HTTP_PROXY
-from gateway.market_sources.derived import fetch_derived_klines, is_derived
+from gateway.market_sources.derived import is_derived
+from gateway.market_sources.kline_cache import cached_klines
 from gateway.market_sources.manager import market_manager
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ async def get_sources():
 async def get_klines(
     symbol: str = Query("BTCUSDT", description="交易对，如 BTCUSDT / EURUSD"),
     timeframe: str = Query("1h", description="K线周期"),
-    limit: int = Query(200, ge=1, le=1000, description="数量"),
+    limit: int = Query(200, ge=1, le=30000, description="数量（上限对齐前端 PRELOAD_HARD_CAP；各源插件内部分页支撑大页请求）"),
     start_time: Optional[int] = Query(None, description="起始时间戳(ms)"),
     end_time: Optional[int] = Query(None, description="结束时间戳(ms)"),
     exchange: Optional[str] = Query(None, description="市场源（binance/ig），缺省默认所"),
@@ -61,14 +62,10 @@ async def get_klines(
         return {"symbol": symbol, "timeframe": timeframe, "exchange": ex, "count": 0, "data": []}
 
     try:
-        if derived:
-            data = await fetch_derived_klines(
-                source, symbol, timeframe, limit=limit, end_time=end_time or None
-            )
-        else:
-            data = await source.fetch_klines(
-                symbol, timeframe, limit=limit, end_time=end_time or None
-            )
+        # 进程级缓存：同品种同周期来回切换免重复拉取/聚合（原生与派生同层，含尾部未收盘 bar 刷新）
+        data = await cached_klines(
+            source, symbol, timeframe, limit=limit, end_time=end_time or None
+        )
         # start_time 过滤（插件接口统一用 end_time 翻页，起始过滤在网关侧做）
         if start_time:
             data = [k for k in data if k["timestamp"] >= start_time]
