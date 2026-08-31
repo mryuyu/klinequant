@@ -1,6 +1,8 @@
-"""本地 MT5 市场源插件单测（fake 驱动注入，不依赖真实终端）"""
+"""本地 MT5 市场源插件单测（fake 驱动注入，不依赖真实终端）
+
+driver 层返回值契约：symbol_info/symbol_info_tick/symbols_get 回传普通 dict（子进程管道回传经 _pipe_safe 转换，匿名 namedtuple 不可 pickle）。
+"""
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
@@ -34,7 +36,7 @@ class _FakeMt5:
     def symbol_info(self, symbol):
         if symbol not in self.symbols:
             return None
-        return SimpleNamespace(digits=self.digits)
+        return {"digits": self.digits}
 
     def symbol_info_tick(self, symbol):
         return self.tick
@@ -54,6 +56,19 @@ def _row(sec: int, close: float, tick_vol: int = 10, real_vol: int = 0) -> dict:
     return {"time": sec, "open": close - 0.0001, "high": close + 0.0002,
             "low": close - 0.0003, "close": close,
             "tick_volume": tick_vol, "real_volume": real_vol}
+
+
+def test_pipe_safe_converts_unpicklable_namedtuple():
+    """匿名 namedtuple（__module__=builtins）不可 pickle → 转 dict 回传（digits 丢失致精度污染 8 位的根因回归）"""
+    from collections import namedtuple
+
+    from gateway.market_sources.mt5_source import _pipe_safe
+
+    Info = namedtuple("SymbolInfo", ["digits", "visible"])
+    Info.__module__ = "builtins"   # MetaTrader5 包 C 层构造的真实形态
+    assert _pipe_safe(Info(5, True)) == {"digits": 5, "visible": True}
+    assert _pipe_safe([Info(3, True)]) == [{"digits": 3, "visible": True}]
+    assert _pipe_safe(None) is None and _pipe_safe(True) is True and _pipe_safe(1.5) == 1.5
 
 
 def test_timeframe_map_covers_frontend():
@@ -121,7 +136,7 @@ async def test_price_precision_from_digits_not_derived():
 
 
 async def test_fetch_ticker_mid_and_stats():
-    tick = SimpleNamespace(bid=1.15578, ask=1.15590, time=0)
+    tick = {"bid": 1.15578, "ask": 1.15590, "time": 0}
     h1 = [_row(1786000000 + i * 3600, 1.15 + i * 0.0001) for i in range(25)]
     d1 = [_row(1785900000, 1.15), _row(1786000000, 1.155)]
     drv = _FakeMt5(rows=h1, tick=tick)
@@ -176,14 +191,14 @@ async def test_reconnect_on_connection_lost():
 async def test_list_symbols_classify_by_path():
     """path 顶层目录归资产类别；Commodities 二级细分；非 FULL 不可交易品种过滤"""
     catalog = [
-        SimpleNamespace(name="EURUSD", description="Euro vs US Dollar", path="Forex\\EURUSD", trade_mode=4),
-        SimpleNamespace(name="XAUUSD", description="Gold vs US Dollar", path="Commodities\\Metals\\XAUUSD", trade_mode=4),
-        SimpleNamespace(name="XTIUSD", description="Crude Oil", path="Commodities\\Energies\\Energies Spot\\XTIUSD", trade_mode=4),
-        SimpleNamespace(name="US500", description="S&P 500", path="Indices\\Indices Spot\\Major Spot Indices\\US500", trade_mode=4),
-        SimpleNamespace(name="BTCUSD", description="Bitcoin", path="Crypto\\BTCUSD", trade_mode=4),
-        SimpleNamespace(name="AAPL.NASDAQ", description="Apple", path="Stock CFD's\\NASDAQ\\AAPL.NASDAQ", trade_mode=4),
-        SimpleNamespace(name="UST10Y_U6", description="US 10Y Bond", path="Bonds CFDs\\UST10Y_U6", trade_mode=4),
-        SimpleNamespace(name="CLOSED", description="closed", path="Forex\\CLOSED", trade_mode=0),
+        {"name": "EURUSD", "description": "Euro vs US Dollar", "path": "Forex\\EURUSD", "trade_mode": 4},
+        {"name": "XAUUSD", "description": "Gold vs US Dollar", "path": "Commodities\\Metals\\XAUUSD", "trade_mode": 4},
+        {"name": "XTIUSD", "description": "Crude Oil", "path": "Commodities\\Energies\\Energies Spot\\XTIUSD", "trade_mode": 4},
+        {"name": "US500", "description": "S&P 500", "path": "Indices\\Indices Spot\\Major Spot Indices\\US500", "trade_mode": 4},
+        {"name": "BTCUSD", "description": "Bitcoin", "path": "Crypto\\BTCUSD", "trade_mode": 4},
+        {"name": "AAPL.NASDAQ", "description": "Apple", "path": "Stock CFD's\\NASDAQ\\AAPL.NASDAQ", "trade_mode": 4},
+        {"name": "UST10Y_U6", "description": "US 10Y Bond", "path": "Bonds CFDs\\UST10Y_U6", "trade_mode": 4},
+        {"name": "CLOSED", "description": "closed", "path": "Forex\\CLOSED", "trade_mode": 0},
     ]
     src = Mt5Source(driver=_FakeMt5(catalog=catalog))
     rows = await src.list_symbols()

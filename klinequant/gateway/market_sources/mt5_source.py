@@ -83,6 +83,23 @@ _ASSET_TYPE_BY_PATH = {
 }
 
 
+def _pipe_safe(val):
+    """结果转可 pickle 形式后再经管道回传（2026-09-01 实证）
+
+    MetaTrader5 包的 symbol_info/symbol_info_tick/symbols_get 返回 C 层构造的
+    匿名 namedtuple，其 __module__ 为 builtins，pickle 序列化直接失败，导致父进程
+    收 None：digits 真值丢失→精度退回价格推导被浮点尾差污染到 8 位（外汇价格多显 000）。
+    统一转普通 dict（消费方均属性/键访问兼容：_probe_symbols/_ensure_digits/list_symbols）。
+    """
+    if val is None or isinstance(val, (bool, int, float, str, bytes)):
+        return val
+    if hasattr(val, "_asdict"):
+        return val._asdict()
+    if isinstance(val, (list, tuple)):
+        return [v._asdict() if hasattr(v, "_asdict") else v for v in val]
+    return val   # numpy 结构数组等本身可 pickle（copy_rates 路径）
+
+
 def _mt5_worker(conn) -> None:
     """MT5 子进程工作循环：经管道接收 (op, payload)，回发 ("ok", 结果)/("err", 描述)
 
@@ -107,7 +124,7 @@ def _mt5_worker(conn) -> None:
                 conn.send(("ok", bool(_mt5w.initialize(allow_none=True, **payload))))
             elif op == "call":
                 name, args = payload
-                conn.send(("ok", getattr(_mt5w, name)(*args)))
+                conn.send(("ok", _pipe_safe(getattr(_mt5w, name)(*args))))
             elif op == "shutdown":
                 _mt5w.shutdown()
                 conn.send(("ok", None))
@@ -351,7 +368,7 @@ class Mt5Source(MarketSource):
         for item in self.default_symbols:
             info = self._driver.symbol_info(item["symbol"])
             if info is not None:
-                self._digits[item["symbol"].upper()] = int(info.digits)
+                self._digits[item["symbol"].upper()] = int(info["digits"])
                 kept.append(item)
         if kept:
             self.default_symbols = kept
@@ -368,7 +385,7 @@ class Mt5Source(MarketSource):
         if symbol not in self._digits:
             info = self._driver.symbol_info(symbol)
             if info is not None:
-                self._digits[symbol] = int(info.digits)
+                self._digits[symbol] = int(info["digits"])
 
     # ─── 精度：digits 优先（订阅到的市场元数据），价格推导兜底 ───
 
@@ -387,15 +404,15 @@ class Mt5Source(MarketSource):
             return await super().list_symbols()
         out = []
         for s in rows:
-            if int(s.trade_mode) != _TRADE_MODE_FULL:
+            if int(s["trade_mode"]) != _TRADE_MODE_FULL:
                 continue
-            parts = (s.path or "").split("\\")
+            parts = (s["path"] or "").split("\\")
             top = parts[0]
             if top == "Commodities":
                 atype = "metal" if len(parts) > 1 and parts[1] == "Metals" else "commodity"
             else:
                 atype = _ASSET_TYPE_BY_PATH.get(top, "")
-            out.append({"symbol": s.name, "name": s.description or s.name, "type": atype})
+            out.append({"symbol": s["name"], "name": s["description"] or s["name"], "type": atype})
         return out
 
     # ─── REST 历史 K 线 / 行情摘要 ───
@@ -467,8 +484,8 @@ class Mt5Source(MarketSource):
             return cached[1]
         sym = symbol.upper()
         tick = await asyncio.to_thread(self._tick_sync, sym)
-        bid = getattr(tick, "bid", None) if tick is not None else None
-        ask = getattr(tick, "ask", None) if tick is not None else None
+        bid = tick.get("bid") if tick is not None else None
+        ask = tick.get("ask") if tick is not None else None
         if not bid and not ask:
             # 无报价（休市/终端断连）：用最新 K 线构造 ticker
             result = await self._ticker_from_candles(sym)
@@ -552,12 +569,18 @@ class Mt5Source(MarketSource):
     # ─── 实时流：终端轮询（MetaTrader5 包无推送接口） ───
 
     async def stream_loop(self) -> None:
-        if not self.available:
-            logger.warning("MT5 source unavailable: terminal not connected, stream loop idle")
-            while True:
-                await asyncio.sleep(60)
         logger.info(f"MT5 source stream started (mode=terminal-poll, interval={POLL_INTERVAL}s)")
         while True:
+            if not self.available:
+                # 不可用不再永久 idle（2026-09-01 实证：旧逻辑睡 60s 死循环不再触发重连，
+                # 源掉线后只能靠用户请求碰驱动冷却重建，页面报「未返回 K 线数据」久不自愈）；
+                # 重连含子进程拉起 + 8s poll，必须工作线程执行——同步直调曾把事件循环
+                # 堵死 10s（全线程栈实证），期间全部 HTTP/WS 停摆
+                logger.warning("MT5 source unavailable: terminal not connected, retrying every 30s")
+                while not self.available:
+                    await asyncio.to_thread(self._try_reconnect)
+                    if not self.available:
+                        await asyncio.sleep(RECONNECT_COOLDOWN)
             targets = sorted(market_manager.active_targets(self.name))
             if not targets:
                 await asyncio.sleep(2)
@@ -571,7 +594,7 @@ class Mt5Source(MarketSource):
                         self._klines_sync, sym, TIMEFRAME_MAP[tf], tf, 1, None, None
                     )
                     if rows is None:
-                        self._try_reconnect()
+                        await asyncio.to_thread(self._try_reconnect)
                         break
                     if rows:
                         bar = self._to_bar(rows[-1])

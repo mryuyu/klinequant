@@ -683,8 +683,8 @@ const IND_LAYOUT_DEFAULT = [
 let indLayout = [];
 if (savedLayout && Array.isArray(savedLayout.indLayout) && savedLayout.indLayout.every(x => IND_CATALOG[x.type] || (x.type === 'custom' && x.name))) {
   indLayout = savedLayout.indLayout.map(x => x.type === 'custom'
-    ? { type: 'custom', name: x.name, params: { ...x.params } }
-    : { type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params } });
+    ? { type: 'custom', name: x.name, params: { ...x.params }, styleUI: x.styleUI ?? null }
+    : { type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params }, styleUI: x.styleUI ?? null });   // styleUI（逐线颜色/线型/柱四色/参考线）须随条目恢复，否则刷新后自选样式丢失（2026-09-01 实证）
 } else {
   indLayout = IND_LAYOUT_DEFAULT.map(x => ({ type: x.type, params: { ...x.params } }));
   if (savedLayout && savedLayout.indParams) {
@@ -1540,10 +1540,27 @@ async function load() {
        更早历史由左滑按需续载（loadMore），直至数据源尽头 */
     const gen = loadGen;
     const need = PAGE_SIZE;
-    const firstPage = await fetchPage(need, null);
-    if (gen !== loadGen) return;   // 拉取期间已切换，丢弃
-    klines = firstPage.bars;
-    if (!klines.length) { setSb('✕ 未返回 K 线数据'); return; }
+    /* 瞬时失败自动重试：市场源会话劣化/终端掉线时后端有 30s 冷却自愈重建，
+       前端重试两次覆盖恢复窗口，避免页面停在 ✕ 需手动刷新（2026-09-01 MT5 掉线实证） */
+    let firstPage = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        firstPage = await fetchPage(need, null);
+        if (gen !== loadGen) return;   // 拉取期间已切换，丢弃
+        if (firstPage.bars.length) break;
+      } catch (e) {
+        if (gen !== loadGen) return;
+        if (attempt >= 3) throw e;
+        console.warn(`load attempt ${attempt} failed:`, e);
+        firstPage = null;
+      }
+      if (attempt >= 3) break;
+      setSb(`◉ 数据源暂不可用，重试中（${attempt}/2）…`);
+      await new Promise(r => setTimeout(r, 4000));
+      if (gen !== loadGen) return;
+    }
+    klines = firstPage ? firstPage.bars : [];
+    if (!klines.length) { setSb('✕ 未返回 K 线数据（数据源可能暂不可用，稍后切换品种/周期重试）'); return; }
     if (klines.length < need) noMoreData = true;
     /* Y 轴/十字线精度：消费后端按订阅价格推导的精度（前端只渲染不推导），
        后端未下发时才本地兜底 */
