@@ -83,11 +83,47 @@ class OrderType(str, Enum):
     STOP_LIMIT = "STOP_LIMIT"
 
 
+class OrderKind(str, Enum):
+    """v2 订单价格类型"""
+    MARKET = "MARKET"
+    LIMIT = "LIMIT"
+    STOP_MARKET = "STOP_MARKET"
+    STOP_LIMIT = "STOP_LIMIT"
+
+
+class Offset(str, Enum):
+    """v2 开平方向"""
+    OPEN = "OPEN"
+    CLOSE = "CLOSE"
+
+
+class Tif(str, Enum):
+    """v2 时效"""
+    GTC = "GTC"
+    IOC = "IOC"
+    FOK = "FOK"
+    DAY = "DAY"
+    GTD = "GTD"
+
+
+class DeadReason(str, Enum):
+    """v2 订单死亡原因"""
+    CANCELED = "CANCELED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+    TIMEOUT = "TIMEOUT"
+    FAILED = "FAILED"
+
+
 class OrderStatus(str, Enum):
+    # ── v2 三态（FX 订单系统使用）──
+    IN_FLIGHT = "IN_FLIGHT"
+    FILLED = "FILLED"
+    DEAD = "DEAD"
+    # ── Legacy（crypto executor 使用，待迁移后删除）──
     PENDING = "PENDING"
     SUBMITTED = "SUBMITTED"
     PARTIAL_FILLED = "PARTIAL"
-    FILLED = "FILLED"
     CANCELING = "CANCELING"
     CANCELED = "CANCELED"
     REJECTED = "REJECTED"
@@ -97,6 +133,11 @@ class OrderStatus(str, Enum):
 
 # 合法状态流转表
 _VALID_TRANSITIONS: Dict[OrderStatus, set[OrderStatus]] = {
+    # v2 三态
+    OrderStatus.IN_FLIGHT: {OrderStatus.FILLED, OrderStatus.DEAD},
+    OrderStatus.FILLED: set(),
+    OrderStatus.DEAD: set(),
+    # Legacy
     OrderStatus.PENDING: {
         OrderStatus.SUBMITTED,
         OrderStatus.FAILED,
@@ -119,8 +160,6 @@ _VALID_TRANSITIONS: Dict[OrderStatus, set[OrderStatus]] = {
         OrderStatus.FILLED,
         OrderStatus.PARTIAL_FILLED,
     },
-    # 终态不允许再流转
-    OrderStatus.FILLED: set(),
     OrderStatus.CANCELED: set(),
     OrderStatus.REJECTED: set(),
     OrderStatus.EXPIRED: set(),
@@ -172,10 +211,18 @@ class Order:
 @dataclass
 class Position:
     symbol: str
-    exchange: str
-    side: str  # "LONG" / "SHORT" / "FLAT"
-    quantity: Decimal
-    avg_entry_price: Decimal
+    exchange: str = ""
+    # ── Legacy 字段（crypto executor 使用）──
+    side: str = "FLAT"              # "LONG" / "SHORT" / "FLAT"
+    quantity: Decimal = Decimal("0")
+    # ── v2 字段（FX 订单系统使用）──
+    tag: str = ""                   # 策略/周期标识
+    volume: Decimal = Decimal("0")  # signed（+多/-空）
+    in_flight: Decimal = Decimal("0")   # 在途净敞口
+    effective: Decimal = Decimal("0")   # volume + in_flight
+    available_to_close: Decimal = Decimal("0")
+    # ── 共享 ──
+    avg_entry_price: Decimal = Decimal("0")
     unrealized_pnl: Decimal = Decimal("0")
     realized_pnl: Decimal = Decimal("0")
     margin: Decimal = Decimal("0")
@@ -237,6 +284,32 @@ class Account:
 
 
 # ─────────────────────────────────────────────
+# §5.6b v2 订单结果与挂单
+# ─────────────────────────────────────────────
+@dataclass
+class OrderResult:
+    """策略 send_order 的即时返回"""
+    ok: bool
+    order_id: str = ""
+    reason: str = ""              # 拒绝原因（ok=False 时）
+    filled_qty: Decimal = Decimal("0")
+    filled_price: Decimal = Decimal("0")
+
+
+@dataclass
+class PendingOrder:
+    """未终结挂单视图（策略用 pending_orders() 读取）"""
+    order_id: str
+    symbol: str
+    side: OrderSide
+    offset: Offset
+    qty: Decimal
+    price: Optional[Decimal] = None
+    kind: OrderKind = OrderKind.MARKET
+    created_at: int = 0
+
+
+# ─────────────────────────────────────────────
 # §5.7 指标值
 # ─────────────────────────────────────────────
 @dataclass(frozen=True)
@@ -254,25 +327,26 @@ class IndicatorValue:
 # ─────────────────────────────────────────────
 @dataclass(frozen=True)
 class SymbolInfo:
-    symbol: str  # 内部统一标识 "BTC-USDT"
-    exchange: str
-    base_currency: str  # "BTC"
-    quote_currency: str  # "USDT"
-    price_precision: int
-    qty_precision: int
-    min_qty: Decimal
-    min_notional: Decimal
-    tick_size: Decimal
-    market_type: str = "SPOT"  # "SPOT" / "FUTURES" / "SWAP"
-    status: str = "ACTIVE"  # "ACTIVE" / "SUSPENDED" / "DELISTED"
-
-    def __post_init__(self) -> None:
-        if self.price_precision < 0:
-            raise ValueError(f"price_precision ({self.price_precision}) must >= 0")
-        if self.qty_precision < 0:
-            raise ValueError(f"qty_precision ({self.qty_precision}) must >= 0")
-        if self.min_qty <= 0:
-            raise ValueError(f"min_qty ({self.min_qty}) must > 0")
+    symbol: str  # 内部统一标识 "BTC-USDT" / "EURUSD"
+    exchange: str = ""
+    base_currency: str = ""
+    quote_currency: str = ""
+    price_precision: int = 0
+    qty_precision: int = 0
+    min_qty: Decimal = Decimal("0")
+    min_notional: Decimal = Decimal("0")
+    tick_size: Decimal = Decimal("0")
+    market_type: str = "SPOT"  # "SPOT" / "FUTURES" / "SWAP" / "FX"
+    status: str = "ACTIVE"
+    # ── v2 扩展字段（FX 订单系统使用）──
+    qty_unit: str = ""              # "LOT" / "BTC" / "手" / "股"
+    qty_step: Decimal = Decimal("0")
+    qty_max: Decimal = Decimal("0")
+    pip_size: Decimal = Decimal("0")
+    contract_multiplier: Decimal = Decimal("0")
+    can_short: bool = True
+    t_plus_n: int = 0
+    close_priority: str = "net"     # ClosePolicy 映射键
 
 
 # ─────────────────────────────────────────────

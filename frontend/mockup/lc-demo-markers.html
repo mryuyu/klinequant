@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KlineQuant v1.1 轻量版 — 真实数据演示</title>
+<title>KlineQuant DEMO — 信号标记试验页（非基线）</title>
 <style>
 /* ═══ 设计 Tokens（V1 已定版配色） ═══ */
 :root {
@@ -51,20 +51,12 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .ticker-item { display:flex; flex-direction:column; gap:1px; }
 .ticker-label { font-size:10px; color:var(--text-sub); }
 .ticker-value { font-size:13px; font-weight:600; }
-/* 右上角「交易」按钮：扁平化按钮框（主题深色填充 + 细边框，无蓝/绿），文字与标题同格式；面板隐藏时文字置灰 */
-.topbar-btn { margin-left:auto; display:flex; align-items:center; height:30px; padding:0 14px; background:var(--bg-elevated); border:1px solid var(--border-light); border-radius:6px; font-family:var(--font-ui); font-size:14px; font-weight:700; color:var(--text-sub); cursor:pointer; transition:background .15s,border-color .15s,color .15s; }
-.topbar-btn.active { color:var(--text); }
-.topbar-btn:hover { background:#333844; border-color:#4a4f5c; color:#fff; }
-.topbar-btn:active { background:#262a34; }
 .dot { width:7px; height:7px; border-radius:50%; background:#0ecb81; animation:pulse 2s infinite; display:inline-block; }   /* 连接状态色固定，不随涨跌配色方案交换 */
 @keyframes pulse { 50%{opacity:.4;} }
 .conn { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-sub); }
 
 /* ── 主体 ── */
 .main { display:grid; grid-template-columns:56px 1fr 6px var(--trade-w,300px) 6px var(--sym-w,264px); min-height:0; }
-/* 交易面板隐藏：移除右栏列与其左侧分隔条列，网格重排为 4 列（余额空间归中央图表） */
-.main.no-trade { grid-template-columns:56px 1fr 6px var(--sym-w,264px); }
-.main.no-trade .right-panel, .main.no-trade .split[data-r="trade"] { display:none; }
 /* 拖拽分隔条 */
 .split { background:var(--border); cursor:col-resize; position:relative; transition:background .15s; }
 .split:hover, .split.dragging { background:var(--accent); }
@@ -196,13 +188,6 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .input-box input[type="number"] { -moz-appearance:textfield; appearance:textfield; }
 .input-box input[type="number"]::-webkit-inner-spin-button,
 .input-box input[type="number"]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
-/* TradingView 式上下箭头步进器：输入框右侧竖排 ▲/▼，点上增、点下减（number 原生 spinner 已隐藏） */
-.input-box .step-col { flex:0 0 auto; display:flex; flex-direction:column; gap:1px; margin-left:8px; }
-.input-box .step-btn { flex:1 1 auto; width:20px; height:14px; padding:0; border:none; border-radius:3px; background:none; color:var(--text-sub); font-size:9px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; user-select:none; transition:color .12s,background .12s; }
-.input-box .step-btn:hover { color:var(--text); background:var(--bg-elevated); }
-.input-box .step-btn:active { color:var(--accent); background:var(--accent-dim); }
-#ind-fields .input-box { padding:0 6px; }
-#ind-fields .input-box input { text-align:left; }
 .input-suffix { font-size:11px; color:var(--text-sub); }
 .pct-row { display:flex; gap:4px; margin:8px 0 12px; }
 .pct-btn { flex:1; padding:4px 0; font-size:11px; background:var(--bg-base); border:1px solid var(--border); border-radius:4px; color:var(--text-sub); cursor:pointer; }
@@ -211,11 +196,6 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 /* 品种列表栏（最右独立栏） */
 .symbols-col { border-left:1px solid var(--border); background:var(--bg-panel); display:flex; flex-direction:column; min-height:0; }
 .tf-btn:disabled { opacity:0.3; cursor:default; }
-/* 自定义周期输入弹层（fixed 定位于「自定」按钮下方） */
-.tf-custom-pop { position:fixed; z-index:120; display:none; background:var(--bg-elevated); border:1px solid var(--border); border-radius:6px; padding:10px; box-shadow:0 6px 20px rgba(0,0,0,.45); }
-.tf-custom-pop input { width:112px; padding:5px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg-panel); color:var(--text); font-size:12px; font-family:var(--font-ui); outline:none; }
-.tf-custom-pop button { margin-left:6px; padding:5px 12px; border:none; border-radius:4px; background:var(--accent-dim); color:var(--accent); font-size:12px; cursor:pointer; font-family:var(--font-ui); }
-.tf-custom-hint { margin-top:6px; font-size:11px; color:var(--down); max-width:220px; line-height:1.5; }
 .sc-head { display:flex; align-items:center; justify-content:space-between; padding:12px 12px 8px; }
 .sc-title { font-weight:700; font-size:14px; }
 .sc-actions { display:flex; gap:4px; }
@@ -234,9 +214,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .wl-row:hover { background:var(--bg-elevated); }
 .wl-row.active { background:var(--accent-dim); }
 .wl-ico { width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:800; color:#0b0e14; }
-.wl-name { display:flex; flex-direction:column; min-width:0; line-height:1.25; }
-.wl-code { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.wl-desc { color:var(--text-sub); font-size:10.5px; font-weight:400; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wl-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .wl-val { font-family:var(--font-mono); }
 .wl-chg { font-family:var(--font-mono); font-size:11.5px; min-width:56px; text-align:right; }
 .wl-del { opacity:0; color:var(--text-sub); font-size:13px; text-align:center; cursor:pointer; }
@@ -322,7 +300,6 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
       <div class="ticker-item"><span class="ticker-label">24h 高</span><span class="ticker-value" id="tk-high">--</span></div>
       <div class="ticker-item"><span class="ticker-label">24h 低</span><span class="ticker-value" id="tk-low">--</span></div>
     </div>
-    <button class="topbar-btn active" id="trade-toggle" title="显示 / 隐藏交易面板" aria-pressed="true">交易</button>
   </header>
 
   <div class="main">
@@ -349,23 +326,11 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
         <button class="tf-btn" data-tf="1h">1时</button>
         <button class="tf-btn" data-tf="4h">4时</button>
         <button class="tf-btn" data-tf="1d">日线</button>
-        <button class="tf-btn" data-tf="1w">周线</button>
-        <button class="tf-btn" data-tf="1M">月线</button>
-        <button class="tf-btn" data-tf="1Q">季线</button>
-        <button class="tf-btn" data-tf="1Y">年线</button>
-        <button class="tf-btn" id="tf-custom-btn" title="自定义周期：数字+单位（d/w/M）">自定</button>
         <div class="toolbar-sep"></div>
         <button class="tool-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20L20 4"/></svg>画线</button>
         <button class="tool-btn" id="ind-btn" title="添加指标"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>指标</button>
         <div style="flex:1"></div>
         <button class="tool-btn" id="fit-btn" title="右键图表可设置 K 线数量 / 右侧留白">自动适配</button>
-      </div>
-
-      <!-- 自定义周期输入弹层（点击「自定」开关） -->
-      <div id="tf-custom-pop" class="tf-custom-pop" style="display:none">
-        <input id="tf-custom-input" type="text" maxlength="4" placeholder="如 2d / 3w / 2M">
-        <button id="tf-custom-ok">确定</button>
-        <div id="tf-custom-hint" class="tf-custom-hint"></div>
       </div>
 
       <div class="chart-wrap">
@@ -512,14 +477,16 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 
 <div class="ctx-menu" id="ctx-menu">
   <div class="ctx-title">图表设置</div>
+  <div class="ctx-row"><span>K线总量上限</span><input id="ctx-kc" class="ctx-input" type="number" min="100" max="5000" step="100"></div>
   <div class="ctx-row"><span>右侧留白</span><input id="ctx-ro" class="ctx-input" type="number" min="0" max="100"></div>
   <div class="ctx-row"><span>成交量</span><input id="ctx-vol" type="checkbox" checked></div>
+  <div class="ctx-row"><span>信号标记</span><input id="ctx-markers" type="checkbox" checked></div>
   <div class="ctx-row"><span>涨跌配色</span><select id="ctx-scheme" class="ctx-input"><option value="gd">绿涨红跌</option><option value="cn">红涨绿跌</option></select></div>
 </div>
 
 <script src="lwc.js"></script>
 <script>
-const { createChart, CandlestickSeries, HistogramSeries, LineSeries } = LightweightCharts;
+const { createChart, CandlestickSeries, HistogramSeries, LineSeries, createSeriesMarkers } = LightweightCharts;
 
 /* ═══ 真实数据接入（后端 REST + WS） ═══ */
 /* http(s) 访问时随页面同源（后端静态托管）；file:// 打开时回退本地默认地址 */
@@ -530,10 +497,12 @@ let curSymbol = 'BTCUSDT';
 let curTf = '15m';
 let curExchange = 'binance';    // 当前市场源（binance/ig，后端插件注册表驱动）
 const sourcesMeta = {};         // exchange -> 插件元数据（label/周期支持/默认品种/成交量）
-const PAGE_SIZE = 1000;         // 首屏首拉根数（保快速首绘）
-const PRELOAD_PAGE_SIZE = 5000; // 左滑按需加载页大小（后端已支持大页；源插件内部分页）
+let klineCount = 1000;          // K 线总量上限：可自定义，默认 1000
+const INIT_BARS = 300;          // 首屏加载根数（懒加载分页）
+const PAGE_SIZE = 1000;         // 每次翻页拉取根数（币安单次上限）
 let curRightOffset = 20;        // 图表右侧预留空 K 线数：可调，默认 20
 let showVol = true;             // 成交量显示开关（右键菜单切换，持久化）
+let showSigMarkers = true;      // DEMO 策略信号标记开关（右键菜单切换，持久化）
 const lastPrices = {};          // symbol -> 最新价（供持仓表/品种列表用）
 const symbolPrec = {};          // symbol -> 显示小数位（后端按订阅价格下发，只记录不推导）
 /* 按品种精度格式化价格（品种列表/持仓表等所有价格展示位统一走此入口）；
@@ -569,22 +538,7 @@ const histColor = (v, prev, colors) => {
 
 /* ═══ 布局持久化（localStorage：面板尺寸/折叠/K线数/右侧留白/周期/品种） ═══ */
 const LS_KEY = 'kq-layout-live';
-const TF_VALID = ['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M', '1Q', '1Y'];
-/* 自定义周期：倍率 2~99 + 单位 d/w/M（分钟/小时级原生档已覆盖；前端只做格式初筛，最终合法性以后端响应为准） */
-const TF_CUSTOM_RE = /^(\d{1,2})(d|w|M)$/;
-function tfValid(tf) {
-  if (TF_VALID.includes(tf)) return true;
-  const m = TF_CUSTOM_RE.exec(tf || '');
-  return !!m && +m[1] >= 2;
-}
-/* 周期展示文案统一映射（1w=周线、1M=月线、1Q=季线、1Y=年线、2d=2日…） */
-const TF_UNIT_CN = { m: '分', h: '时', d: '日', w: '周', M: '月', Q: '季', Y: '年' };
-function tfLabel(tf) {
-  const FIX_CN = { '1d': '日线', '1w': '周线', '1M': '月线', '1Q': '季线', '1Y': '年线' };
-  if (FIX_CN[tf]) return FIX_CN[tf];
-  const m = /^(\d+)(m|h|d|w|M)$/.exec(tf || '');
-  return m ? `${+m[1]}${TF_UNIT_CN[m[2]]}` : tf;
-}
+const TF_VALID = ['1m', '5m', '15m', '1h', '4h', '1d'];
 let savedLayout = null;
 try { savedLayout = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); } catch (e) {}
 if (savedLayout) {
@@ -593,12 +547,13 @@ if (savedLayout) {
   if (savedLayout.symW) root.style.setProperty('--sym-w', savedLayout.symW);
   if (savedLayout.posH) root.style.setProperty('--pos-h', savedLayout.posH);
   if (typeof savedLayout.rightOffset === 'number') curRightOffset = savedLayout.rightOffset;
-  if (savedLayout.tf && tfValid(savedLayout.tf)) curTf = savedLayout.tf;
+  if (savedLayout.klineCount) klineCount = savedLayout.klineCount;
+  if (savedLayout.tf && TF_VALID.includes(savedLayout.tf)) curTf = savedLayout.tf;
   if (savedLayout.symbol) curSymbol = savedLayout.symbol;
   if (savedLayout.exchange) curExchange = savedLayout.exchange;
   if (savedLayout.posCollapsed) document.getElementById('pos-bar')?.classList.add('collapsed');
-  if (savedLayout.tradeHidden) document.querySelector('.main')?.classList.add('no-trade');
   if (typeof savedLayout.showVol === 'boolean') showVol = savedLayout.showVol;
+  if (typeof savedLayout.showSigMarkers === 'boolean') showSigMarkers = savedLayout.showSigMarkers;
 }
 function saveLayout() {
   try {
@@ -608,30 +563,22 @@ function saveLayout() {
       symW: st.getPropertyValue('--sym-w'),
       posH: st.getPropertyValue('--pos-h'),
       posCollapsed: document.getElementById('pos-bar')?.classList.contains('collapsed') || false,
-      tradeHidden: document.querySelector('.main')?.classList.contains('no-trade') || false,
       rightOffset: curRightOffset,
+      klineCount,
       tf: curTf,
       symbol: curSymbol,
       exchange: curExchange,
       indLayout,
       showVol,
+      showSigMarkers,
     }));
   } catch (e) {}
 }
-/* 展示码（路由码→纯数字交易所码）：后端 catalog 的 code 字段下发，前端只缓存不推导。
-   须在布局恢复块（模块执行期立即调用 dispOf）之前声明，否则 TDZ 中断整个脚本 */
-let symCode = {};
-function dispOf(sym) { return symCode[sym] || sym; }   // 未命中兜底原码（旧布局恢复/非目录品种）
-function refreshSymLabels() {
-  document.getElementById('top-symbol').textContent = dispOf(curSymbol);
-  document.querySelector('.watermark').textContent = dispOf(curSymbol);
-}
-// 同步 UI 控件与恢复后的状态（自定义倍率周期需先插入其激活按钮，只保留最近使用一个）
+// 同步 UI 控件与恢复后的状态
 {
-  if (tfValid(curTf) && !TF_VALID.includes(curTf)) ensureCustomTfBtn(curTf);
   document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === curTf));
-  document.getElementById('top-symbol').textContent = dispOf(curSymbol);
-  document.querySelector('.watermark').textContent = dispOf(curSymbol);
+  document.getElementById('top-symbol').textContent = curSymbol;
+  document.querySelector('.watermark').textContent = curSymbol;
 }
 
 /* ═══ 指标目录 + indLayout（有序实例列表：布局持久化/渲染/参数弹窗同源，对齐后端 display_meta 契约） ═══ */
@@ -661,8 +608,8 @@ const IND_META = {
   rsi:  { title: 'RSI 相对强弱参数', fields: [
     { key: 'period', label: '周期', min: 2, max: 'kline' }] },
 };
-/* 周期类参数上限动态跟随实际已加载根数（按需加载：滚动加深后更大参数自动可用） */
-function fieldMax(f) { return f.max === 'kline' ? Math.max(klines.length, 2) : f.max; }
+/* 周期类参数上限动态跟随 K 线总量上限（klineCount，右键菜单可调 100~5000） */
+function fieldMax(f) { return f.max === 'kline' ? klineCount : f.max; }
 
 /* ═══ IND-110：后端 def 式指标目录（/api/indicator/meta 驱动，后端注册新指标前端自动发现） ═══ */
 let BACKEND_META = {};   // name -> {min_periods, display_meta, default_params}
@@ -701,8 +648,8 @@ const IND_LAYOUT_DEFAULT = [
 let indLayout = [];
 if (savedLayout && Array.isArray(savedLayout.indLayout) && savedLayout.indLayout.every(x => IND_CATALOG[x.type] || (x.type === 'custom' && x.name))) {
   indLayout = savedLayout.indLayout.map(x => x.type === 'custom'
-    ? { type: 'custom', name: x.name, params: { ...x.params }, styleUI: x.styleUI ?? null }
-    : { type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params }, styleUI: x.styleUI ?? null });   // styleUI（逐线颜色/线型/柱四色/参考线）须随条目恢复，否则刷新后自选样式丢失（2026-09-01 实证）
+    ? { type: 'custom', name: x.name, params: { ...x.params } }
+    : { type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params } });
 } else {
   indLayout = IND_LAYOUT_DEFAULT.map(x => ({ type: x.type, params: { ...x.params } }));
   if (savedLayout && savedLayout.indParams) {
@@ -741,13 +688,8 @@ function backendSubs(inst) {
 function macdHistColor(v, prev, colors) { return histColor(v, prev, colors); }
 async function fetchIndSeries(indicator, params, gen) {
   const url = `${API}/api/indicator/history?symbol=${curSymbol}&timeframe=${curTf}&exchange=${curExchange}` +
-    `&indicator=${indicator}&limit=${Math.min(klines.length, 30000)}&params=${encodeURIComponent(JSON.stringify(params))}`;   // limit 上限对齐后端 le=30000（防 422 静默致指标全部不显示）
-  let r;
-  try {
-    r = await fetch(url, { signal: AbortSignal.timeout(30000) });   // 同 fetchPage：后端劣化/不可用时不无限等待，失败降级为占位下次重建再拉
-  } catch (e) { console.error('indicator history timeout:', indicator, params); return null; }
-  if (!r.ok) { console.error('indicator history failed:', r.status, indicator, params); return null; }
-  const json = await r.json();
+    `&indicator=${indicator}&limit=${klines.length}&params=${encodeURIComponent(JSON.stringify(params))}`;
+  const json = await (await fetch(url)).json();
   if (gen !== loadGen || !json.warmed || !json.data || !json.data.length) return null;
   return json.data;
 }
@@ -806,8 +748,7 @@ function applyIndPush(msg) {
 /* 中式时间显示：周几 + 年/月/日 + 时间(24小时制)；日线及以上周期只显示日期。
    十字线标签用完整格式，X 轴刻度用紧凑格式（轴空间有限） */
 const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-const TF_DATE_ONLY = new Set(['1d', '3d', '1w', '1M', '1Q', '1Y']);   // 日线及以上：不显示时间（含派生四档）
-const tfIsDateOnly = tf => TF_DATE_ONLY.has(tf) || TF_CUSTOM_RE.test(tf || '');   // 自定义倍率（2d/3w/2M…）同样只显示日期
+const TF_DATE_ONLY = new Set(['1d', '3d', '1w']);   // 日线及以上：不显示时间
 const fmtTimeCn = (ts, dateOnly) => {
   const d = new Date(ts * 1000);
   const p2 = n => String(n).padStart(2, '0');
@@ -824,7 +765,7 @@ const chart = createChart(container, {
   },
   localization: {
     /* 十字线时间标签：中式完整格式（日线及以上只到日期） */
-    timeFormatter: t => fmtTimeCn(t, tfIsDateOnly(curTf)),
+    timeFormatter: t => fmtTimeCn(t, TF_DATE_ONLY.has(curTf)),
   },
   grid: { vertLines: { color: '#1c2030' }, horzLines: { color: '#1c2030' } },
   crosshair: {
@@ -1278,25 +1219,23 @@ function rebuildIndicators() {
   layoutPaneLegends();
 }
 
-/* 副图窗格高度：一次性设定各窗格「拉伸权重」(stretch factor)。
-   权重是绝对值、彼此不分摊差值（区别于 setHeight：改一个窗格会按比例挤压其他窗格），
-   故全部权重可在同一同步任务内一次设完，lwc 只重算一次、浏览器只绘制最终态一帧，
-   彻底消除旧「逐帧修正误差最大窗格」造成的窗口抖动动画。
-   权重取目标像素高，且各窗格权重之和 == 当前窗格总高 → 比例分配即得精确目标高。 */
+/* 副图窗格高度：首屏数据就绪后统一应用。
+   注：v5 setHeight 布局异步生效且会把差值按比例分摊给其他窗格，
+   同步连续设置会读到旧值/互相干扰 → 逐帧修正误差最大的窗格直至收敛 */
 let subPaneTargets = [];   // [{pane, h}] 由 rebuildIndicators 按 indLayout 动态生成
 let panesSized = false;
-/* weightOf(i, total) 返回第 i 个窗格的目标像素高；单次同步应用，无 rAF 逐帧收敛 */
-function applyPaneStretch(weightOf) {
+function applyPaneHeights(round = 0) {
+  if (round >= 24 || !subPaneTargets.length) return;
   const panes = chart.panes();
-  const total = panes.reduce((s, p) => s + p.getHeight(), 0);
-  panes.forEach((p, i) => p.setStretchFactor(Math.max(1, Math.round(weightOf(i, total)))));
-}
-function applyPaneHeights() {
-  if (!subPaneTargets.length) return;
-  const subH = new Map(subPaneTargets.map(t => [t.pane, t.h]));
-  let subSum = 0; subH.forEach(h => { subSum += h; });
-  /* 各副图回目标高，主图(pane 0)吃余额 */
-  applyPaneStretch((i, total) => i === 0 ? Math.max(60, total - subSum) : (subH.get(i) || SUB_PANE_H));
+  let idx = -1, maxErr = 0;
+  for (const t of subPaneTargets) {
+    if (t.pane >= panes.length) continue;
+    const err = panes[t.pane].getHeight() - t.h;
+    if (Math.abs(err) > Math.abs(maxErr)) { maxErr = err; idx = t.pane; }
+  }
+  if (idx < 0 || Math.abs(maxErr) < 2) return;
+  panes[idx].setHeight(panes[idx].getHeight() - maxErr);
+  requestAnimationFrame(() => applyPaneHeights(round + 1));   // 等布局生效后再修正下一个
 }
 
 /* 副图图例定位：各图例锚定到所属窗格顶部（跟随窗格高度/尺寸/顺序/增删变化） */
@@ -1380,8 +1319,8 @@ function paneAtY(y) {
   }
   return -1;
 }
-/* 最大化/还原：一次性设定拉伸权重（绝对权重、无差值分摊），单次重算定版——
-   浏览器只绘制最终态一帧，不再有逐帧收敛的「窗口抖动」动画 */
+/* 最大化/还原：只纠正需显式定高的窗格，余额窗格（还原时的主图/最大化时的目标窗格）不参与纠正——
+   setHeight 差值会被分摊给其他窗格，余额窗格参与纠正会与副图乒乓振荡导致抖动 */
 function togglePaneMax(pane) {
   const panes = chart.panes();
   if (pane <= 0 || pane >= panes.length) return;
@@ -1389,15 +1328,25 @@ function togglePaneMax(pane) {
   maxPane = target;
   syncPaneBtns();
   if (!target) {
-    /* 还原：各副图回目录默认高度，主图吃余额 */
+    /* 还原：各副图回目录默认高度，主图吃余额；复用首屏验证过稳定的 applyPaneHeights 收敛（只动副图，不抖） */
     subPaneTargets = indInstances.filter(i => i.pane > 0).map(inst => ({ pane: inst.pane, h: catOf(inst).h || SUB_PANE_H }));
     applyPaneHeights();
     return;
   }
-  /* 最大化：目标窗格吃余额，其余窗格压到 26px（同一次同步设权，无逐帧收敛） */
-  const MIN_PANE = 26;
-  const others = panes.length - 1;
-  applyPaneStretch((i, total) => i === target ? Math.max(MIN_PANE, total - MIN_PANE * others) : MIN_PANE);
+  /* 最大化：非目标窗格逐帧收敛至 26px，目标窗格自然获得全部余额 */
+  let step = 0;
+  const run = () => {
+    const ps = chart.panes();
+    let maxErr = 0, idx = -1;
+    ps.forEach((p, i) => {
+      if (i === target || i >= ps.length) return;   // 目标窗格不参与纠正（余额吸收方）
+      const err = p.getHeight() - 26;
+      if (Math.abs(err) > Math.abs(maxErr)) { maxErr = err; idx = i; }
+    });
+    if (idx >= 0 && Math.abs(maxErr) > 1) ps[idx].setHeight(ps[idx].getHeight() - maxErr);
+    if (++step < 24 && Math.abs(maxErr) > 1) requestAnimationFrame(run);
+  };
+  run();
 }
 /* 双击切换（命中副图区域才响应；双击缩放已关闭，避免与图表默认双击冲突） */
 container.addEventListener('dblclick', e => {
@@ -1495,6 +1444,7 @@ function renderChart(reset = false) {
   volumeSeries.setData(klines.map(k => ({ time: k.time, value: k.volume, color: volColor(k.close, k.open) })));
   syncPriceLine();
   updatePriceTag();
+  refreshSigMarkers();
   renderIndData(reset);
 }
 /* 切换涨跌配色（全局生效）：交换 CSS 变量 + K 线系列改色 + 全量重绘 */
@@ -1515,9 +1465,7 @@ function applyColorScheme(scheme, persist = true) {
 /* 拉取一页 K 线（endTime 可选，往前翻页用）；同时携带后端下发的价格精度 */
 async function fetchPage(need, endTime) {
   const url = `${API}/api/market/klines?symbol=${curSymbol}&timeframe=${curTf}&limit=${need}&exchange=${curExchange}${endTime ? `&end_time=${endTime}` : ''}`;
-  /* 30s 超时护栏：后端市场源会话劣化时单次拉取可挂死数十秒，
-     无超时的 fetch 会让“拉取 K 线”状态永久停留；超时后走 catch 展示失败可重试 */
-  const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
+  const resp = await fetch(url);
   const json = await resp.json();
   return {
     bars: (json.data || []).map(k => ({
@@ -1543,34 +1491,14 @@ function detectPrecision(bars) {
 async function load() {
   loadGen++;                // 作废进行中的翻页请求
   initialLoaded = false;    // 重新拉取期间暂不接收 WS bar
-  setSb(`◉ 拉取 ${curSymbol} ${tfLabel(curTf)} K 线…`);
+  setSb(`◉ 拉取 ${curSymbol} ${curTf} K 线…`);
   noMoreData = false;
   try {
-    /* 数据加载约定：按屏按需加载——首屏渲染后即完成，不后台预载更深历史（防切周期反复全量重绘卡顿）；
-       更早历史由左滑按需续载（loadMore），直至数据源尽头 */
-    const gen = loadGen;
-    const need = PAGE_SIZE;
-    /* 瞬时失败自动重试：市场源会话劣化/终端掉线时后端有 30s 冷却自愈重建，
-       前端重试两次覆盖恢复窗口，避免页面停在 ✕ 需手动刷新（2026-09-01 MT5 掉线实证） */
-    let firstPage = null;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        firstPage = await fetchPage(need, null);
-        if (gen !== loadGen) return;   // 拉取期间已切换，丢弃
-        if (firstPage.bars.length) break;
-      } catch (e) {
-        if (gen !== loadGen) return;
-        if (attempt >= 3) throw e;
-        console.warn(`load attempt ${attempt} failed:`, e);
-        firstPage = null;
-      }
-      if (attempt >= 3) break;
-      setSb(`◉ 数据源暂不可用，重试中（${attempt}/2）…`);
-      await new Promise(r => setTimeout(r, 4000));
-      if (gen !== loadGen) return;
-    }
-    klines = firstPage ? firstPage.bars : [];
-    if (!klines.length) { setSb('✕ 未返回 K 线数据（数据源可能暂不可用，稍后切换品种/周期重试）'); return; }
+    /* 首屏只拉 INIT_BARS 根，翻屏时再懒加载更早数据 */
+    const need = Math.min(INIT_BARS, klineCount);
+    const firstPage = await fetchPage(need, null);
+    klines = firstPage.bars;
+    if (!klines.length) { setSb('✕ 未返回 K 线数据'); return; }
     if (klines.length < need) noMoreData = true;
     /* Y 轴/十字线精度：消费后端按订阅价格推导的精度（前端只渲染不推导），
        后端未下发时才本地兜底 */
@@ -1595,63 +1523,45 @@ async function load() {
     renderStatusbar();
   } catch (e) {
     console.error('load failed:', e);   // 暴露真实错误，避免被兜底文案掩盖
-    if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
-      setSb('✕ 拉取超时（数据源响应过慢），切换品种/周期重试');
-    } else {
-      setSb('✕ 后端未连接（127.0.0.1:8000），请先启动 API Gateway');
-    }
+    setSb('✕ 后端未连接（127.0.0.1:8000），请先启动 API Gateway');
   }
 }
 
-/* ═══ 历史按需加载：左滑触发分页续载，直至数据源尽头（无后台预载，防切周期卡顿） ═══ */
+/* ═══ 懒加载翻页：左滑接近边界时加载更早 K 线 ═══ */
 let loadingMore = false;
 let noMoreData = false;
 let loadGen = 0;   // 加载代次：切换品种/周期/重载时作废进行中的翻页
-document.getElementById('chart').addEventListener('pointerdown', () => { userTouchedChart = true; });
-document.getElementById('chart').addEventListener('wheel', () => { userTouchedChart = true; }, { passive: true });
 let firstFit = true;   // 首屏标记：仅首次加载 fitContent 铺满，此后切换保持原缩放比例
-let userTouchedChart = false;   // 用户是否交互过图表（决定全量就绪后是否重新铺满）
-/* 翻页前置一页（锚点校验防混入）；返回剩余可拉根数（0=已到头），异常抛出由调用方处理 */
-async function pullOlderPage(gen) {
-  const sym = curSymbol, tf = curTf;
-  const anchorTime = klines[0].time;   // 数据锚点：完成后校验数据未被重置
-  const need = PRELOAD_PAGE_SIZE;
-  let page = (await fetchPage(need, anchorTime * 1000 - 1)).bars;
-  if (gen !== loadGen || sym !== curSymbol || tf !== curTf) return -1;   // 已切换，丢弃旧数据防混入（返回 -1 中止）
-  if (!klines.length || klines[0].time !== anchorTime) return -1;        // 数据已重置，丢弃
-  page = page.filter(k => k.time < anchorTime);                          // 防时间戳重叠
-  if (!page.length) { noMoreData = true; return 0; }
-  if (page.length < need) noMoreData = true;
-  const vtr = chart.timeScale().getVisibleRange();   // 时间区间锚点：补根后按时间还原视图（比逻辑坐标平移稳，不受 prepend 后库内部左缘重定位影响）
-  klines = page.concat(klines);
-  renderChart();
-  if (noMoreData && !userTouchedChart) {
-    /* 全量就绪且用户未交互：铺满显示全部历史（“默认显示所有数据”约定）；
-       已交互则保持视窗稳定（下方 else 分支时间锚点还原） */
-    chart.timeScale().fitContent();
-  } else if (vtr) {
-    /* 视图锚定原时间窗口不跳动。此前用逻辑坐标平移补偿，prepend 后视图仍贴左缘，
-       导致 loadMore 级联触发一次左滑拉空全部历史（2026-08-31 后端请求日志实证） */
-    chart.timeScale().setVisibleRange(vtr);
-  }
-  return noMoreData ? 0 : 1;   // 0=已到头；非 0=仍有更早数据可拉
-}
-/* 左滑按需加载：视窗接近左边界时分页续载更早历史，直至数据源尽头 */
 async function loadMore() {
-  if (loadingMore || noMoreData) return;
+  if (loadingMore || noMoreData || klines.length >= klineCount) return;
   loadingMore = true;
-  setSb(`◉ 加载更早历史… 已有 ${klines.length} 根`);   // “已有”口径：触发时已加载量，本页另拉 5000 根
+  const gen = loadGen, sym = curSymbol, tf = curTf;
+  const anchorTime = klines[0].time;   // 数据锚点：完成后校验数据未被重置
+  setSb(`◉ 加载更早 K 线… ${klines.length}/${klineCount}`);
   try {
-    await pullOlderPage(loadGen);
-    setSb(`◉ 已加载更早历史，共 ${klines.length} 根${noMoreData ? '（已到数据源尽头）' : ''}`);   // 完成后展示新总量，避免停留触发时的旧口径
+    const need = Math.min(PAGE_SIZE, klineCount - klines.length);
+    let page = (await fetchPage(need, anchorTime * 1000 - 1)).bars;
+    if (gen !== loadGen || sym !== curSymbol || tf !== curTf) return;   // 已切换，丢弃旧数据防混入
+    if (!klines.length || klines[0].time !== anchorTime) return;        // 数据已重置，丢弃
+    page = page.filter(k => k.time < anchorTime);                       // 防时间戳重叠
+    if (!page.length) {                                                 // 无更早数据
+      noMoreData = true;
+      return;
+    }
+    if (page.length < need) noMoreData = true;
+    /* 逻辑坐标平移补偿：prepend N 根后索引整体 +N，视窗锁定原时间窗口不跳动 */
+    const lvr = chart.timeScale().getVisibleLogicalRange();
+    klines = page.concat(klines);
+    renderChart();
+    if (lvr) chart.timeScale().setVisibleLogicalRange({ from: lvr.from + page.length, to: lvr.to + page.length });
   } catch (e) {
-    setSb('✕ 加载更早 K 线失败（左滑可重试）');
+    setSb('✕ 加载更早 K 线失败');
   } finally {
     loadingMore = false;
   }
 }
 chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-  if (!range || !initialLoaded || loadingMore || noMoreData) return;
+  if (!range || !initialLoaded || klines.length < 10 || loadingMore || noMoreData || klines.length >= klineCount) return;
   const span = range.to - range.from;
   const fullyVisible = span >= klines.length - 1;
   if (range.from < 10 && (!fullyVisible || range.from < -1)) loadMore();
@@ -1659,16 +1569,15 @@ chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
 function switchSymbol(sym) {
   if (sym === curSymbol) return;
   curSymbol = sym;
-  document.getElementById('top-symbol').textContent = dispOf(sym);
-  document.querySelector('.watermark').textContent = dispOf(sym);
+  document.getElementById('top-symbol').textContent = sym;
+  document.querySelector('.watermark').textContent = sym;
   renderSymbols();
   load();
   subscribeWS();
   fetchTopTicker();
   saveLayout();
 }
-function onTfBtnClick() {
-  const b = this;
+document.querySelectorAll('.tf-btn').forEach(b => b.addEventListener('click', () => {
   if (b.disabled) return;   // 当前市场源不支持的周期禁点
   document.querySelectorAll('.tf-btn').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
@@ -1676,74 +1585,42 @@ function onTfBtnClick() {
   load();
   subscribeWS();
   saveLayout();
-}
-document.querySelectorAll('.tf-btn:not(#tf-custom-btn)').forEach(b => b.addEventListener('click', onTfBtnClick));
-/* 自定义周期：动态插入激活按钮（「自定」入口之前，只保留最近使用一个） */
-function ensureCustomTfBtn(tf) {
-  const anchor = document.getElementById('tf-custom-btn');
-  if (!anchor) return;
-  document.querySelectorAll('.tf-btn.custom').forEach(x => x.remove());
-  const b = document.createElement('button');
-  b.className = 'tf-btn custom';
-  b.dataset.tf = tf;
-  b.textContent = tfLabel(tf);
-  b.title = `自定义周期 ${tf}`;
-  anchor.before(b);
-  b.addEventListener('click', onTfBtnClick);
-}
-/* 自定义周期输入弹层：前端只做格式初筛，最终合法性以后端响应为准 */
-const tfCustomPop = document.getElementById('tf-custom-pop');
-const tfCustomInput = document.getElementById('tf-custom-input');
-const tfCustomHint = document.getElementById('tf-custom-hint');
-document.getElementById('tf-custom-btn').addEventListener('click', () => {
-  const open = tfCustomPop.style.display === 'none';
-  tfCustomPop.style.display = open ? 'block' : 'none';
-  if (open) {
-    const r = document.getElementById('tf-custom-btn').getBoundingClientRect();
-    tfCustomPop.style.left = `${r.left}px`;
-    tfCustomPop.style.top = `${r.bottom + 6}px`;
-    tfCustomInput.value = tfValid(curTf) && !TF_VALID.includes(curTf) ? curTf : '';
-    tfCustomHint.textContent = '';
-    tfCustomInput.focus();
-  }
-});
-function applyCustomTf() {
-  const tf = tfCustomInput.value.trim();
-  if (!tfValid(tf)) {
-    tfCustomHint.textContent = '格式：数字+单位（d/w/M），倍率 2~99，如 2d、3w、2M';
-    return;
-  }
-  tfCustomPop.style.display = 'none';
-  ensureCustomTfBtn(tf);
-  document.querySelectorAll('.tf-btn').forEach(x => x.classList.toggle('active', x.dataset.tf === tf));
-  curTf = tf;
-  load();
-  subscribeWS();
-  saveLayout();
-}
-document.getElementById('tf-custom-ok').addEventListener('click', applyCustomTf);
-tfCustomInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyCustomTf(); });
-document.addEventListener('pointerdown', e => {
-  if (!tfCustomPop.contains(e.target) && e.target.id !== 'tf-custom-btn') tfCustomPop.style.display = 'none';
-}, true);
+}));
 document.getElementById('fit-btn').addEventListener('click', () => chart.timeScale().fitContent());
-/* 右侧留白等：图表区右键菜单 */
+/* K 线数量 / 右侧留白：图表区右键菜单（直接输入数字） */
 const ctxMenu = document.getElementById('ctx-menu');
+const ctxKc = document.getElementById('ctx-kc');
 const ctxRo = document.getElementById('ctx-ro');
 document.getElementById('chart').addEventListener('contextmenu', e => {
   e.preventDefault();
+  ctxKc.value = klineCount;
   ctxRo.value = curRightOffset;
   document.getElementById('ctx-vol').checked = showVol;
+  document.getElementById('ctx-markers').checked = showSigMarkers;
   document.getElementById('ctx-scheme').value = colorScheme;
   ctxMenu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
-  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 130) + 'px';
+  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 160) + 'px';
   ctxMenu.classList.add('show');
 });
 document.addEventListener('click', e => { if (!ctxMenu.contains(e.target)) ctxMenu.classList.remove('show'); });
 window.addEventListener('keydown', e => { if (e.key === 'Escape') { ctxMenu.classList.remove('show'); indModal.classList.remove('show'); indPicker.classList.remove('show'); } });
+ctxKc.addEventListener('change', () => {
+  const v = Math.min(5000, Math.max(100, parseInt(ctxKc.value) || 5000));
+  ctxKc.value = v;
+  if (v === klineCount) return;
+  klineCount = v;
+  load();
+  saveLayout();
+});
 document.getElementById('ctx-vol').addEventListener('change', e => {
   showVol = e.target.checked;
   applyVolVisibility();
+  saveLayout();
+});
+/* DEMO 信号标记开关：只重设标记集合，不重绘图表 */
+document.getElementById('ctx-markers').addEventListener('change', e => {
+  showSigMarkers = e.target.checked;
+  refreshSigMarkers();
   saveLayout();
 });
 /* 涨跌配色切换：即时全局生效并持久化（localStorage: kq-color-scheme） */
@@ -1789,35 +1666,13 @@ function openIndModal(id) {
   document.getElementById('ind-fields').innerHTML = meta.fields.map(f => `
     <div class="field">
       <div class="field-label"><span>${f.label}</span><span class="muted">${f.min} ~ ${fieldMax(f)}</span></div>
-      <div class="input-box">
-        <input id="ind-f-${f.key}" type="number" min="${f.min}" max="${fieldMax(f)}" step="${f.step || 1}" value="${inst.params[f.key]}">
-        <span class="step-col">
-          <button type="button" class="step-btn" data-dir="1" data-target="ind-f-${f.key}" tabindex="-1" title="增加">▲</button>
-          <button type="button" class="step-btn" data-dir="-1" data-target="ind-f-${f.key}" tabindex="-1" title="减少">▼</button>
-        </span>
-      </div>
+      <div class="input-box"><input id="ind-f-${f.key}" type="number" min="${f.min}" max="${fieldMax(f)}" step="${f.step || 1}" value="${inst.params[f.key]}"></div>
     </div>`).join('');
   document.getElementById('ind-style-wrap').innerHTML = indStyleUI(inst);
   indTabTo('params');   // 每次打开默认回参数页签
   indModal.classList.add('show');
   document.querySelector('#ind-fields input')?.focus();
 }
-/* 参数 ± 步进：点击按 step 增减对应输入框值，自动钳位到 min~max（免每次手输）；
-   格式化与确认采集一致（step<1 保留 1 位小数，否则取整） */
-document.getElementById('ind-fields').addEventListener('click', e => {
-  const btn = e.target.closest('.step-btn');
-  if (!btn) return;
-  const inp = document.getElementById(btn.dataset.target);
-  if (!inp) return;
-  const dir = +btn.dataset.dir;
-  const step = parseFloat(inp.step) || 1;
-  const min = parseFloat(inp.min), max = parseFloat(inp.max);
-  let v = parseFloat(inp.value);
-  if (!isFinite(v)) v = dir > 0 ? min - step : max + step;   // 空值：从边界起步
-  v = Math.min(max, Math.max(min, v + dir * step));
-  inp.value = step < 1 ? v.toFixed(1) : String(Math.round(v));
-  inp.dispatchEvent(new Event('input', { bubbles: true }));
-});
 function refreshIndLabels() {
   for (const inst of indInstances) {
     const el = document.getElementById('lg-label-' + inst.id);
@@ -2056,7 +1911,7 @@ function updateListPrice(ex, sym, price) {
   const prev = entry.price;
   entry.price = price;
   lastPrices[sym] = price;
-  const el = document.querySelector(`.wl-row[data-ex="${entry.ex || ''}"][data-real="${entry.sym}"] .wl-val`);
+  const el = document.querySelector(`.wl-row[data-ex="${entry.ex || ''}"][data-sym="${entry.name}"] .wl-val`);
   if (el) {
     el.textContent = fmtSym(sym, price);
     if (prev != null && price !== prev) el.className = 'wl-val ' + (price > prev ? 'up' : 'down');
@@ -2130,7 +1985,7 @@ function renderStatusbar() {
   } else {
     icon = sigSvg(0, 'var(--down)'); label = '断开';
   }
-  document.getElementById('sb-status').innerHTML = `◉ ${sbInfo} · ${klines.length} 根 · ${icon} ${label}`;   // 已加载根数常驻，便于核验按需加载深度
+  document.getElementById('sb-status').innerHTML = `◉ ${sbInfo} · ${icon} ${label}`;
 }
 setInterval(renderStatusbar, 1000);
 
@@ -2177,6 +2032,51 @@ function syncPriceLine() {
 }
 setInterval(updatePriceTag, 1000); updatePriceTag();
 
+/* ═══ DEMO：策略信号事件标记（LC v5 createSeriesMarkers） ═══
+   前端用 MA5×MA20 金叉/死叉模拟信号 + 前向扫描止盈/止损，仅验证标记渲染效果；
+   正式信号后续由后端策略引擎经 WS 下发事件，前端只负责渲染（对齐前端零计算原则） */
+const SIG_S = 5, SIG_L = 20;            // DEMO 参数：短/长均线周期
+const SIG_TP = 0.02, SIG_SL = 0.015;    // 止盈/止损幅度（相对入场价）
+const SIG_SCAN = 60;                    // 入场后前向扫描根数上限（未触发则该信号无出场标记）
+const sigMarkersApi = createSeriesMarkers(candleSeries, []);   // LC v5：顶层导出函数，非 chart 实例方法
+function rollingSMA(closes, period) {
+  const out = new Array(closes.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < closes.length; i++) {
+    sum += closes[i];
+    if (i >= period) sum -= closes[i - period];
+    if (i >= period - 1) out[i] = sum / period;
+  }
+  return out;
+}
+/* 金叉→🚀 做多（belowBar/arrowUp）、死叉→🔻 做空；信号后前向扫描，先触达者记 🎯 止盈 / ⛔ 止损 */
+function computeSigMarkers() {
+  if (klines.length < SIG_L + 1) return [];
+  const closes = klines.map(k => k.close);
+  const s = rollingSMA(closes, SIG_S), l = rollingSMA(closes, SIG_L);
+  const out = [];
+  for (let i = SIG_L; i < closes.length; i++) {
+    if (s[i - 1] == null || l[i - 1] == null) continue;
+    const gold = s[i - 1] <= l[i - 1] && s[i] > l[i];
+    const dead = s[i - 1] >= l[i - 1] && s[i] < l[i];
+    if (!gold && !dead) continue;
+    const long = gold, entry = closes[i];
+    out.push({ time: klines[i].time, position: long ? 'belowBar' : 'aboveBar',
+      shape: long ? 'arrowUp' : 'arrowDown', color: long ? CS.up : CS.down, text: long ? '🚀 做多' : '🔻 做空' });
+    for (let j = i + 1; j < klines.length && j <= i + SIG_SCAN; j++) {
+      const tpHit = long ? klines[j].high >= entry * (1 + SIG_TP) : klines[j].low <= entry * (1 - SIG_TP);
+      const slHit = long ? klines[j].low <= entry * (1 - SIG_SL) : klines[j].high >= entry * (1 + SIG_SL);
+      if (tpHit || slHit) {
+        out.push({ time: klines[j].time, position: long ? 'aboveBar' : 'belowBar', shape: 'circle',
+          color: tpHit ? '#e0a63f' : '#848e9c', text: tpHit ? '🎯 止盈' : '⛔ 止损' });
+        break;
+      }
+    }
+  }
+  return out.sort((a, b) => a.time - b.time);   // LC 要求标记按时间升序（同 bar 允许多个）
+}
+function refreshSigMarkers() { sigMarkersApi.setMarkers(showSigMarkers ? computeSigMarkers() : []); }
+
 /* 收到实时 bar：增量更新图表与指标 */
 function applyBar(b) {
   if (!initialLoaded || !klines.length) return;   // 首屏未就绪：忽略 WS 推送，防空图竞态
@@ -2184,12 +2084,13 @@ function applyBar(b) {
   const bar = { time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume };
   const last = klines[klines.length - 1];
   if (last && t === last.time) klines[klines.length - 1] = bar;
-  else if (!last || t > last.time) { klines.push(bar); }   // 按需加载：新根只追加不裁剪（已加载深度不受影响）
+  else if (!last || t > last.time) { klines.push(bar); if (klines.length > klineCount) klines.shift(); }
   else return;
   candleSeries.update(bar);
   volumeSeries.update({ time: t, value: bar.volume, color: volColor(bar.close, bar.open) });
   syncPriceLine();
   updatePriceTag();
+  refreshSigMarkers();
   /* IND-103：各指标实例末点由后端 indicators.* WS 推送（applyIndPush），前端不再自算 */
   lastPrices[curSymbol] = bar.close;
   updateTicker(bar.close);
@@ -2290,12 +2191,12 @@ const LS_WL = 'kq-watchlist';
 /* 首次启动的默认收藏（可随意增删）；此后完全以用户操作为准并持久化 */
 const DEFAULT_WL_GROUPS = [
   { name: '加密货币', collapsed: false, symbols: [
-    { name: 'BTCUSDT', sym: 'BTCUSDT', ex: 'binance', desc: '比特币' },
-    { name: 'ETHUSDT', sym: 'ETHUSDT', ex: 'binance', desc: '以太坊' },
-    { name: 'BNBUSDT', sym: 'BNBUSDT', ex: 'binance', desc: '币安币' },
-    { name: 'SOLUSDT', sym: 'SOLUSDT', ex: 'binance', desc: 'Solana' },
-    { name: 'XRPUSDT', sym: 'XRPUSDT', ex: 'binance', desc: '瑞波币' },
-    { name: 'DOGEUSDT', sym: 'DOGEUSDT', ex: 'binance', desc: '狗狗币' },
+    { name: 'BTC/USDT', sym: 'BTCUSDT', ex: 'binance' },
+    { name: 'ETH/USDT', sym: 'ETHUSDT', ex: 'binance' },
+    { name: 'BNB/USDT', sym: 'BNBUSDT', ex: 'binance' },
+    { name: 'SOL/USDT', sym: 'SOLUSDT', ex: 'binance' },
+    { name: 'XRP/USDT', sym: 'XRPUSDT', ex: 'binance' },
+    { name: 'DOGE/USDT', sym: 'DOGEUSDT', ex: 'binance' },
   ]},
 ];
 function loadWl() {
@@ -2305,15 +2206,15 @@ function loadWl() {
       return sv.map(g => ({ name: String(g.name || '未命名'), collapsed: !!g.collapsed,
         symbols: (Array.isArray(g.symbols) ? g.symbols : [])
           .filter(s => s && s.sym)
-          .map(s => ({ name: String(s.name || s.sym), sym: String(s.sym), ex: String(s.ex || curExchange), desc: String(s.desc || ''), price: null, chg: '--' })) }));
+          .map(s => ({ name: String(s.name || s.sym), sym: String(s.sym), ex: String(s.ex || curExchange), price: null, chg: '--' })) }));
     }
   } catch (e) {}
-  return DEFAULT_WL_GROUPS.map(g => ({ ...g, symbols: g.symbols.map(s => ({ ...s, desc: s.desc || '', price: null, chg: '--' })) }));
+  return DEFAULT_WL_GROUPS.map(g => ({ ...g, symbols: g.symbols.map(s => ({ ...s, price: null, chg: '--' })) }));
 }
 function saveWl() {
   try {
     localStorage.setItem(LS_WL, JSON.stringify(symGroups.map(g =>
-      ({ name: g.name, collapsed: g.collapsed, symbols: g.symbols.map(s => ({ name: s.name, sym: s.sym, ex: s.ex, desc: s.desc || '' })) }))));
+      ({ name: g.name, collapsed: g.collapsed, symbols: g.symbols.map(s => ({ name: s.name, sym: s.sym, ex: s.ex })) }))));
   } catch (e) {}
 }
 let symGroups = loadWl();
@@ -2328,15 +2229,15 @@ function switchExchange(ex, opts = {}) {
   const belongs = symGroups.some(g => g.symbols.some(s => s.sym && s.sym === curSymbol && (!s.ex || s.ex === ex)));
   if (opts.symbol) {
     curSymbol = opts.symbol;
-    document.getElementById('top-symbol').textContent = dispOf(curSymbol);
-    document.querySelector('.watermark').textContent = dispOf(curSymbol);
+    document.getElementById('top-symbol').textContent = curSymbol;
+    document.querySelector('.watermark').textContent = curSymbol;
   } else if (!opts.keepSymbol && !belongs && meta.default_symbols.length) {
     curSymbol = meta.default_symbols[0].symbol;
-    document.getElementById('top-symbol').textContent = dispOf(curSymbol);
-    document.querySelector('.watermark').textContent = dispOf(curSymbol);
+    document.getElementById('top-symbol').textContent = curSymbol;
+    document.querySelector('.watermark').textContent = curSymbol;
   }
-  /* 周期：该所不支持当前周期时切到首个支持项（派生层保证固定档+自定义倍率全源可用，不回退） */
-  if (meta.timeframes && meta.timeframes.length && !meta.timeframes.includes(curTf) && !tfValid(curTf)) {
+  /* 周期：该所不支持当前周期时切到首个支持项 */
+  if (meta.timeframes && meta.timeframes.length && !meta.timeframes.includes(curTf)) {
     curTf = meta.timeframes[0];
     document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === curTf));
   }
@@ -2350,27 +2251,20 @@ function switchExchange(ex, opts = {}) {
   refreshListPrices();
   saveLayout();
 }
-/* 周期按钮可用性：插件不支持的周期置灰禁点（派生层下固定档/自定义倍率视为全源可用） */
+/* 周期按钮可用性：插件不支持的周期置灰禁点 */
 function applyTfAvailability() {
   const m = sourcesMeta[curExchange];
   document.querySelectorAll('.tf-btn').forEach(b => {
-    if (!b.dataset.tf) return;   // 「自定」入口本身无周期，恒可点
-    const ok = !m || !m.timeframes.length || m.timeframes.includes(b.dataset.tf) || tfValid(b.dataset.tf);
+    const ok = !m || !m.timeframes.length || m.timeframes.includes(b.dataset.tf);
     b.disabled = !ok;
   });
 }
-/* 启动时拉取后端已注册市场源插件（前端交易所选择器数据源）。
-   后端市场源为后台初始化（如 ths 登录可达分钟级）：源列表空则自动重试至就绪，免手工刷新 */
+/* 启动时拉取后端已注册市场源插件（前端交易所选择器数据源） */
 async function initSources() {
-  for (let attempt = 0; attempt < 60 && !Object.keys(sourcesMeta).length; attempt++) {
-    try {
-      const j = await (await fetch(`${API}/api/market/sources`, { signal: AbortSignal.timeout(10000) })).json();
-      (j.sources || []).forEach(s => { sourcesMeta[s.exchange] = s; });
-    } catch (e) {}
-    if (Object.keys(sourcesMeta).length) break;
-    setSb(`◉ 等待市场源就绪…（${attempt + 1}）`);
-    await new Promise(r => setTimeout(r, 2000));
-  }
+  try {
+    const j = await (await fetch(`${API}/api/market/sources`)).json();
+    (j.sources || []).forEach(s => { sourcesMeta[s.exchange] = s; });
+  } catch (e) {}
   if (!sourcesMeta[curExchange]) curExchange = Object.keys(sourcesMeta)[0] || 'binance';
   /* 恢复的品种不属于当前所（如 exchange=ig 但 symbol=BTCUSDT）：回退到该所默认首个品种（收藏夹为全局列表，不受影响） */
   const meta = sourcesMeta[curExchange];
@@ -2399,7 +2293,7 @@ function renderSymbols() {
   const kw = symFilter.trim().toLowerCase();
   let html = '';
   symGroups.forEach((g, gi) => {
-    const list = kw ? g.symbols.filter(s => (s.name.toLowerCase().includes(kw) || (s.desc || '').toLowerCase().includes(kw))) : g.symbols;
+    const list = kw ? g.symbols.filter(s => s.name.toLowerCase().includes(kw)) : g.symbols;
     html += `<div class="wl-group-head ${g.collapsed && !kw ? 'collapsed' : ''}" data-g="${gi}">
       <span class="caret">▼</span><span>${g.name}</span><span class="cnt">${list.length}</span></div>`;
     if (g.collapsed && !kw) return;
@@ -2411,14 +2305,12 @@ function renderSymbols() {
         ? (s.sym ? fmtSym(s.sym, s.price) : s.price.toLocaleString('en-US', { minimumFractionDigits: (String(s.price).split('.')[1] || '').length }))
         : '--';
       const activeCls = s.sym && s.sym === curSymbol && (!s.ex || s.ex === curExchange) ? ' active' : '';
-      /* 展示码优先取后端目录 code（A 股去前缀纯数字）；desc 为中文品种描述（股票即股票名称） */
-      const label = dispOf(s.sym);
-      html += `<div class="wl-row${activeCls}" data-ex="${s.ex || ''}" data-real="${s.sym}" data-sym="${s.name}">
-        <span class="wl-ico" style="background:${icoFor(s.name)}">${(label[0] || '?').toUpperCase()}</span>
-        <span class="wl-name"><span class="wl-code">${label}</span>${s.desc ? `<span class="wl-desc">${s.desc}</span>` : ''}</span>
+      html += `<div class="wl-row${activeCls}" data-ex="${s.ex || ''}" data-sym="${s.name}">
+        <span class="wl-ico" style="background:${icoFor(s.name)}">${s.name[0].toUpperCase()}</span>
+        <span class="wl-name">${s.name}</span>
         <span class="wl-val">${priceTxt}</span>
         <span class="wl-chg ${chgCls}">${s.chg}</span>
-        <span class="wl-del" data-del="${gi}|${s.ex || ''}|${s.sym}" title="删除">✕</span>
+        <span class="wl-del" data-del="${gi}|${s.name}" title="删除">✕</span>
       </div>`;
     });
   });
@@ -2455,10 +2347,9 @@ document.getElementById('sym-list').addEventListener('click', e => {
   if (e.target.closest('#wl-add-group')) { wlAddingGroup = true; renderSymbols(); return; }
   const del = e.target.closest('[data-del]');
   if (del) {
-    /* 按数据源+路由码定位（展示码可能撞码，如 000001 上证指数/平安银行） */
-    const [gi, dex, dsym] = del.dataset.del.split('|');
+    const [gi, name] = del.dataset.del.split('|');
     const g = symGroups[+gi];
-    g.symbols = g.symbols.filter(s => !((s.ex || '') === dex && s.sym === dsym));
+    g.symbols = g.symbols.filter(s => s.name !== name);
     if (!g.symbols.length) symGroups.splice(+gi, 1);
     saveWl();
     renderSymbols();
@@ -2475,7 +2366,7 @@ document.getElementById('sym-list').addEventListener('click', e => {
   // 点击品种行 → 切到该行自身数据源 + 品种（收藏行数据源可与当前图表不同）
   const row = e.target.closest('.wl-row');
   if (row) {
-    const s = symGroups.flatMap(g => g.symbols).find(x => x.sym === row.dataset.real && (x.ex || '') === row.dataset.ex);
+    const s = symGroups.flatMap(g => g.symbols).find(x => x.name === row.dataset.sym && (x.ex || '') === row.dataset.ex);
     if (s && s.sym) {
       if (s.ex && s.ex !== curExchange) switchExchange(s.ex, { symbol: s.sym });
       else switchSymbol(s.sym);
@@ -2516,18 +2407,8 @@ async function loadSrFull() {
   } catch (e) {
     /* 后端未连接：回退源元数据默认品种，保证弹窗可用 */
     srFull = Object.entries(sourcesMeta).flatMap(([ex, m]) =>
-      ((m && m.default_symbols) || []).map(s => ({ exchange: ex, source: m.label, region: m.region || 'global', symbol: s.symbol, name: s.name, type: s.type || '', code: s.code || s.symbol })));
+      ((m && m.default_symbols) || []).map(s => ({ exchange: ex, source: m.label, symbol: s.symbol, name: s.name, type: s.type || '' })));
   }
-  symCode = Object.fromEntries((srFull || []).filter(r => r.code).map(r => [r.symbol, r.code]));
-    /* 旧收藏回填：name 曾存带前缀路由码→改为目录展示码；补中文描述（股票即股票名称） */
-    let wlChanged = false;
-    symGroups.forEach(g => g.symbols.forEach(s => {
-      const cat = srFull.find(r => r.exchange === s.ex && r.symbol === s.sym);
-      if (!cat) return;
-      if (cat.code && cat.code !== s.sym && s.name === s.sym) { s.name = cat.code; wlChanged = true; }
-      if (!s.desc && cat.name && cat.name !== s.sym) { s.desc = cat.name; wlChanged = true; }
-    }));
-    if (wlChanged) { saveWl(); renderSymbols(); }
 }
 function renderSrTabs() {
   const present = new Set((srFull || []).map(r => r.type).filter(Boolean));
@@ -2544,13 +2425,12 @@ function renderSrFilter() {
 }
 function renderSrResults() {
   const body = document.getElementById('sr-body');
+  if (srRegion === 'cn') { body.innerHTML = '<div class="sr-empty">国内<br><b>数据源接入中</b></div>'; return; }
   if (!srFull) { body.innerHTML = '<div class="sr-empty">品种目录加载中…</div>'; return; }
   const kw = srKw.trim().toUpperCase();
   let rows = srFull;
-  /* 国内/国外分段按源元数据 region 过滤（后端 sources.region 下发，缺省国外） */
-  rows = rows.filter(r => (r.region || 'global') === srRegion);
   if (srType !== 'all') rows = rows.filter(r => r.type === srType);
-  if (kw) rows = rows.filter(r => r.symbol.includes(kw) || (r.name || '').toUpperCase().includes(kw) || (r.code || '').includes(kw));
+  if (kw) rows = rows.filter(r => r.symbol.includes(kw) || (r.name || '').toUpperCase().includes(kw));
   const shown = rows.slice(0, SR_RENDER_CAP);
   /* 收藏为全局列表：已入列按数据源+品种判重（跨所同名品种是不同条目） */
   const addedSyms = new Set(symGroups.flatMap(g => g.symbols).filter(s => s.sym).map(s => `${s.ex || ''}|${s.sym}`));
@@ -2559,14 +2439,14 @@ function renderSrResults() {
     const added = srMode === 'add' && addedSyms.has(`${r.exchange}|${r.symbol}`);
     return `<div class="sr-row${r.symbol === curSymbol && r.exchange === curExchange && srMode === 'switch' ? ' active' : ''}${added ? ' added' : ''}" data-ex="${r.exchange}" data-sym="${r.symbol}">
       <span class="sr-ico" style="background:${icoFor(r.symbol)}">${(r.symbol[0] || '?').toUpperCase()}</span>
-      <span class="sr-sym">${r.code || r.symbol}</span>
+      <span class="sr-sym">${r.symbol}</span>
       <span class="sr-desc">${r.name}</span>
       <span class="sr-type">${TYPE_NAMES[r.type] || r.type || ''}</span>
       <span class="sr-src">${added ? '✓ 已添加' : r.source}</span>
     </div>`;
   }).join('');
   if (rows.length > shown.length) html += `<div class="sr-more">共 ${rows.length} 个品种，仅显示前 ${shown.length} 个，请输入关键字细化</div>`;
-  body.innerHTML = html || `<div class="sr-empty">${srRegion === 'cn' ? '国内' : '国外'}<br><b>无匹配品种</b></div>`;
+  body.innerHTML = html || '<div class="sr-empty">无匹配品种</div>';
 }
 function renderSrAll() { renderSrTabs(); renderSrFilter(); renderSrResults(); }
 async function openSymSearch(mode, targetGroup = null) {
@@ -2597,11 +2477,9 @@ document.getElementById('sr-body').addEventListener('click', e => {
   if (!row || row.classList.contains('added')) return;
   const ex = row.dataset.ex, sym = row.dataset.sym;
   if (srMode === 'add') {
-    /* 添加模式：仅加入目标分组并订阅价格，不切换图表品种（列表由用户显式管理）。
-       name 取目录展示码（A 股去前缀纯数字），desc 为中文品种描述（股票即股票名称） */
+    /* 添加模式：仅加入目标分组并订阅价格，不切换图表品种（列表由用户显式管理） */
     if (!srTargetGroup) return;
-    const cat = (srFull || []).find(r => r.exchange === ex && r.symbol === sym);
-    srTargetGroup.symbols.push({ name: (cat && cat.code) || sym, sym, ex, desc: (cat && cat.name && cat.name !== sym) ? cat.name : '', price: null, chg: '--' });
+    srTargetGroup.symbols.push({ name: sym, sym, ex, price: null, chg: '--' });
     saveWl();
     renderSymbols(); resyncListTopics(); refreshListPrices();
     renderSrResults();   // 该行标记“已添加”，可继续添加其它品种
@@ -2684,24 +2562,9 @@ document.getElementById('pos-toggle').addEventListener('click', () => {
   saveLayout();
 });
 
-/* ═══ 交易面板显示/隐藏（右上角「交易」按钮；面板可见时按钮高亮）═══ */
-const tradeToggleBtn = document.getElementById('trade-toggle');
-function syncTradeToggle() {
-  const visible = !document.querySelector('.main').classList.contains('no-trade');
-  tradeToggleBtn.classList.toggle('active', visible);
-  tradeToggleBtn.setAttribute('aria-pressed', String(visible));
-}
-tradeToggleBtn.addEventListener('click', () => {
-  document.querySelector('.main').classList.toggle('no-trade');
-  syncTradeToggle();
-  saveLayout();
-});
-syncTradeToggle();
-
 /* ═══ 启动（所有定义就绪后；先拉市场源注册表再初始化图表链路） ═══ */
 (async () => {
   await initSources();
-  loadSrFull().then(refreshSymLabels).catch(() => {});   // 展示码目录：顶栏/水印改显纯数字（不阻塞首屏）
   await fetchBackendMeta();   // IND-110：后端 def 式指标目录（失败不阻塞内置指标）
   rebuildIndicators();   // 按 indLayout 构建指标实例（首屏数据就绪前，series 空数据）
   connectWS();

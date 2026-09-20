@@ -29,6 +29,21 @@ class _FakeSource(MarketSource):
         pass
 
 
+class _DeferredFakeSource(_FakeSource):
+    """启动未就绪的桩：_try_reconnect 第 ready_after 次调用后转可用"""
+
+    def __init__(self, name: str, ready_after: int = 1):
+        super().__init__(name)
+        self.available = False
+        self.attempts = 0
+        self._ready_after = ready_after
+
+    def _try_reconnect(self) -> None:
+        self.attempts += 1
+        if self.attempts >= self._ready_after:
+            self.available = True
+
+
 # ─── Manager：注册与路由 ───
 
 def test_register_get_default_exchange():
@@ -166,6 +181,38 @@ def test_active_targets_watched_fallback():
     src.watched_targets = [("BTCUSDT", "1h")]
     mgr.register(src)
     assert mgr.active_targets("binance") == {("BTCUSDT", "1h")}
+
+
+# ─── 启动未就绪源：后台补注册（启动竞态根治） ───
+
+
+def test_defer_registers_when_reconnect_succeeds():
+    """defer 的源在 _try_reconnect 就绪后被 _pending_loop 补注册并移出待办"""
+    import asyncio
+
+    mgr = MarketSourceManager()
+    src = _DeferredFakeSource("mt5", ready_after=1)
+    mgr.defer(src)
+    assert src.name not in mgr._sources          # 尚未注册
+    asyncio.run(mgr._pending_loop())             # 首轮即就绪 → 注册后循环退出
+    assert mgr.get("mt5") is src
+    assert mgr._pending == []
+
+
+def test_defer_retries_until_ready(monkeypatch):
+    """首轮未就绪时按节奏重试，直至 available 转真才注册（不永久跳过）"""
+    import asyncio
+
+    import gateway.market_sources.manager as mgr_mod
+    monkeypatch.setattr(mgr_mod, "_PENDING_RETRY_INTERVAL", 0)   # 免真实等待
+
+    mgr = MarketSourceManager()
+    src = _DeferredFakeSource("mt5", ready_after=3)
+    mgr.defer(src)
+    asyncio.run(mgr._pending_loop())
+    assert src.attempts == 3                     # 第 3 次才就绪
+    assert mgr.get("mt5") is src
+    assert mgr._pending == []
 
 
 async def test_publish_bar_dedup_and_exchange_field(monkeypatch):

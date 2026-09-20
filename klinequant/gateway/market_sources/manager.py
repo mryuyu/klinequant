@@ -28,6 +28,8 @@ VALID_TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h
 _TARGET_POLL_INTERVAL = 1.0
 # 全量品种目录缓存（秒）：终端/交易所目录极少变化，避免每次打开搜索弹窗重新枚举
 SYMBOLS_CACHE_TTL = 1800.0
+# 未就绪源后台补注册复查间隔（秒）：源自身 _try_reconnect 带冷却护栏，此处仅控制复查节奏
+_PENDING_RETRY_INTERVAL = 15.0
 
 
 class MarketSourceManager:
@@ -44,12 +46,23 @@ class MarketSourceManager:
         self._symbols_cache: dict[str, tuple[float, list[dict]]] = {}
         self._started = False
         self._tasks: list[asyncio.Task] = []
+        # 启动时未就绪的源（终端/行情服务器未连接）：由 _pending_loop 后台重试补注册，
+        # 就绪后自动上线，无需重启网关（启动竞态根治）
+        self._pending: list[MarketSource] = []
 
     # ─── 注册与查询 ───
 
     def register(self, source: MarketSource) -> None:
         self._sources[source.name] = source
         logger.info(f"Market source registered: {source.name} ({source.label})")
+
+    def defer(self, source: MarketSource) -> None:
+        """登记启动时未就绪的源：交由 _pending_loop 后台重试，就绪后自动 register"""
+        self._pending.append(source)
+        logger.info(
+            f"Market source deferred (not ready at bootstrap): "
+            f"{source.name} ({source.label})"
+        )
 
     def get(self, exchange: str) -> MarketSource | None:
         return self._sources.get((exchange or "").lower())
@@ -230,6 +243,8 @@ class MarketSourceManager:
             return
         self._started = True
         self._tasks.append(asyncio.create_task(self._dispatch_loop()))
+        if self._pending:
+            self._tasks.append(asyncio.create_task(self._pending_loop()))
         logger.info(f"Market source manager started: {sorted(self._sources.keys())}")
 
     async def _dispatch_loop(self) -> None:
@@ -245,6 +260,29 @@ class MarketSourceManager:
                     entry[1].cancel()
                     running[ex] = (targets, asyncio.create_task(source.stream_loop()))
             await asyncio.sleep(_TARGET_POLL_INTERVAL)
+
+    async def _pending_loop(self) -> None:
+        """未就绪源后台补注册：终端/行情服务器就绪后自动上线，无需重启网关
+
+        根治启动竞态——MT5 终端与网关几乎同时启动时，bootstrap 那一刻 initialize
+        尚未就绪会被一次性跳过（外汇无数据 + 品种分类缺失），而 stream_loop 只对
+        已注册源重连，跳过后再也补不回来。此处按节奏重试各源 _try_reconnect
+        （源侧自带冷却护栏），available 转真即 register，_dispatch_loop 随后自动
+        拉起其 stream_loop。
+        """
+        while self._pending:
+            for src in list(self._pending):
+                try:
+                    await asyncio.to_thread(src._try_reconnect)
+                except Exception as e:
+                    logger.debug(f"Pending source reconnect error [{src.name}]: {e}")
+                    continue
+                if getattr(src, "available", False):
+                    self._pending.remove(src)
+                    self.register(src)
+            if self._pending:
+                await asyncio.sleep(_PENDING_RETRY_INTERVAL)
+        logger.info("All deferred market sources online")
 
 
 # 全局单例
@@ -270,9 +308,10 @@ def bootstrap_sources() -> None:
             market_manager.register(mt5)
         else:
             logger.warning(
-                "MT5 source skipped: 本机 MT5 终端未连接"
-                "（需终端已登录运行，或配置 MT5_TERMINAL_PATH）"
+                "MT5 source not ready at bootstrap: 本机 MT5 终端未连接"
+                "（需终端已登录运行，或配置 MT5_TERMINAL_PATH）；转后台重试，就绪后自动上线"
             )
+            market_manager.defer(mt5)
     if "ths" in enabled:
         from gateway.market_sources.ths_source import ThsSource
         ths = ThsSource()
@@ -280,6 +319,7 @@ def bootstrap_sources() -> None:
             market_manager.register(ths)
         else:
             logger.warning(
-                "THS source skipped: 同花顺行情服务器连接失败"
-                "（检查网络或 THS_USERNAME/THS_PASSWORD）"
+                "THS source not ready at bootstrap: 同花顺行情服务器连接失败"
+                "（检查网络或 THS_USERNAME/THS_PASSWORD）；转后台重试，就绪后自动上线"
             )
+            market_manager.defer(ths)
