@@ -121,6 +121,64 @@ def load_spec_from_mt5_dict(info: dict, symbol: str) -> SymbolInfo:
     )
 
 
+def load_spec_from_binance(info: dict, symbol: str) -> SymbolInfo:
+    """从币安 USDT-M Futures exchangeInfo 的单品种条目构造 SymbolInfo。
+
+    所有约束从 venue 实测 filters 解析，不硬编码。
+
+    Args:
+        info: exchangeInfo["symbols"] 中匹配 symbol 的条目 dict，含
+              baseAsset/quoteAsset/pricePrecision/quantityPrecision/filters
+        symbol: 品种代码（如 "BTCUSDT"）
+
+    Returns:
+        SymbolInfo（market_type=FUTURES，One-way 净持仓 close_priority=net）
+    """
+    qty_step = Decimal("0")
+    min_qty = Decimal("0")
+    qty_max = Decimal("0")
+    tick_size = Decimal("0")
+    min_notional = Decimal("0")
+
+    for f in info.get("filters", []):
+        ftype = f.get("filterType")
+        if ftype == "LOT_SIZE":
+            qty_step = Decimal(str(f.get("stepSize", "0")))
+            min_qty = Decimal(str(f.get("minQty", "0")))
+            qty_max = Decimal(str(f.get("maxQty", "0")))
+        elif ftype == "PRICE_FILTER":
+            tick_size = Decimal(str(f.get("tickSize", "0")))
+        elif ftype == "MIN_NOTIONAL":
+            # Futures 用 notional（Spot 旧字段 minNotional 兜底）
+            notional = f.get("notional", f.get("minNotional", "0"))
+            min_notional = Decimal(str(notional))
+
+    price_precision = int(info.get("pricePrecision", _decimal_places(tick_size)))
+    qty_precision = int(info.get("quantityPrecision", _decimal_places(qty_step)))
+
+    return SymbolInfo(
+        symbol=symbol,
+        exchange="binance_futures",
+        base_currency=info.get("baseAsset", ""),
+        quote_currency=info.get("quoteAsset", ""),
+        price_precision=price_precision,
+        qty_precision=qty_precision,
+        min_qty=min_qty,
+        min_notional=min_notional,
+        tick_size=tick_size,
+        market_type="FUTURES",
+        status="ACTIVE" if str(info.get("status", "TRADING")).upper() == "TRADING" else "SUSPENDED",
+        qty_unit="COIN",
+        qty_step=qty_step,
+        qty_max=qty_max,
+        pip_size=tick_size,
+        contract_multiplier=Decimal("1"),  # USDT-M 线性合约：1 币 = 1 张
+        can_short=True,
+        t_plus_n=0,  # 加密 T+0
+        close_priority="net",  # One-way 净持仓
+    )
+
+
 def _decimal_places(d: Decimal) -> int:
     """计算 Decimal 的小数位数（用于 qty_precision）"""
     if d == 0:

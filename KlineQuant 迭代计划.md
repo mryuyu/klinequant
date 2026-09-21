@@ -1,6 +1,6 @@
 # KlineQuant 迭代计划文档
 
-> **版本**：v2.12  
+> **版本**：v2.14  
 > **创建日期**：2026-07-30  
 > **最后更新**：2026-09-01（阶段收尾：**前端基础功能 + 插件式数据源接入**告一段落——但交易闭环（行情→指标→信号→风控→下单→持仓→结算）尚未跑通，前端基线仍为纯行情终端；下一阶段：INT-CLOSED 闭环验证）  
 > **当前基线**：v1.9.1-mockup（轻量版行情终端，lc-live.html 唯一迭代基线，commit a45ffe2 已推送）  
@@ -175,6 +175,51 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 
 ---
 
+## 六·五、外汇（FX）+ 加密（Crypto）同构交易与回测迭代计划（v2.0~v2.14 专项）
+
+> 背景：FX 订单系统 v2.0（tag v2.0.0）与回测/实盘同构（tag v2.1.0）已交付并实盘/回测双验证；v9.39 进一步抽象出市场无关的 `MarketBackend` 并接入加密（币安 Futures Demo）同构实盘模拟，同一份 `strategy(api: KqApi)` 跨 FX/Crypto 零改动运行。本节归拢 FX + Crypto 专项的已完成、当前迭代与遗留增强（旧路线一~六节以币安/A 股/指标为主，未覆盖 FX/Crypto 交易闭环）。
+
+### 已完成（FX 核心闭环）
+
+| 编号 | 交付 | 状态 |
+|------|------|------|
+| FX-ORD | 订单系统 v2.0：send_order 单入口 + 敞口账本 ExposureLedger + 统一解析器 UnifiedResolver + spec_loader 实测合约规格 + mt5_executor 市价单 | ✅ |
+| FX-MT5 | MT5 市场源：子进程隔离 + 共享锁 + 掉线自愈 + 返回值序列化修复 | ✅ |
+| FX-HEDGE | 对冲账户按 position ticket 精确平仓（FIFO 选反向持仓逐笔平） | ✅ 实盘验证 |
+| FX-MULTI | 多品种单进程多线程（一连接一 feed，每品种独立 KqApi+spec+线程） | ✅ 实盘验证 |
+| FX-CLOSE | 策略收盘价模型（消除盘中噪声翻转）+ 到点/退出自动清仓 | ✅ |
+| FX-BT | 回测/实盘同构：同一 strategy(api: KqApi) 跑 MT5 历史数据（BacktestRunner） | ✅ 回测验证 |
+| FX-CONV | 跨币种盈亏换算：直盘（quote/base==账户币）+ 交叉盘（order_calc_profit 推导系数） | ✅ 回测验证 |
+
+### 已完成（Crypto 同构 + MarketBackend 抽象，v9.39）
+
+| 编号 | 交付 | 状态 |
+|------|------|------|
+| MKT-BACKEND | MarketBackend 抽象：`LiveRunner` 市场无关（connect/load_specs/make_executor/make_feed/reconcile_positions/shutdown 收敛到 backend 协议），换 backend 即换市场；`Mt5Backend` 逐行等价搬迁 FX 逻辑（**零退化**），为国内期货（CTP，P3-002）等新市场铺路 | ✅ 单测验证 |
+| CRYPTO-LIVE | 加密（币安 USDT-M Futures Demo）同构实盘模拟：复用同一份 `strategy(api: KqApi)`，`BinanceExecutor`（async→sync 桥接 + MT5 同形 dict）+ `BinanceDataFeed`（fstream WS→wait_update）+ `BinanceBackend`（独立 event loop 线程），One-way 净持仓（positionSide=BOTH，close_priority=net，平仓 reduceOnly），`load_spec_from_binance` 从 exchangeInfo 实测合约规格；`scripts/run_crypto_live.py` 一键启动 | ✅ 单测验证（实盘待用户手动验证） |
+
+### 当前迭代
+
+| 编号 | 任务 | 说明 | 优先级 |
+|------|------|------|--------|
+| FX-BT-UI | 前端 BacktestView 接 FX 同构回测 | 新增 `gateway/routers/backtest_fx.py`（复用 BacktestRunner，线程池异步执行，暴露 run/result/strategies）；前端 BacktestView 增「FX 同构」引擎模式（品种/周期/策略/bars/资金），多品种逐品种展示报告+资金曲线+成交明细；旧币安 dual_ma 回测路由保留不动 | P1 |
+
+### 遗留 / 后续增强（分优先级）
+
+| 编号 | 项目 | 说明 | 优先级 |
+|------|------|------|--------|
+| FX-BT-LIMIT | 回测执行器 LIMIT/STOP 单 | 一期仅 MARKET（LIMIT/STOP 返 DEAD），补挂单撮合（触及价成交） | P1 |
+| FX-FLATTEN | flatten 按 ticket 全平 | 现按净敲算 net_vol 发单一 CLOSE；同时持多空两方向需按 ticket 逐笔全平 | P1 |
+| FX-DUR-GUARD | run_fx_live duration 护栏 | 负/零 duration 静默转不限时，宜显式报错或提示 | P1 |
+| FX-BT-PORT | 多品种组合资金曲线 | 现顺序回放、品种独立；补组合级 equity/夏普/回撤（BT-005 关联） | P2 |
+| FX-BT-EQ | equity_curve 采样滞后 | ~1 bar 滞后（on_bar 在 advance 后、下单前），影响可忽略 | P2 |
+| FX-BT-ANNUAL | 年化 bars_per_year | 现 365 天约定，FX 实际 ~5 天/周，年化偏乐观 | P2 |
+| FX-CONV-HIST | 交叉盘 rate 历史时点 | 现用加载时点汇率，补逐 bar 历史交叉汇率（区间波动大时） | P2 |
+| FX-CLOSE-LIMIT | 挂单类平仓 ticket 路径 | LIMIT/STOP CLOSE 未走 ticket 精确平仓 | P2 |
+| FX-FEED-SCALE | 50 品种 feed 轮询优化 | wait_update 单 Event 电平触发 + _poll_loop 串行，大品种数需优化 | P2 |
+
+---
+
 ## 七、BACKLOG 总池（当前全部未闭环项）
 
 | 编号 | 项目 | 目标版本 | 状态 |
@@ -237,3 +282,5 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | 2026-09-01 | v2.10 | 补记 v9.23~v9.27（commit 0383a3f，tag v1.9.0-mockup，2026-08-31 推送）：分屏按需加载 + 左滑级联拉取修复 + 事件循环停摆修复 + MT5 子进程隔离 + THS 登录护栏 |
 | 2026-09-01 | v2.11 | 补记 v9.28~v9.30（commit a45ffe2，tag v1.9.1-mockup，2026-09-01 推送）：MT5 掉线自愈 + 外汇精度回归修复 + 指标样式恢复修复 |
 | 2026-09-01 | v2.12 | **阶段收尾：前端基础功能 + 插件式数据源接入告一段落（用户修正定性：仅完成展示层与数据接入，交易闭环尚未跑通）**。已交付全景：① 前端基础功能——UI 重设计（lc-live.html 基线）、图表二次开发（懒加载/分屏/右键菜单/价格标签倒计时）、指标后端统一计算（前端零计算 + def 式指标语言 + MACD 倍数族）、品种列表收藏夹化（跨源混排 + 本地持久化）、全周期体系（周/月/季/年 + 自定义倍率周期）；② 数据源——币安（加密）+ MT5（外汇，子进程隔离 + 掉线自愈）+ THS（A 股，登录护栏 + 会话保活）三源插件式接入，盘中实时聚合/精度闭环/全史深度均已验证。全部代码已推送 origin/main（最新 tag v1.9.1-mockup）。**闭环现状**：lc-live.html 仍为纯行情终端（无策略管理/持仓/订单/盈亏 UI），后端 strategy/trade/risk/backtest API 齐备（strategy router 含 CRUD+start/stop/pause/logs）但未接前端，「行情→指标→信号→风控→下单→持仓→结算」未端到端验证；新增 INT-CLOSED 闭环验证任务（下一轮）。已知遗留：BUG-001 调参全量重建、BUG-002 退市股历史、MT5/THS 盘中时段持续观察 |
+| 2026-09-22 | v2.13 | 新增「六·五、外汇（FX）交易与回测迭代计划」专项节：归拢 FX 已完成核心闭环（FX-ORD 订单系统 v2.0 / FX-MT5 市场源 / FX-HEDGE 对冲 ticket 平仓 / FX-MULTI 多品种单进程多线程 / FX-CLOSE 收盘价模型 / FX-BT 回测实盘同构 / FX-CONV 跨币种换算，对应 tag v2.0.0~v2.1.0、v9.31~v9.37）；当前迭代 FX-BT-UI（前端 BacktestView 接 FX 同构回测）；遗留增强分 P1（FX-BT-LIMIT 挂单撮合 / FX-FLATTEN 按 ticket 全平 / FX-DUR-GUARD duration 护栏）与 P2（FX-BT-PORT 组合资金曲线 / FX-BT-EQ 采样滞后 / FX-BT-ANNUAL 年化约定 / FX-CONV-HIST 交叉盘历史汇率 / FX-CLOSE-LIMIT 挂单平仓 ticket / FX-FEED-SCALE 50 品种轮询优化） |
+| 2026-09-23 | v2.14 | 补记 v9.39（加密同构实盘模拟 + MarketBackend 抽象）：① 六·五节扩展为「FX + Crypto 同构」，新增「已完成（Crypto 同构 + MarketBackend 抽象）」子表——MKT-BACKEND（MarketBackend 协议抽象，LiveRunner 市场无关，Mt5Backend 逐行等价搬迁保 FX 零退化，为国内期货 CTP/P3-002 铺路）+ CRYPTO-LIVE（币安 USDT-M Futures Demo 同构实盘模拟：BinanceExecutor async→sync 桥接 + MT5 同形 dict、BinanceDataFeed fstream WS、BinanceBackend 独立 event loop 线程、One-way 净持仓 reduceOnly 平仓、load_spec_from_binance 实测合约规格、run_crypto_live.py）；② 全量单测 715 passed / 0 failed（新增 4 文件 34 用例：spec_loader/executor/feed/backend）；③ 遗留：run_crypto_live 连 demo-fapi 实跑 fx_simple_test BTCUSDT 1m 真实下单待用户手动验证（One-way/Hedge、avgPrice 依赖、代理 7897） |

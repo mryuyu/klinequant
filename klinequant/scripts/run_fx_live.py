@@ -25,6 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from strategy.sdk.backend import Mt5Backend  # noqa: E402
 from strategy.sdk.live_runner import LiveRunner  # noqa: E402
 
 
@@ -84,15 +85,15 @@ def main():
     print("  Ctrl+C to stop gracefully (auto-flatten on exit)")
     print()
 
+    backend = Mt5Backend(magic=args.magic, deviation=args.deviation)
     runner = LiveRunner(
+        backend,
         symbols=symbols,
         period=args.period,
         strategy_fn=strategy,
         tag=args.tag,
         poll_interval=args.poll,
         bar_count=args.bars,
-        magic=args.magic,
-        deviation=args.deviation,
         duration=args.duration if args.duration > 0 else None,
     )
     runner.run()
