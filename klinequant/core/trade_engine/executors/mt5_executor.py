@@ -14,7 +14,7 @@ import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from core.trade_engine.resolver import VenueOrderSpec
 from gateway.market_sources.mt5_driver import (
@@ -127,10 +127,15 @@ class Mt5Executor:
         """提交订单到 MT5。
 
         根据 kind + offset 决定 action 和 order type：
-          - MARKET + OPEN/CLOSE → TRADE_ACTION_DEAL（即时成交）
+          - MARKET + CLOSE → 按 position ticket 精确平仓（Hedging 安全，见 _submit_close）
+          - MARKET + OPEN → TRADE_ACTION_DEAL（即时成交）
           - LIMIT → TRADE_ACTION_PENDING（挂单）
           - STOP_MARKET / STOP_LIMIT → TRADE_ACTION_PENDING（触发挂单）
         """
+        # 市价平仓：走 ticket 精确平仓路径（兼容 Netting/Hedging）
+        if spec.offset == Offset.CLOSE and spec.kind == OrderKind.MARKET:
+            return self._submit_close(spec)
+
         request = self._build_request(spec)
         if request is None:
             return SubmitResult(
@@ -153,6 +158,112 @@ class Mt5Executor:
             )
 
         return self._parse_result(result, spec)
+
+    def _submit_close(self, spec: VenueOrderSpec) -> SubmitResult:
+        """市价平仓：按 position ticket 精确平指定持仓（兼容 Netting/Hedging）。
+
+        - Netting 账户：positions_get 返回单一净持仓（带 ticket），按 ticket 平即可；
+        - Hedging 账户：同品种多笔持仓，按开仓时间 FIFO 选与平仓方向相反的持仓逐笔平
+          （BUY 平平仓 type=1 的空单，SELL 平 type=0 的多单）。
+
+        关键安全：找不到匹配持仓时返回 DEAD，绝不发裸反向单
+        （否则 Hedging 账户会误开新仓，2026-09-21 实盘实证）。
+        """
+        # 目标持仓类型：0=BUY(多) 1=SELL(空)；BUY 平空、SELL 平多
+        target_type = 1 if spec.side == OrderSide.BUY else 0
+
+        # 选定平仓 legs：(position_ticket, volume)
+        legs: List[Tuple[int, Decimal]] = []
+        if spec.close_ticket:
+            legs = [(spec.close_ticket, spec.qty)]
+        else:
+            positions = self._driver.positions_get(spec.symbol) or []
+            matched = [
+                p for p in positions
+                if int(p.get("type", -1)) == target_type
+                and Decimal(str(p.get("volume", 0))) > 0
+            ]
+            matched.sort(key=lambda p: int(p.get("time", 0)))  # FIFO
+            remaining = spec.qty
+            for p in matched:
+                if remaining <= 0:
+                    break
+                vol = Decimal(str(p.get("volume", 0)))
+                take = min(vol, remaining)
+                legs.append((int(p.get("ticket", 0)), take))
+                remaining -= take
+
+        if not legs:
+            logger.error(
+                f"MT5 close: no matching position for {spec.symbol} "
+                f"side={spec.side.value} qty={spec.qty} target_type={target_type}"
+            )
+            return SubmitResult(
+                success=False, status="DEAD",
+                dead_reason=DeadReason.REJECTED.value,
+                comment="no matching position to close (hedging-safe reject)",
+            )
+
+        order_type = ORDER_TYPE_BUY if spec.side == OrderSide.BUY else ORDER_TYPE_SELL
+        total_qty = Decimal("0")
+        total_value = Decimal("0")   # 成交量×价格，用于加权均价
+        last_ticket = 0
+        last_retcode = 0
+        last_comment = ""
+        for ticket, volume in legs:
+            price = self._get_current_price(spec.symbol, spec.side)
+            if price is None:
+                last_comment = f"cannot get current price for {spec.symbol}"
+                logger.error(last_comment)
+                break
+            request = {
+                "action": TRADE_ACTION_DEAL,
+                "symbol": spec.symbol,
+                "volume": float(volume),
+                "type": order_type,
+                "price": price,
+                "position": ticket,   # Hedging 平仓关键字段
+                "deviation": spec.deviation or self._default_deviation,
+                "magic": spec.magic or self._magic,
+                "comment": spec.client_order_id or f"KQ-{int(time.time())}",
+                "type_time": ORDER_TIME_GTC,
+                "type_filling": ORDER_FILLING_IOC,
+            }
+            logger.info(
+                f"MT5 order_send CLOSE: {spec.symbol} {spec.side.value} "
+                f"qty={volume} position={ticket} kind=MARKET price={price}"
+            )
+            result = self._driver.order_send(request)
+            if result is None:
+                last_comment = "order_send returned None (connection lost or timeout)"
+                break
+            parsed = self._parse_result(result, spec)
+            last_retcode = parsed.retcode
+            last_comment = parsed.comment
+            if parsed.status == "FILLED":
+                total_qty += parsed.filled_qty
+                total_value += parsed.filled_price * parsed.filled_qty
+                last_ticket = parsed.order_ticket or ticket
+            else:
+                break   # 某笔失败，停止后续 leg（已成交部分如实回报）
+
+        if total_qty > 0:
+            avg_price = total_value / total_qty
+            return SubmitResult(
+                success=True, status="FILLED",
+                order_ticket=last_ticket,
+                filled_qty=total_qty,
+                filled_price=avg_price,
+                retcode=last_retcode,
+                comment=last_comment,
+            )
+        return SubmitResult(
+            success=False, status="DEAD",
+            dead_reason=DeadReason.REJECTED.value,
+            order_ticket=last_ticket,
+            retcode=last_retcode,
+            comment=last_comment or "close failed",
+        )
 
     def cancel(self, order_ticket: int, symbol: str) -> bool:
         """撤销挂单"""
@@ -251,8 +362,8 @@ class Mt5Executor:
         if spec.kind == OrderKind.STOP_LIMIT and spec.stop_price:
             request["stoplimit"] = float(spec.stop_price)
 
-        # Netting 账户平仓：MT5 净持仓模式下平仓就是反向 DEAL，无需特殊字段
-        # （close_ticket 仅 Hedging 账户需要，一期 Netting 不用）
+        # 注：市价平仓不走本方法（submit 已路由到 _submit_close，按 position ticket
+        # 精确平仓，兼容 Netting/Hedging）。本方法仅处理 OPEN 与挂单类请求。
 
         return request
 

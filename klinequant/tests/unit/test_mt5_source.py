@@ -62,13 +62,36 @@ def test_pipe_safe_converts_unpicklable_namedtuple():
     """匿名 namedtuple（__module__=builtins）不可 pickle → 转 dict 回传（digits 丢失致精度污染 8 位的根因回归）"""
     from collections import namedtuple
 
-    from gateway.market_sources.mt5_source import _pipe_safe
+    from gateway.market_sources.mt5_driver import _pipe_safe
 
     Info = namedtuple("SymbolInfo", ["digits", "visible"])
     Info.__module__ = "builtins"   # MetaTrader5 包 C 层构造的真实形态
     assert _pipe_safe(Info(5, True)) == {"digits": 5, "visible": True}
     assert _pipe_safe([Info(3, True)]) == [{"digits": 3, "visible": True}]
     assert _pipe_safe(None) is None and _pipe_safe(True) is True and _pipe_safe(1.5) == 1.5
+
+
+def test_pipe_safe_recursively_converts_nested_namedtuple():
+    """嵌套 C 层 namedtuple 也须逐层转 dict（OrderSendResult.request=TradeRequest
+    pickle 失败致 order_send 恒返回 None 的根因回归）"""
+    import pickle
+    from collections import namedtuple
+
+    from gateway.market_sources.mt5_driver import _pipe_safe
+
+    TradeRequest = namedtuple("TradeRequest", ["action", "symbol", "volume"])
+    TradeRequest.__module__ = "builtins"
+    OrderSendResult = namedtuple("OrderSendResult", ["retcode", "order", "request"])
+    OrderSendResult.__module__ = "builtins"
+
+    res = OrderSendResult(10009, 123, TradeRequest(1, "EURUSD", 0.01))
+    safe = _pipe_safe(res)
+    assert safe == {
+        "retcode": 10009, "order": 123,
+        "request": {"action": 1, "symbol": "EURUSD", "volume": 0.01},
+    }
+    assert isinstance(safe["request"], dict)   # 嵌套字段已展开为 dict
+    pickle.dumps(safe)                          # 可经管道序列化回传
 
 
 def test_timeframe_map_covers_frontend():

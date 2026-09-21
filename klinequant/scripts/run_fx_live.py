@@ -12,7 +12,7 @@
 运行：
     cd klinequant
     python scripts/run_fx_live.py
-    python scripts/run_fx_live.py --symbol GBPUSD --period 5m
+    python scripts/run_fx_live.py --symbols EURUSD,GBPUSD,USDJPY --period 5m
 """
 from __future__ import annotations
 
@@ -47,7 +47,8 @@ def setup_logging(verbose: bool = False) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="KlineQuant FX Live Strategy Runner")
-    parser.add_argument("--symbol", default="EURUSD", help="交易品种 (default: EURUSD)")
+    parser.add_argument("--symbols", "--symbol", dest="symbols", default="EURUSD",
+                        help="交易品种，逗号分隔 (default: EURUSD)，如 EURUSD,GBPUSD,USDJPY")
     parser.add_argument("--period", default="1m", help="驱动周期 (default: 1m)")
     parser.add_argument("--tag", default="", help="策略标签 (default: =period)")
     parser.add_argument("--poll", type=float, default=0.5, help="轮询间隔秒 (default: 0.5)")
@@ -67,10 +68,14 @@ def main():
     # 导入策略
     from strategies.fx_simple_test import strategy
 
+    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    if not symbols:
+        parser.error("--symbols 解析为空，请至少指定一个品种")
+
     dur_desc = f"{args.duration:.0f}s (auto-flatten at timeout)" if args.duration > 0 else "unlimited"
     print("=" * 60)
     print("  KlineQuant FX Live Runner")
-    print(f"  Symbol: {args.symbol}  Period: {args.period}")
+    print(f"  Symbols: {','.join(symbols)}  Period: {args.period}")
     print(f"  Strategy: fx_simple_test (MACD>0 + close>EMA10 = long, else short)")
     print(f"  Mode: MT5 Demo (real MARKET orders)")
     print(f"  Duration: {dur_desc}")
@@ -80,7 +85,7 @@ def main():
     print()
 
     runner = LiveRunner(
-        symbol=args.symbol,
+        symbols=symbols,
         period=args.period,
         strategy_fn=strategy,
         tag=args.tag,

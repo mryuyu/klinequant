@@ -57,10 +57,10 @@ class KqApi:
     """策略 SDK 主类。
 
     Args:
-        symbol: 驱动品种（默认上下文）
+        symbol: 主驱动品种（默认上下文；多品种时作为 symbol=None 的回落）
         period: 驱动周期
         tag: 策略/周期标识（敞口账本按 tag 隔离）
-        spec: 品种规格
+        specs: 品种规格表 {symbol: SymbolInfo}，多品种共享一个上下文
         ledger: 敞口账本
         resolver: 订单解析器
         executor: 交易执行器
@@ -72,7 +72,7 @@ class KqApi:
         symbol: str,
         period: str,
         tag: str,
-        spec: SymbolInfo,
+        specs: Dict[str, SymbolInfo],
         ledger: ExposureLedger,
         resolver: UnifiedResolver,
         executor: ExecutorProtocol,
@@ -81,7 +81,7 @@ class KqApi:
         self._symbol = symbol
         self._period = period
         self._tag = tag
-        self._spec = spec
+        self._specs = specs
         self._ledger = ledger
         self._resolver = resolver
         self._executor = executor
@@ -143,9 +143,22 @@ class KqApi:
 
     # ═══════════ 品种与持仓 ═══════════
 
+    def symbols(self) -> List[str]:
+        """本上下文订阅的全部品种（主品种在首位）。"""
+        return list(self._specs.keys())
+
+    def _spec_for(self, symbol: str) -> SymbolInfo:
+        """按品种取规格（多品种各自 pip/step/min 不同，不可混用）。"""
+        spec = self._specs.get(symbol) or self._specs.get(symbol.upper())
+        if spec is None:
+            raise KeyError(
+                f"No SymbolInfo for {symbol!r}; loaded={list(self._specs.keys())}"
+            )
+        return spec
+
     def symbol_info(self, symbol: str = None) -> SymbolInfo:
-        """品种规格。"""
-        return self._spec
+        """品种规格（默认主品种）。"""
+        return self._spec_for(symbol or self._symbol)
 
     def position(self, symbol: str = None) -> Position:
         """本策略的持仓视图 = 已成交 + 在途。"""
@@ -228,7 +241,7 @@ class KqApi:
         pos = self._ledger.position(sym, self._tag)
         has_dup = self._ledger.has_in_flight_open(sym, self._tag, side)
         resolution = self._resolver.resolve(
-            req, self._spec,
+            req, self._spec_for(sym),
             position_volume=pos.volume,
             available_to_close=pos.available_to_close,
             has_in_flight_open=has_dup,
@@ -371,8 +384,8 @@ class KqApi:
     # ═══════════ 辅助 ═══════════
 
     def log(self, msg: str, level: str = "INFO") -> None:
-        """写策略日志。"""
-        getattr(logger, level.lower(), logger.info)(f"[STRATEGY] {msg}")
+        """写策略日志（多品种共享日志时按 symbol 区分）。"""
+        getattr(logger, level.lower(), logger.info)(f"[STRATEGY:{self._symbol}] {msg}")
 
     def now(self) -> int:
         """当前时间戳（Unix ms）。"""

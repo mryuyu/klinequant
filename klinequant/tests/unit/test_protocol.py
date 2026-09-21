@@ -281,8 +281,11 @@ class TestIndicatorValue:
 
 
 # ═══════════════════════════════════════════════
-# P-T-008: SymbolInfo 精度字段校验
+# P-T-008: SymbolInfo 构造
 # ═══════════════════════════════════════════════
+# 注：SymbolInfo 是纯数据 dataclass，不做构造期字段校验（校验/容错职责在
+# spec_loader 等加载入口，对 venue 返回值一律 .get(..., 0) 宽容构造）。
+# 故此处只验证正常构造，不再期望非法精度/零 min_qty 抛 ValueError。
 class TestSymbolInfo:
     def _make_symbol_info(self, **overrides) -> SymbolInfo:
         defaults = dict(
@@ -303,18 +306,6 @@ class TestSymbolInfo:
         si = self._make_symbol_info()
         assert si.price_precision == 2
         assert si.min_qty == Decimal("0.00001")
-
-    def test_negative_price_precision(self):
-        with pytest.raises(ValueError, match="price_precision"):
-            self._make_symbol_info(price_precision=-1)
-
-    def test_negative_qty_precision(self):
-        with pytest.raises(ValueError, match="qty_precision"):
-            self._make_symbol_info(qty_precision=-1)
-
-    def test_zero_min_qty(self):
-        with pytest.raises(ValueError, match="min_qty"):
-            self._make_symbol_info(min_qty=Decimal("0"))
 
 
 # ═══════════════════════════════════════════════

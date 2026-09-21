@@ -1,8 +1,12 @@
-"""最简测试策略 — MACD + EMA 多空切换
+"""最简测试策略 — MACD + EMA 多空切换（收盘价模型）
 
-规则：
+规则（均基于已收盘 K 线的收盘价）：
   做多条件：MACD(DIF) > 0 且 close > EMA(close, 10)
   做空条件：上述任一不满足
+
+驱动模型：收盘价模型——仅当新 bar 出现（上一根已收盘）时，
+  用已收盘序列（剔除仍在形成的最后一根）算指标、判条件、开平仓；
+  盘中价格波动不重算不触发，避免未收盘 bar 反复变化导致信号拖动。
 
 反手逻辑（框架不自动跨零，策略显式两笔）：
   持多 → 条件不满足 → 先平多，再开空
@@ -33,19 +37,27 @@ def strategy(api: KqApi):
     api.log(f"Spec: pip={info.pip_size} step={info.qty_step} min={info.min_qty}")
 
     last_signal = None  # "long" / "short" / None
+    last_bar_ts = None  # 已处理的最新 bar 时间戳（收盘价模型：仅新 bar 出现时评估）
 
     while api.wait_update(deadline=5.0):
         bars = api.klines(count=200)
-        if not bars or len(bars) < MACD_SLOW + MACD_SIGNAL + 5:
+        if not bars or len(bars) < MACD_SLOW + MACD_SIGNAL + 6:
             continue
 
-        # 只在 bar 变化时计算
-        if not api.is_changing(bars):
+        # 收盘价模型：仅在出现新 bar（上一根已收盘）时评估，盘中同一根未收盘 bar 不动作
+        cur_ts = bars[-1]["timestamp"]
+        if last_bar_ts is not None and cur_ts == last_bar_ts:
+            continue
+        last_bar_ts = cur_ts
+
+        # 剔除仍在形成的最后一根，用已收盘序列计算（确认值 = 刚收盘那根）
+        closed = bars[:-1]
+        if len(closed) < MACD_SLOW + MACD_SIGNAL + 5:
             continue
 
-        closes = [Decimal(str(b["close"])) for b in bars]
+        closes = [Decimal(str(b["close"])) for b in closed]
 
-        # 计算指标
+        # 计算指标（基于收盘价）
         dif = _macd_dif(closes, MACD_FAST, MACD_SLOW)
         ema10 = _ema_last(closes, EMA_PERIOD)
         current_close = closes[-1]

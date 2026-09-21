@@ -97,14 +97,18 @@ def _pipe_safe(val):
     """结果转可 pickle 形式后再经管道回传（2026-09-01 实证）
 
     MetaTrader5 包返回 C 层构造的匿名 namedtuple，pickle 序列化直接失败。
-    统一转普通 dict。
+    统一递归转普通 dict/list：OrderSendResult 等结果内嵌 TradeRequest 等
+    C 层 namedtuple 字段（2026-09-21 实证 PicklingError），必须逐层展开，
+    否则子进程 conn.send 序列化失败 → order_send 恒返回 None。
     """
     if val is None or isinstance(val, (bool, int, float, str, bytes)):
         return val
     if hasattr(val, "_asdict"):
-        return val._asdict()
+        return {k: _pipe_safe(v) for k, v in val._asdict().items()}
+    if isinstance(val, dict):
+        return {k: _pipe_safe(v) for k, v in val.items()}
     if isinstance(val, (list, tuple)):
-        return [v._asdict() if hasattr(v, "_asdict") else v for v in val]
+        return [_pipe_safe(v) for v in val]
     return val   # numpy 结构数组等本身可 pickle（copy_rates 路径）
 
 
