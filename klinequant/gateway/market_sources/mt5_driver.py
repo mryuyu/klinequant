@@ -333,6 +333,19 @@ class Mt5Api:
         """发送交易请求。request 为 MT5 TradeRequest dict。"""
         return self._call("order_send", request)
 
+    def order_calc_profit(
+        self, action: int, symbol: str, volume: float,
+        price_open: float, price_close: float,
+    ) -> Optional[float]:
+        """MT5 order_calc_profit：以**账户币**计的平仓利润。
+
+        action: ORDER_TYPE_BUY=0 / ORDER_TYPE_SELL=1。MT5 内部用交叉汇率把
+        盈利货币换算到账户币，故可用于推导交叉盘 quote→账户币 换算系数。
+        """
+        return self._call(
+            "order_calc_profit", action, symbol, volume, price_open, price_close
+        )
+
     def positions_get(self, symbol: str = "") -> list:
         """查询持仓。symbol 为空返回全部。"""
         if symbol:

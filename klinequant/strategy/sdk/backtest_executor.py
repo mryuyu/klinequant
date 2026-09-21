@@ -14,7 +14,8 @@ dict），使 KqApi / ExposureLedger / UnifiedResolver 在回测中零改动复�
 
 币种换算：盈亏/手续费从计价货币换算到账户币（默认 USD）——
   quote==账户币（如 EURUSD）原样；base==账户币（如 USDJPY）÷价格；
-  交叉盘（如 EURJPY）缺第三方汇率无法换算，按计价货币原样计并告警一次。
+  交叉盘（如 EURJPY）用 conv_rates[sym]（quote→账户币 系数，由 runner 经
+  MT5 order_calc_profit 推导）相乘；无系数时按计价货币原样计并告警一次。
 """
 from __future__ import annotations
 
@@ -77,6 +78,9 @@ class BacktestExecutor:
     fee_params: Optional[dict] = None
     magic: int = 202609
     account_currency: str = "USD"
+    # 交叉盘 quote→账户币 换算系数（sym→rate），由 runner 经 MT5
+    # order_calc_profit 推导；直盘无需（_conv 前两分支已精确）。
+    conv_rates: Dict[str, Decimal] = field(default_factory=dict)
 
     # ─── ExecutorProtocol 实现 ───
 
@@ -217,7 +221,7 @@ class BacktestExecutor:
         """计价货币金额 → 账户币（默认 USD）。
 
         quote==账户币（EURUSD）原样；base==账户币（USDJPY）÷价格；
-        交叉盘（EURJPY）缺第三方汇率，按计价货币原样并告警一次。
+        交叉盘（EURJPY）用 conv_rates 系数相乘；无系数时原样并告警一次。
         """
         info = self.specs.get(sym)
         if info is None:
@@ -229,10 +233,13 @@ class BacktestExecutor:
             return amount_quote
         if b == acct and price and price > 0:
             return amount_quote / Decimal(str(price))
+        rate = self.conv_rates.get(sym)
+        if rate and rate > 0:
+            return amount_quote * rate
         if sym not in self._conv_warned:
             self._conv_warned.add(sym)
             logger.warning(
-                f"[BT] {sym} 交叉盘 {b}/{q} 盈亏无法换算到 {acct}，"
+                f"[BT] {sym} 交叉盘 {b}/{q} 无换算系数，"
                 f"按计价货币 {q} 原样计（绝对值不可比）"
             )
         return amount_quote

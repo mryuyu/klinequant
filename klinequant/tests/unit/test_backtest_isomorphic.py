@@ -286,3 +286,41 @@ def test_usd_base_pair_pnl_converted_to_account_currency():
     assert len(ex.trades) == 1
     assert 6.0 < float(ex.trades[0].pnl) < 7.0
     assert 10006.0 < float(ex.cash) < 10007.0
+
+
+def test_cross_pair_uses_conv_rate_from_mt5():
+    """交叉盘 EURJPY（base/quote 均非 USD）用 conv_rates 系数换算到账户币。"""
+    info = dict(_INFO)
+    info.update({"currency_base": "EUR", "currency_profit": "JPY",
+                 "digits": 3, "point": 0.001})
+    spec = load_spec_from_mt5_dict(info, "EURJPY")
+    # 开空@open[2]=157.00，平@open[4]=156.00 → gross=1.00×0.01×100000=1000 JPY
+    bars = _mk([157.0, 157.0, 157.00, 157.0, 156.00, 157.0], symbol="EURJPY")
+    feed = BacktestDataFeed({"EURJPY": bars}, "1m")
+    ex = BacktestExecutor(
+        feed=feed, specs={"EURJPY": spec}, initial_capital=Decimal("10000"),
+        slippage_model="fixed", slippage_params={"ticks": Decimal("0")},
+        fee_model="fixed", fee_params={"fee_per_trade": Decimal("0")},
+        conv_rates={"EURJPY": Decimal("0.0064")},  # ≈1/156，runner 经 MT5 推导
+    )
+    api = KqApi(
+        symbol="EURJPY", period="1m", tag="1m", specs={"EURJPY": spec},
+        ledger=ExposureLedger(), resolver=UnifiedResolver(), executor=ex, feed=feed,
+    )
+
+    def strat(a):
+        n = 0
+        while a.wait_update():
+            n += 1
+            if n == 3:
+                a.send_order(OrderSide.SELL, Offset.OPEN, Decimal("0.01"),
+                             kind=OrderKind.MARKET)
+            elif n == 5:
+                a.send_order(OrderSide.BUY, Offset.CLOSE, Decimal("0.01"),
+                             kind=OrderKind.MARKET)
+
+    strat(api)
+    # 1000 JPY × 0.0064 = 6.4 USD（不再原样当 1000 USD）
+    assert len(ex.trades) == 1
+    assert abs(float(ex.trades[0].pnl) - 6.4) < 1e-6
+    assert abs(float(ex.cash) - 10006.4) < 1e-6

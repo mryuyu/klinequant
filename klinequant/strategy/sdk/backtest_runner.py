@@ -101,6 +101,7 @@ class BacktestRunner:
         fee_model: str = "fixed",
         fee_params: Optional[dict] = None,
         magic: int = 202609,
+        account_currency: str = "USD",
         bars_by_symbol: Optional[Dict[str, List[dict]]] = None,
         specs: Optional[Dict[str, SymbolInfo]] = None,
         mt5_kwargs: Optional[dict] = None,
@@ -114,6 +115,8 @@ class BacktestRunner:
             initial_capital: 每品种初始资金（计价货币）
             slippage_model/slippage_params: 滑点模型（默认 percentage）
             fee_model/fee_params: 手续费模型（默认 fixed，每笔 0）
+            magic: 魔术号
+            account_currency: 账户币（交叉盘换算目标，默认 USD）
             bars_by_symbol: 直接注入历史 bar（单测/离线数据用，跳过 MT5）
             specs: 直接注入品种规格（配合 bars_by_symbol 用）
             mt5_kwargs: MT5 初始化参数
@@ -133,10 +136,12 @@ class BacktestRunner:
         self._fee_model = fee_model
         self._fee_params = fee_params or {"fee_per_trade": Decimal("0")}
         self._magic = magic
+        self._account_currency = account_currency
         self._mt5_kwargs = mt5_kwargs
 
         self._bars: Dict[str, List[dict]] = bars_by_symbol or {}
         self._specs: Dict[str, SymbolInfo] = specs or {}
+        self._conv_rates: Dict[str, Decimal] = {}
 
     # ─── 主流程 ───
 
@@ -186,6 +191,10 @@ class BacktestRunner:
             fee_model=self._fee_model,
             fee_params=self._fee_params,
             magic=self._magic,
+            account_currency=self._account_currency,
+            conv_rates=(
+                {sym: self._conv_rates[sym]} if sym in self._conv_rates else {}
+            ),
         )
         ledger = ExposureLedger()
         resolver = UnifiedResolver()
@@ -253,12 +262,41 @@ class BacktestRunner:
                 completed = rows[:-1]
                 self._bars[sym] = [self._row_to_bar(r, sym) for r in completed]
                 self._specs[sym] = spec
+                rate = self._load_conv_rate(driver, sym, spec)
+                if rate is not None:
+                    self._conv_rates[sym] = rate
+                    logger.info(f"[{sym}] cross-rate →{self._account_currency} = {rate}")
                 logger.info(
                     f"[{sym}] loaded {len(self._bars[sym])} historical bars "
                     f"(pip={spec.pip_size} mult={spec.contract_multiplier})"
                 )
         finally:
             driver.shutdown()
+
+    def _load_conv_rate(
+        self, driver: Mt5Api, sym: str, spec: SymbolInfo,
+    ) -> Optional[Decimal]:
+        """交叉盘 quote→账户币 换算系数（直盘返回 None）。
+
+        用 MT5 order_calc_profit（返回**账户币**利润，内部走交叉汇率）推导：
+        取价差 1.0、volume 1.0，则 gross_quote = 1×1×mult（计价货币），
+        rate = profit(账户币) / gross_quote = 每单位计价货币的账户币价值。
+        直盘（base/quote 有一端=账户币）无需系数，_conv 用回测时点价更精确。
+        """
+        q = (spec.quote_currency or "").upper()
+        b = (spec.base_currency or "").upper()
+        acct = self._account_currency.upper()
+        if q == acct or b == acct:
+            return None
+        tick = driver.symbol_info_tick(sym)
+        p = float(tick.get("bid") or 0) if tick else 0.0
+        mult = float(spec.contract_multiplier or 0)
+        if p <= 0 or mult <= 0:
+            return None
+        profit = driver.order_calc_profit(0, sym, 1.0, p, p + 1.0)  # ORDER_TYPE_BUY
+        if profit is None:
+            return None
+        return Decimal(str(profit)) / Decimal(str(mult))
 
     def _row_to_bar(self, row: dict, symbol: str) -> dict:
         """MT5 rate row → 标准 bar dict（与 Mt5DataFeed 同形）"""
