@@ -59,6 +59,8 @@ INPUT_COLUMNS = ("open", "high", "low", "close", "volume")
 # line_style 对齐 lightweight-charts LineStyle：0 实线 / 1 点线 / 2 虚线 / 3 大虚线。
 # plot: line（默认）/ histogram；histogram 字段可声明 hist_colors 四槽色：
 #   [零轴上增, 零轴上缩, 零轴下增, 零轴下缩]，空槽回退前端涨跌方案色。
+# step: true 声明阶梯线（Pine plot.style_stepline 语义：bar 内保持水平、下一 bar 跳变），
+#   仅对 line 字段生效，由前端 Series Primitive 自绘还原（lwc 无原生阶梯线型）。
 # 前端消费优先级：用户自选 > 后端声明 > 前端默认色槽；未声明字段不受影响。
 _HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 _LINE_STYLES = (0, 1, 2, 3)
@@ -92,6 +94,16 @@ def _validate_style(name: str, style: Optional[List[Dict[str, Any]]]):
                     f"指标 {name} 的 style[{idx}].line_style 必须为 0实线/1点线/2虚线/3大虚线"
                 )
             item["line_style"] = ls
+        step = s.get("step")
+        if step is not None:
+            if not isinstance(step, bool):
+                raise ValueError(f"指标 {name} 的 style[{idx}].step 必须为布尔值")
+            if step:
+                if plot != "line":
+                    raise ValueError(
+                        f"指标 {name} 的 style[{idx}].step 仅对 line 字段生效"
+                    )
+                item["step"] = True
         hc = s.get("hist_colors")
         if hc is not None:
             if not (isinstance(hc, list) and len(hc) == 4):
@@ -423,7 +435,8 @@ def pyindicator(
             [{"color": "#ba68c8", "line_style": 2},
              {"plot": "histogram", "hist_colors": ["#0f9d8f", None, None, "#EF5350"]}]
             color 为 #RRGGBB；line_style：0 实线 / 1 点线 / 2 虚线 / 3 大虚线；
-            plot=histogram 时前端按柱渲染，hist_colors 四槽 = 零轴上增/上缩/下增/下缩（null 槽回退方案色）。
+            plot=histogram 时前端按柱渲染，hist_colors 四槽 = 零轴上增/上缩/下增/下缩（null 槽回退方案色）；
+            step=true 声明阶梯线（Pine stepline 语义，仅 line 字段，前端 primitive 自绘）。
             前端优先级：用户自选 > 此处声明 > 前端默认色槽
         price_lines: 副图固定参考线（水平线），如：
             [{"price": 80}, {"price": 20, "color": "#787b86", "line_style": 2}]

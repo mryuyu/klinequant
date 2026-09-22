@@ -95,11 +95,20 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .chart-wrap { flex:1; position:relative; min-height:0; }
 #chart { position:absolute; inset:0; }
 .legend {
-  position:absolute; top:10px; left:12px; right:12px; z-index:5; pointer-events:none;
+  position:absolute; top:10px; left:12px; right:var(--legend-right, 12px); z-index:5; pointer-events:none;
   display:flex; flex-direction:column; gap:4px; font-size:12px;
 }
-.legend-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; max-width:100%; background:transparent; text-shadow:0 1px 2px rgba(0,0,0,0.9), 0 0 4px rgba(0,0,0,0.7); padding:3px 8px; border-radius:4px; width:max-content; pointer-events:auto; }   /* 图例行隔离十字光标：防止悬停时数值回退→行宽变化→齿轮位移闪烁；多字段指标（如 MACD_MULTI 9 字段）自动换行；背景透明不遮挡指标，可读性靠描边阴影。
-  换行上限走父容器明确宽度（.legend 定 right）：此前 calc(100% - 24px) 遇父容器 shrink-to-fit 会循环依赖，致最后一个字段被挤到第二行 */
+/* 图例行：单行显示 + 超出主图右边界省略号截断（字段过多的指标如 MR_Y_MAIN 17 字段 / MACD_MULTI 9 字段）。
+  display:block + white-space:nowrap + overflow:hidden + text-overflow:ellipsis，宽度由父容器 .legend（left/right:12px）
+  明确界定，超宽部分渲染 …；行内片段间距用子元素 margin 替代 flex gap:10px。主图多指标各自独占一行
+  （见 #lg-main-items 纵向堆叠）互不遮挡。行隔离十字光标（pointer-events:auto）防悬停数值回退→行宽变化→齿轮
+  位移闪烁；背景透明不遮挡指标，可读性靠描边阴影。 */
+.legend-row { display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:transparent; text-shadow:0 1px 2px rgba(0,0,0,0.9), 0 0 4px rgba(0,0,0,0.7); padding:3px 8px; border-radius:4px; pointer-events:auto; }
+.legend-row > * { margin-right:10px; }
+.legend-row > *:last-child { margin-right:0; }
+.legend-row .gear-btn { vertical-align:middle; }
+/* 主图多指标：每个指标独占一行（各自 nowrap 省略号截断），纵向堆叠不挤在同一行互相遮挡参数 */
+#lg-main-items { display:flex; flex-direction:column; gap:4px; }
 .gear-btn { display:inline-flex; align-items:center; background:none; border:none; color:var(--text-sub); cursor:pointer; padding:2px; border-radius:4px; flex:none; }
 .gear-btn:hover { color:var(--accent); background:var(--bg-elevated); }
 .gear-btn svg { width:12px; height:12px; }
@@ -139,6 +148,12 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .ind-tabs { display:flex; border-bottom:1px solid var(--border); margin-bottom:12px; }
 .ind-tab { padding:7px 18px; font-size:12.5px; color:var(--text-sub); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; user-select:none; }
 .ind-tab:hover { color:var(--text); }
+/* 指标设置弹窗：限高 + 内部滚动（TradingView 式）——参数/样式行多时弹窗曾撑满整屏致底部按钮不可点；
+   head/页签/按钮区固定、仅中部 body 滚动（滚动条复用全局 6px 样式）；max-height 为上限，内容少的弹窗仍紧凑 */
+#ind-modal .modal { display:flex; flex-direction:column; max-height:min(72vh, 660px); }
+#ind-modal .ind-modal-body { flex:1; min-height:0; overflow-y:auto; padding-right:4px; }
+/* 添加指标面板同族防御：自定义指标增多时列表滚动，底部关闭按钮保持可见 */
+#ind-pick-list { max-height:52vh; overflow-y:auto; padding-right:4px; }
 .ind-tab.active { color:var(--text); border-bottom-color:var(--accent); font-weight:600; }
 /* 副图右上角最大化/还原按钮（TradingView 式：默认隐藏，悬停所属副图淡入；与图例同层级） */
 .pane-max-btn { position:absolute; z-index:6; width:22px; height:20px; border:none; border-radius:4px; background:rgba(30,34,45,0.78); color:var(--text-sub); cursor:pointer; display:flex; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity .15s; }
@@ -374,11 +389,9 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
           <div class="legend-row" id="lg-ohlc">
             <span class="muted">O</span><span id="lg-o">--</span><span class="muted">H</span><span id="lg-h">--</span>
             <span class="muted">L</span><span id="lg-l">--</span><span class="muted">C</span><span id="lg-c">--</span>
-          </div>
-          <div class="legend-row" id="lg-main-row">
-            <span id="lg-main-items"></span>
             <span class="muted" id="lg-vol">VOL: --</span>
           </div>
+          <div id="lg-main-items"></div>
         </div>
         <div id="ind-legends"></div>
         <div class="price-tag" id="price-tag"><span class="pt-price"></span><span class="pt-cd"></span></div>
@@ -465,8 +478,10 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
         <div class="ind-tab active" data-tab="params">参数</div>
         <div class="ind-tab" data-tab="style">样式</div>
       </div>
-      <div id="ind-fields"></div>
-      <div id="ind-style-wrap" style="display:none"></div>
+      <div class="ind-modal-body">
+        <div id="ind-fields"></div>
+        <div id="ind-style-wrap" style="display:none"></div>
+      </div>
       <div class="modal-btns">
         <button class="m-remove" id="ind-remove">移除</button>
         <button class="m-cancel" id="ind-cancel">取消</button>
@@ -576,6 +591,24 @@ function tfValid(tf) {
   if (TF_VALID.includes(tf)) return true;
   const m = TF_CUSTOM_RE.exec(tf || '');
   return !!m && +m[1] >= 2;
+}
+/* 周期时长（分钟）：切所回退选“最接近当前档”用（派生档 1M/1Q/1Y 取近似值即可） */
+const TF_DURATION = { '1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '6h': 360, '12h': 720, '1d': 1440, '3d': 4320, '1w': 10080, '1M': 43200, '1Q': 129600, '1Y': 525600 };
+/* 自定义派生倍率（2d/3w/2M…）：网关从日 K 聚合，全源可用（与后端 derived 层契约一致） */
+function tfDerivedCustom(tf) { const m = TF_CUSTOM_RE.exec(tf || ''); return !!m && +m[1] >= 2; }
+/* 当前源是否供给该周期：以后端 meta.timeframes 为唯一真值（原生档+固定派生档），自定义倍率恒可用。
+   注意固定档不再无条件放行——A 股等源无 4h 原生供给且派生层仅聚合日级以上，请求必空（2026-09-22 实证） */
+function tfAvailable(tf, meta) {
+  if (tfDerivedCustom(tf)) return true;
+  return !meta || !meta.timeframes || !meta.timeframes.length || meta.timeframes.includes(tf);
+}
+/* 回退周期：优先取不大于当前档的最大周期（如 ths 无 4h → 1h），都更大时取最小档 */
+function fallbackTf(tf, meta) {
+  const tfs = (meta && meta.timeframes || []).filter(t => TF_DURATION[t]);
+  if (!tfs.length) return tf;
+  const d = TF_DURATION[tf] || 0;
+  const le = tfs.filter(t => TF_DURATION[t] <= d).sort((a, b) => TF_DURATION[b] - TF_DURATION[a]);
+  return le[0] || tfs.slice().sort((a, b) => TF_DURATION[a] - TF_DURATION[b])[0];
 }
 /* 周期展示文案统一映射（1w=周线、1M=月线、1Q=季线、1Y=年线、2d=2日…） */
 const TF_UNIT_CN = { m: '分', h: '时', d: '日', w: '周', M: '月', Q: '季', Y: '年' };
@@ -882,15 +915,95 @@ const CUSTOM_COLORS = ['#e6c229', '#42a5f5', '#ab47bc', '#26a69a', '#ef5350', '#
 let maColorIdx = 0;
 let indInstances = [];   // [{id, type, params, series:[...], legendEl, legendVals:{}, pane}]
 const LINE_BASE = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+/* ═══ 阶梯线渲染（Series Primitives API）：Pine plot.style_stepline 观感还原 ═══
+   lwc 无原生阶梯线型；挂到字段 LineSeries 上：series 线体设透明仅承载数据
+   （autoscale/十字线图例照常），draw 时直读 series.data() 自绘「水平段+垂直跳变」，
+   不增加时间槽位、K 线布局零影响；历史 setData / 实时 update 两条路径天然同步
+   （数据变化→图表重绘→draw 重读）；只绘可见区（二分定位）。 */
+const STEP_DASH = { 1: [1, 2], 2: [4, 2], 3: [8, 4] };   // lwc LineStyle 1点线/2虚线/3大虚线 → canvas setLineDash
+function stepDash(lineStyle, hpr) {
+  const d = STEP_DASH[lineStyle];
+  return d ? d.map(x => x * hpr) : [];
+}
+class StepLinePrimitive {
+  constructor(opts) {
+    this._opts = { color: '#ffffff', lineStyle: 0, lineWidth: 1, ...opts };
+    this._series = null; this._chart = null; this._invalidate = null; this._drawErrLogged = false;
+    /* 缓存 renderer/paneView：lwc 基于数组引用做内部缓存，paneViews() 须返回同一数组（视图集未变时）。
+       关键契约：IPrimitivePaneView.renderer 是「方法」（v5.2.0 typings），返回带 draw(target) 的 IPrimitivePaneRenderer；
+       曾误写为 renderer 属性对象，致 lwc 调 view.renderer() 抛「not a function」中断整个渲染帧（蜡烛与全部指标一起黑屏） */
+    this._renderer = {
+      draw: target => {
+        /* 防御：单个 primitive 渲染异常不得中断 lwc 整个渲染帧；首次出错打印真实堆栈，之后静默避免每帧刷屏 */
+        try { this._draw(target); }
+        catch (e) { if (!this._drawErrLogged) { this._drawErrLogged = true; console.error('StepLinePrimitive draw error:', e); } }
+      },
+    };
+    this._paneViews = [{ renderer: () => this._renderer }];
+  }
+  attached(param) { this._series = param.series; this._chart = param.chart; this._invalidate = param.requestUpdate; }
+  detached() { this._series = null; this._chart = null; this._invalidate = null; }
+  applyOptions(opts) { Object.assign(this._opts, opts); if (this._invalidate) this._invalidate(); }
+  paneViews() { return this._paneViews; }
+  _draw(target) {
+    const s = this._series;
+    if (!s || !this._chart) return;
+    const data = s.data();
+    if (!data || data.length < 2) return;
+    const ts = this._chart.timeScale();
+    const range = ts.getVisibleRange();
+    if (!range) return;
+    /* 二分定位可见切片（两端各多取一点：首段水平线依赖前一点） */
+    let lo = 0, hi = data.length - 1, mid;
+    let i0 = data.length, i1 = -1;
+    while (lo <= hi) { mid = (lo + hi) >> 1; if (data[mid].time >= range.from) { i0 = mid; hi = mid - 1; } else lo = mid + 1; }
+    lo = 0; hi = data.length - 1;
+    while (lo <= hi) { mid = (lo + hi) >> 1; if (data[mid].time <= range.to) { i1 = mid; lo = mid + 1; } else hi = mid - 1; }
+    i0 = Math.max(0, i0 - 1); i1 = Math.min(data.length - 1, i1 + 1);
+    if (i1 <= i0) return;
+    target.useBitmapCoordinateSpace(scope => {
+      const ctx = scope.context, hpr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
+      const half = Math.max(1, Math.floor(hpr)) % 2 / 2;   // 奇数像素线宽半像素对齐，1px 线保持清晰
+      ctx.save();
+      ctx.strokeStyle = this._opts.color;
+      ctx.lineWidth = Math.max(1, Math.floor(this._opts.lineWidth * hpr));
+      ctx.setLineDash(stepDash(this._opts.lineStyle, hpr));
+      ctx.beginPath();
+      let px = null, py = null;
+      for (let i = i0; i <= i1; i++) {
+        const pt = data[i];
+        const x = ts.timeToCoordinate(pt.time);
+        const y = pt.value == null ? null : s.priceToCoordinate(pt.value);
+        if (x == null || y == null) { px = null; continue; }
+        const xr = Math.round(x * hpr) + half, yr = Math.round(y * vpr) + half;
+        if (px != null) { ctx.moveTo(px, py); ctx.lineTo(xr, py); ctx.lineTo(xr, yr); }   // 水平保持到下一 bar → 垂直跳变
+        px = xr; py = yr;
+      }
+      ctx.stroke();
+      ctx.restore();
+    });
+  }
+}
+/* 指标基础名（不含参数）：图例常驻显示这个，参数改由 title 悬停提示（见 indParams） */
+function indBaseName(it) {
+  if (it.type === 'custom') return it.name || it.type;
+  return { ma: 'MA', boll: 'BOLL', macd: 'MACD', kd: 'KD', rsi: 'RSI' }[it.type] || it.type;
+}
+/* 指标参数字符串（原括号内内容）：作为图例名称的悬停提示，鼠标移到指标名上显示 */
+function indParams(it) {
+  const p = it.params || {};
+  if (it.type === 'ma') return `${p.short},${p.long}`;
+  if (it.type === 'boll') return `${p.period},${p.mult}`;
+  if (it.type === 'macd') return `${p.fast},${p.slow},${p.signal}`;
+  if (it.type === 'kd') return `${p.n},${p.m}`;
+  if (it.type === 'rsi') return `${p.period}`;
+  if (it.type === 'custom') return Object.values(p).join(',');
+  return '';
+}
+/* 完整名（基础名 + 括号参数）：保留给需要完整标识的场景 */
 function indName(it) {
-  const p = it.params;
-  if (it.type === 'ma') return `MA(${p.short},${p.long})`;
-  if (it.type === 'boll') return `BOLL(${p.period},${p.mult})`;
-  if (it.type === 'macd') return `MACD(${p.fast},${p.slow},${p.signal})`;
-  if (it.type === 'kd') return `KD(${p.n},${p.m})`;
-  if (it.type === 'rsi') return `RSI(${p.period})`;
-  if (it.type === 'custom') return `${it.name}(${Object.values(it.params).join(',')})`;
-  return it.type;
+  const ps = indParams(it);
+  return ps ? `${indBaseName(it)}(${ps})` : indBaseName(it);
 }
 /* 目录条目：内置类型用 IND_CATALOG；自定义类型由后端 meta 生成（IND-110） */
 function catOf(it) {
@@ -904,7 +1017,7 @@ function catOf(it) {
 function buildInstance(it, styleUI) {
   const id = nextIndId(it.type);
   const cat = catOf(it);
-  const inst = { id, type: it.type, params: { ...it.params }, series: [], legendVals: {}, pane: 0, styleUI: styleUI || null };
+  const inst = { id, type: it.type, name: it.name, params: { ...it.params }, series: [], legendVals: {}, pane: 0, styleUI: styleUI || null };
   const parts = [];   // 图例片段 [{label, color}]
   if (it.type === 'ma') {
     const st1 = indSeriesStyle(inst, 0), st2 = indSeriesStyle(inst, 1);
@@ -961,22 +1074,35 @@ function buildInstance(it, styleUI) {
         return;
       }
       const st = indSeriesStyle(inst, i);
-      inst.series.push(chart.addSeries(LineSeries, { color: st.color, ...LINE_BASE, ...st.opt }, inst.pane));
+      if (bs?.step === true) {
+        /* 阶梯线字段：series 线体透明仅承载数据，StepLinePrimitive 自绘（图例/自选色仍用 st.color） */
+        const s = chart.addSeries(LineSeries, { color: 'transparent', ...LINE_BASE, ...st.opt }, inst.pane);
+        const prim = new StepLinePrimitive({ color: st.color, lineStyle: st.opt.lineStyle ?? 0, lineWidth: LINE_BASE.lineWidth });
+        s.attachPrimitive(prim);
+        inst.series.push(s);
+        (inst.stepPrims ||= [])[i] = prim;
+      } else {
+        inst.series.push(chart.addSeries(LineSeries, { color: st.color, ...LINE_BASE, ...st.opt }, inst.pane));
+      }
       parts.push({ key: f, label: f, color: st.color });
     });
   }
-  /* 图例 DOM（齿轮置于指标名称前） */
+  /* 图例 DOM（齿轮置于指标名称前）；指标名只显示基础名、其参数移到名称 span 的 title 悬停提示，字段值同样不常驻参数名、
+     移到值 span 的 title 悬停提示（鼠标移到指标名/数值上显示对应参数）——避免图例过宽。
+     .legend-row overflow:hidden 会裁掉 CSS 伪元素提示，故统一用原生 title（OS 渲染不受裁剪） */
+  const ps = indParams(it), nameTip = ps ? `(${ps})` : '';   // 指标名悬停提示：参数带括号，如 (5,20)
   const rowHtml = `<button class="gear-btn" data-ind-id="${id}" title="调整参数"></button>` +
-    `<span class="muted" id="lg-label-${id}">${indName(it)}</span>` +
-    parts.map(p => `<span style="color:${p.color}">${p.label} <b id="lg-${id}-${p.key}">--</b></span>`).join(' ');
+    `<span class="muted" id="lg-label-${id}" title="${nameTip}">${indBaseName(it)}</span>` +
+    parts.map(p => `<span style="color:${p.color}" title="${p.label}"><span id="lg-${id}-${p.key}">--</span></span>`).join(' ');   // 值用 span（非 <b>）：字重与指标名一致、不再加粗
   if (cat.pane === 'main') {
-    const wrap = document.createElement('span');
-    wrap.className = 'ind-main-wrap';
-    wrap.dataset.indId = id;
-    wrap.style.display = 'inline-flex'; wrap.style.gap = '10px'; wrap.style.alignItems = 'center';
-    wrap.innerHTML = rowHtml;
-    document.getElementById('lg-main-items').appendChild(wrap);
-    inst.legendEl = wrap;
+    /* 主图指标：每个独占一行 .legend-row（与副图行同构），纵向堆叠于 #lg-main-items，
+       各自 nowrap 省略号截断——多个主图指标不再挤在同一行互相遮挡参数 */
+    const row = document.createElement('div');
+    row.className = 'legend-row';
+    row.dataset.indId = id;
+    row.innerHTML = rowHtml;
+    document.getElementById('lg-main-items').appendChild(row);
+    inst.legendEl = row;
   } else {
     const div = document.createElement('div');
     div.className = 'legend mono';
@@ -1235,7 +1361,10 @@ function applyInstStyles(inst, styleUI) {
       return;
     }
     const st = indSeriesStyle(inst, i);
-    s.applyOptions({ color: st.color, ...st.opt });
+    const prim = inst.stepPrims?.[i];
+    /* 阶梯线字段：series 保持透明，颜色/线型改到 primitive 上就地生效 */
+    s.applyOptions({ color: prim ? 'transparent' : st.color, ...st.opt });
+    if (prim) prim.applyOptions({ color: st.color, lineStyle: st.opt.lineStyle ?? 0 });
     if (keys[i]) inst.legendVals[keys[i]].parentElement.style.color = st.color;
   });
   applyRefLines(inst);   // 参考线自选变化：就地重建（默认→自选→清空均可）
@@ -1303,6 +1432,11 @@ function applyPaneHeights() {
 function layoutPaneLegends() {
   const panes = chart.panes();
   const ht = chart.timeScale().height();
+  /* 图例右边界让开右侧价格刻度区（数值栏）：省略号截断点不能压在刻度上。
+     .legend 统一用 CSS 变量 --legend-right 收口，随价格轴宽度动态更新（轴宽随价格位数/成交量窗格变化） */
+  const wrap = container.parentElement;   // .chart-wrap（.legend 的定位父，CSS 变量向下继承到主/副图所有 .legend）
+  const lr = ((chart.priceScale('right').width() || 60) + 8) + 'px';
+  if (wrap.__lastLR !== lr) { wrap.__lastLR = lr; wrap.style.setProperty('--legend-right', lr); }
   for (const inst of indInstances) {
     if (inst.pane === 0 || inst.pane >= panes.length) continue;
     const el = inst.legendEl;
@@ -1821,7 +1955,7 @@ document.getElementById('ind-fields').addEventListener('click', e => {
 function refreshIndLabels() {
   for (const inst of indInstances) {
     const el = document.getElementById('lg-label-' + inst.id);
-    if (el) el.textContent = indName(inst);
+    if (el) { const ps = indParams(inst); el.textContent = indBaseName(inst); el.title = ps ? `(${ps})` : ''; }
   }
 }
 /* 齿轮按钮统一委托（主图/副图图例内动态生成，按 data-ind-id 定位实例） */
@@ -1953,6 +2087,9 @@ refreshIndLabels();
 /* 价格格式化：与坐标轴同一推导精度（load 时从实际价格小数位检测，curPrec 同步） */
 let curPrec = 2;
 const fmt = v => v.toLocaleString('en-US', { minimumFractionDigits: curPrec, maximumFractionDigits: curPrec });
+/* 图表图例数值（OHLC + 指标字段）专用：useGrouping:false 去千分位逗号（fmt 默认 en-US 会加），
+   避免大价位指标（如 MR_Y_MAIN 在 BTC 上）图例出现 60,000.00；顶部 ticker 与品种列表价格仍用带分组的 fmt（那里大价位更易读） */
+const fmtVal = v => v.toLocaleString('en-US', { useGrouping: false, minimumFractionDigits: curPrec, maximumFractionDigits: curPrec });
 /* 悬停图例行期间冻结文本更新：防止数值变化→行宽变化→齿轮位移→鼠标落回图表→十字线再触发的抖动循环 */
 let legendFrozen = false, legendDirty = false;
 document.querySelectorAll('.legend-row').forEach(row => {
@@ -1981,10 +2118,10 @@ function refreshLegend() {
   const last = bar ?? klines[klines.length - 1];
   if (!last) return;
   const cls = last.close >= last.open ? 'up' : 'down';
-  setLg('lg-o', fmt(last.open), cls);
-  setLg('lg-h', fmt(last.high), cls);
-  setLg('lg-l', fmt(last.low), cls);
-  setLg('lg-c', fmt(last.close), cls);
+  setLg('lg-o', fmtVal(last.open), cls);
+  setLg('lg-h', fmtVal(last.high), cls);
+  setLg('lg-l', fmtVal(last.low), cls);
+  setLg('lg-c', fmtVal(last.close), cls);
   setLg('lg-vol', 'VOL: ' + (last.volume ? last.volume.toFixed(1) : '--'));
   /* 各指标实例：十字线取值优先，无十字线时用末根 bar 现算 */
   for (const inst of indInstances) {
@@ -1994,14 +2131,14 @@ function refreshLegend() {
         if (i >= keys.length) return;
         const v = vals.get(s);
         const el = lv[keys[i]];
-        const txt = v != null ? fmt(v) : '--';
+        const txt = v != null ? fmtVal(v) : '--';
         if (el.textContent !== txt) el.textContent = txt;
       });
     } else {
       const lastVals = calcLastVals(inst);
       keys.forEach((k, i) => {
         const v = lastVals[i];
-        const txt = v != null ? fmt(v) : '--';
+        const txt = v != null ? fmtVal(v) : '--';
         if (lv[k].textContent !== txt) lv[k].textContent = txt;
       });
     }
@@ -2335,9 +2472,11 @@ function switchExchange(ex, opts = {}) {
     document.getElementById('top-symbol').textContent = dispOf(curSymbol);
     document.querySelector('.watermark').textContent = dispOf(curSymbol);
   }
-  /* 周期：该所不支持当前周期时切到首个支持项（派生层保证固定档+自定义倍率全源可用，不回退） */
-  if (meta.timeframes && meta.timeframes.length && !meta.timeframes.includes(curTf) && !tfValid(curTf)) {
-    curTf = meta.timeframes[0];
+  /* 周期：该所不供给当前档时回退到最接近的支持档（如 ths 无 4h 原生供给且派生层
+     仅聚合日级以上，不回退会让 load() 空数据停在 ✕ 未返回 K 线数据） */
+  if (!tfAvailable(curTf, meta)) {
+    curTf = fallbackTf(curTf, meta);
+    if (tfValid(curTf) && !TF_VALID.includes(curTf)) ensureCustomTfBtn(curTf);
     document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === curTf));
   }
   applyTfAvailability();
@@ -2350,13 +2489,12 @@ function switchExchange(ex, opts = {}) {
   refreshListPrices();
   saveLayout();
 }
-/* 周期按钮可用性：插件不支持的周期置灰禁点（派生层下固定档/自定义倍率视为全源可用） */
+/* 周期按钮可用性：当前源不供给的周期档置灰禁点（meta.timeframes 为真值；自定义倍率全源可用） */
 function applyTfAvailability() {
   const m = sourcesMeta[curExchange];
   document.querySelectorAll('.tf-btn').forEach(b => {
     if (!b.dataset.tf) return;   // 「自定」入口本身无周期，恒可点
-    const ok = !m || !m.timeframes.length || m.timeframes.includes(b.dataset.tf) || tfValid(b.dataset.tf);
-    b.disabled = !ok;
+    b.disabled = !tfAvailable(b.dataset.tf, m);
   });
 }
 /* 启动时拉取后端已注册市场源插件（前端交易所选择器数据源）。
@@ -2382,6 +2520,13 @@ async function initSources() {
     const wm = document.querySelector('.watermark');
     if (wm) wm.textContent = curSymbol;
     saveLayout();   // 回退结果写回持久化，避免每次刷新重复纠正
+  }
+  /* 恢复的周期当前源不供给（如上次在 binance 用 4h，本次恢复 exchange=ths）：同样回退，防首屏空数据 */
+  if (meta && !tfAvailable(curTf, meta)) {
+    curTf = fallbackTf(curTf, meta);
+    if (tfValid(curTf) && !TF_VALID.includes(curTf)) ensureCustomTfBtn(curTf);
+    document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === curTf));
+    saveLayout();
   }
   renderSymbols();
   applyTfAvailability();

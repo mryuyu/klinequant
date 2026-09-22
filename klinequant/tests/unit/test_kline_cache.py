@@ -103,3 +103,62 @@ def test_fetch_failure_keeps_partial_cache():
     out = run(kc.cached_klines(src, "S", "1d", 30, end_time=44))
     assert len(out) == 15
     assert not kc._cache[("fake", "S", "1d")].exhausted
+
+
+# ─── 内部中空洞自愈（源掉线遗留、尾刷/前补都修不了的缺口） ───
+
+
+def test_interior_gap_repaired_from_source():
+    """缓存中段有洞但源有完整数据：命中最新时补拉回填，恢复连续"""
+    full = [bar(i * 60_000) for i in range(100)]          # 连续 1m
+    src = FakeSource(full)
+    e = kc._entry(("fake", "S", "1m"))
+    e.bars = [dict(b) for b in (full[:40] + full[60:])]   # 中段挖空 40~59
+    e.exhausted = True                                    # 前补已到源头，仅剩中段缺口
+    out = run(kc.cached_klines(src, "S", "1m", 100))
+    ts = [b["timestamp"] for b in out]
+    assert len(out) == 100 and ts == sorted(ts) and len(set(ts)) == 100
+    for i in range(40, 60):                               # 缺口已回填
+        assert i * 60_000 in ts
+
+
+def test_interior_gap_repaired_with_end_time_paging():
+    """翻页（end_time 在过去）时，服务窗口内的中段缺口同样补拉回填、恢复连续"""
+    full = [bar(i * 60_000) for i in range(120)]
+    src = FakeSource(full)
+    e = kc._entry(("fake", "S3", "1m"))
+    e.bars = [dict(b) for b in (full[:40] + full[60:])]   # 中段挖空 40~59
+    e.exhausted = True
+    out = run(kc.cached_klines(src, "S3", "1m", 60, end_time=100 * 60_000))
+    assert len(out) == 60
+    diffs = {out[i + 1]["timestamp"] - out[i]["timestamp"] for i in range(len(out) - 1)}
+    assert diffs == {60_000}                              # 完全连续，无缺口
+
+
+def test_legit_gap_empty_source_not_refetched_within_cooldown():
+    """源确无数据的合法空洞：补拉返空后缺口保留，冷却内二次请求不再拉源补洞"""
+    data = [bar(i * 60_000) for i in range(40)] + [bar(i * 60_000) for i in range(60, 100)]
+    src = FakeSource(data)                                # 源本身就带洞（周末式）
+    e = kc._entry(("fake", "S2", "1m"))
+    e.bars = [dict(b) for b in data]
+    e.exhausted = True
+    out = run(kc.cached_klines(src, "S2", "1m", 100))
+    assert len(out) == 80                                 # 洞仍在
+    n = len(src.calls)
+    out2 = run(kc.cached_klines(src, "S2", "1m", 100))    # 冷却内再取
+    assert len(out2) == 80
+    assert len(src.calls) - n == 1                        # 仅尾刷 1 次，无补洞拉取
+
+
+def test_interval_ms_and_derived_gate():
+    """周期跨度解析：派生档返回 None（不做补洞）；日/周线 >= _DAY_MS 亦不触发补洞"""
+    assert kc._interval_ms("1m") == 60_000
+    assert kc._interval_ms("5m") == 300_000
+    assert kc._interval_ms("1h") == 3_600_000
+    assert kc._interval_ms("4h") == 14_400_000
+    assert kc._interval_ms("1d") == 86_400_000            # 解析成功但 >= _DAY_MS，不补洞
+    assert kc._interval_ms("1w") == 604_800_000
+    assert kc._interval_ms("2d") is None                  # 自定义倍率派生档
+    assert kc._interval_ms("1M") is None                  # 月线派生档
+    assert kc._interval_ms("1Q") is None
+    assert kc._interval_ms("1Y") is None

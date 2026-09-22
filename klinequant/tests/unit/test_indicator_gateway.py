@@ -179,6 +179,28 @@ class TestIndicatorHistory:
         assert got["DEA"] == pytest.approx(expect["DEA"], rel=1e-9)
         assert got["HIST"] == pytest.approx(expect["HIST"], rel=1e-9)
 
+    def test_history_deepens_within_old_hysteresis(self, client):
+        """回归：显示需求增长不足一页（旧迟滞阈值 1000）时仍须加深预热补齐左侧缺口。
+
+        旧 `is_warmed_up and need-series_len < _PAGE_FETCH_LIMIT(1000)` 迟滞会直接跳过
+        此类加深，令阶梯线等大 min_periods 指标历史段永久缺绘（2026-09-23 实证）。
+        """
+        bars = _gen_bars(600)
+        src = _FakeSource(bars)
+        market_manager.register(src)
+
+        base = (
+            "/api/indicator/history?symbol=MOCKUSD&timeframe=1m&exchange=mockex"
+            "&indicator=MACD&params=" + json.dumps(MACD_PARAMS)
+        )
+        assert client.get(base + "&limit=300").json()["count"] == 300
+        calls_after_first = src.fetch_calls
+        # 需求增至 500（diff 200 < 旧阈值 1000）：仍须加深，覆盖满 500 根
+        resp = client.get(base + "&limit=500").json()
+        assert resp["warmed"] is True
+        assert resp["count"] == 500
+        assert src.fetch_calls > calls_after_first   # 确有一次加深重拉
+
     def test_history_unknown_indicator(self, client):
         """未注册指标：降级返回空序列（不 500）"""
         market_manager.register(_FakeSource(_gen_bars(50)))

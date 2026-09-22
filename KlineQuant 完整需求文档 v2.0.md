@@ -116,6 +116,8 @@ Alice 将回测通过的策略部署到实盘环境。系统 7×24 运行，实�
 18└─────────────────────────────────────────────────────────┘
 ```
 
+> **【实现现状 · 2026-09】** 上述五层为**逻辑分层**：各引擎已实现为 `core/*_engine` 模块并内置 ZMQ 传输能力（MarketEngine PUB、IndicatorEngine SUB+PUB、StrategySandbox REQ-REP，端口见 §7.4，配置见 `config.ZmqConfig`）。**本地默认部署**为 `gateway`（FastAPI）**单进程内聚合**运行各引擎、策略经 `strategy/sdk` 线程内同构执行；下表“独立进程 + MessageBus(ZMQ)”为**可选的远程/多机（SaaS）拆分部署形态**——ZMQ 传输层已就绪，本地默认不启用。
+
 ### 3.2 模块职责
 
 

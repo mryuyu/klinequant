@@ -102,8 +102,11 @@ class MarketSource(ABC):
     def meta(self) -> dict[str, Any]:
         """插件元数据（/api/market/sources 下发给前端）
 
-        周期可用性：派生层让所有源拥有全部周期（1w 原生直供；1M/1Q/1Y 及
-        自定义倍率由网关从日 K 聚合），此处统一下发声明，前端按钮不再逐源禁用。
+        周期可用性：timeframes = 源原生支持档 ∪ {1w} ∪ 固定派生档（1M/1Q/1Y）。
+        自定义倍率（Nd/Nw/NM）由网关从日 K 聚合、全源可用，不在此列。
+        前端以此为唯一真值逐档启用/禁用周期按钮——源不供给的档（如 ths 无
+        2h/4h/6h/12h 等日内档，派生层只聚合日级以上、不重采样日内）须禁用并
+        在切所/恢复时回退到最接近的支持档，否则请求必空（前端“未返回 K 线数据”）。
         """
         tfs = set(self.supported_timeframes) | {"1w"} | set(DERIVED_FIXED)
         return {

@@ -26,12 +26,8 @@ from protocol.types import Kline
 
 logger = logging.getLogger(__name__)
 
-# 加深阈值（一页 1000 根：差距不足一页时不值得重拉）
-_PAGE_FETCH_LIMIT = 1000
 # 预热总深度上限（对齐前端 PRELOAD_HARD_CAP：默认全量加载后 K 线可达 3 万根）
 _MAX_WARMUP_TOTAL = 30000
-# 已预热但显示需求继续增长时的加深阈值：差距不足一页时不重拉（预热完成态不回退，
-# 避免每次翻页都差几根触发全量重拉）；差距够大才按新目标重拉至数据源尽头/上限
 
 
 def _bars_to_df(bars: list[dict]) -> pl.DataFrame:
@@ -67,9 +63,14 @@ async def ensure_warmed(
     indicator = engine.ensure_indicator(name, params, symbol, exchange, timeframe)
     series_len = len(engine.get_series(name, params, symbol, exchange, timeframe))
     if series_len >= need:
-        return indicator
-    if indicator.is_warmed_up and need - series_len < _PAGE_FETCH_LIMIT:
-        return indicator
+        return indicator   # 有效序列已完整覆盖显示需求，免重算（切周期/品种热路径）
+    # series_len < need：左侧存在未覆盖的历史缺口，必须加深预热补齐。此前这里有一条
+    # `is_warmed_up and need - series_len < _PAGE_FETCH_LIMIT(1000)` 的迟滞直接跳过，会把
+    # 一次瞬时短拉（补页异常 break / 短页）留下的 <1000 根缺口永久锁死——阶梯线等
+    # min_periods 较大的指标历史段再也不绘制（2026-09-23 实证：刷新后前端 klines=6000
+    # 而 series 恒为 5258 = 缓存 6026 − 预热 768，diff 742<1000 每次请求都被跳过）。
+    # cached_klines 命中存量时开销极小、源确已到头时 warmup 幂等无副作用，故只要还有
+    # 缺口就按 need+min_periods 重拉，不再设迟滞（实时 bar 走 on_bar 增量，不经此路径）。
 
     from gateway.market_sources.manager import market_manager
     source = market_manager.get(exchange)

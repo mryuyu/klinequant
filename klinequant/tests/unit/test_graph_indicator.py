@@ -129,10 +129,32 @@ def test_style_contract_validation():
         {"color": "#f0b90b", "line_style": 2}
     ]
     assert _validate_style("X", [{}]) == [{}]   # 空项合法（该字段仅占位）
+    # step: true 声明阶梯线（仅 line 字段；false/缺省不产出该键）
+    assert _validate_style("X", [{"color": "#ea7f1b", "step": True}]) == [
+        {"color": "#ea7f1b", "step": True}
+    ]
+    assert _validate_style("X", [{"step": False}]) == [{}]
     with pytest.raises(ValueError):
         _validate_style("X", [{"color": "red"}])
     with pytest.raises(ValueError):
         _validate_style("X", [{"line_style": 9}])
+    with pytest.raises(ValueError):
+        _validate_style("X", [{"step": 1}])   # 非布尔
+    with pytest.raises(ValueError):
+        _validate_style("X", [{"plot": "histogram", "step": True}])   # 柱字段拒绝 step
+
+
+def test_step_style_in_custom_indicator_meta():
+    """Pine 阶梯线迁移：custom_indicators 的 step 标记经 display_meta 透传前端"""
+    import custom_indicators  # noqa: F401  触发 def 式指标自动注册
+
+    reg = get_registry()
+    cycle = reg.create("MR_Y_CYCLE", None)
+    assert all(s.get("step") is True for s in cycle.display_meta["style"])
+    main = reg.create("MR_Y_MAIN", None)
+    style = main.display_meta["style"]
+    assert style[0].get("step") is None   # M_1X（sma）普通实线
+    assert style[1].get("step") is True   # E_1X（ema）阶梯线
 
 
 def test_price_lines_contract_validation():

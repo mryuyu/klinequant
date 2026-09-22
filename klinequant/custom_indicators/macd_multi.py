@@ -1,3 +1,4 @@
+# ruff: noqa: E501, W291  # 底部 Pine 原版存档为逐字保留，豁免行长/尾随空格告警
 """MisterY_MACD_trend — MACD 多倍数组合（TradingView Pine v5 移植）
 
 原版语义（Pine 见文件底部存档注释）：

@@ -16,7 +16,7 @@ import time
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -36,6 +36,26 @@ logger = logging.getLogger(__name__)
 FRONTEND_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "frontend", "mockup")
 )
+
+# Vue 正式版前端构建产物目录（态①：gateway 托管 dist，SPA 挂在 /app）：klinequant/../frontend/dist
+DIST_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "frontend", "dist")
+)
+
+
+class _NoCacheStaticFiles(StaticFiles):
+    """/static 静态资源：强制 Cache-Control: no-cache（允许存储但每次使用前 ETag 重新校验）。
+
+    背景：lc-live.html 迭代期频繁修改，无显式缓存策略时浏览器按启发式新鲜度
+    普通导航可能直接命中旧缓存，造成"改动不生效"（2026-09-22 阶梯线黑屏事故实证）。
+    no-cache ≠ no-store：内容未变服务器回 304 不传正文，代价仅每次开页一次本地校验；
+    只作用于静态文件，与后端指标/K线进程级缓存无关，切周期/品种速度不受影响。
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def create_app() -> FastAPI:
@@ -102,13 +122,34 @@ def create_app() -> FastAPI:
         async def index():
             return RedirectResponse("/static/lc-live.html")
 
-        app.mount("/static", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
+        app.mount("/static", _NoCacheStaticFiles(directory=FRONTEND_DIR, html=True), name="static")
     else:
         logger.warning(f"Frontend dir not found, UI disabled: {FRONTEND_DIR}")
 
         @app.get("/", include_in_schema=False)
         async def index_missing():
             return RedirectResponse("/docs")
+
+    # Vue 正式版前端（态①：gateway 托管 dist，与 lc-live.html 首页共存）：
+    # SPA 挂在 /app，静态资源走 /app/assets，history 深链回退 index.html。
+    # dist 不存在（未 npm run build）时静默跳过，不影响 lc-live.html 与 API。
+    dist_index = os.path.join(DIST_DIR, "index.html")
+    if os.path.isfile(dist_index):
+        assets_dir = os.path.join(DIST_DIR, "assets")
+        if os.path.isdir(assets_dir):
+            app.mount("/app/assets", StaticFiles(directory=assets_dir), name="app-assets")
+
+        @app.get("/app", include_in_schema=False)
+        @app.get("/app/{rest:path}", include_in_schema=False)
+        async def serve_app(rest: str = ""):
+            if rest:
+                cand = os.path.normpath(os.path.join(DIST_DIR, rest))
+                # 目录穿越防护 + 命中真实文件（favicon.svg / icons.svg 等 public 产物）
+                if cand.startswith(DIST_DIR + os.sep) and os.path.isfile(cand):
+                    return FileResponse(cand)
+            return FileResponse(dist_index)
+    else:
+        logger.warning(f"Vue dist not found, /app disabled (run 'npm run build' in frontend/): {DIST_DIR}")
 
     @app.on_event("startup")
     async def on_startup():

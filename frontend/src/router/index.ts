@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', name: 'dashboard', component: () => import('../views/DashboardView.vue') },
     { path: '/trade', name: 'trade', component: () => import('../views/TradeView.vue') },

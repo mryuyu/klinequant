@@ -1,8 +1,8 @@
 # KlineQuant 迭代计划文档
 
-> **版本**：v2.14  
+> **版本**：v2.17  
 > **创建日期**：2026-07-30  
-> **最后更新**：2026-09-01（阶段收尾：**前端基础功能 + 插件式数据源接入**告一段落——但交易闭环（行情→指标→信号→风控→下单→持仓→结算）尚未跑通，前端基线仍为纯行情终端；下一阶段：INT-CLOSED 闭环验证）  
+> **最后更新**：2026-09-22（v2.17 新增：六·七节「代码健康度专项」——全项目 15 模块组逐行深度精读发现的 4 项 P0 最高优先级修复：QH-001 通用 Webhook 渠道无法添加、QH-002 signal_engine 孤岛装配、QH-003 RiskView 三处接线脱节、QH-004 style.css 脚手架残留污染主题变量）  
 > **当前基线**：v1.9.1-mockup（轻量版行情终端，lc-live.html 唯一迭代基线，commit a45ffe2 已推送）  
 > **仓库**：https://github.com/mryuyu/klinequant  
 > **版本命名规范**：`主版本.次版本.修订号-后缀`，后缀 `-paper` = 模拟盘可用，`-live` = 实盘已验证，无后缀 = 正式版
@@ -29,7 +29,7 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 
 | 版本 | 主题 | 核心交付 | 预计工期 | 状态 |
 |------|------|---------|---------|------|
-| v1.1.0 | 体验升级 | UI 重新设计 ✅ + 图表二次开发 + 指标后端统一计算（IND-101~110） | 3-4 周 | 🔄 进行中（**前端基础功能 + 数据源接入已收尾，闭环未跑通**；剩余：CH 图表二次开发 + Vue 正式版前端同步 + 策略研究闭环接入） |
+| v1.1.0 | 体验升级 | UI 重新设计 ✅ + 图表二次开发 + 指标后端统一计算（IND-101~110） | 3-4 周 | 🔄 进行中（**前端基础功能 + 数据源接入已收尾；交易闭环已在策略层跑通（FX+Crypto 实盘模拟），前端为研究层：指标/信号展示 + 回测，不承担交易**；剩余：CH 图表二次开发 + Vue 正式版前端同步 + 研究 GUI 叠加运行中策略信号（见六·六节 WEBGUI）） |
 | v1.2.0 | 交易增强 | TRD-007/008、SIG-006 | 2-3 周 | ⬜ BACKLOG |
 | v1.3.0 | 回测与策略生态 | BT-005/006、STR-008、画线工具 | 2-3 周 | ⬜ BACKLOG |
 | v2.0.0 | 多市场扩展 | MKT-THS、P3-001/002、Docker、文档 | 4-6 周 | ⬜ BACKLOG |
@@ -211,6 +211,7 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | FX-BT-LIMIT | 回测执行器 LIMIT/STOP 单 | 一期仅 MARKET（LIMIT/STOP 返 DEAD），补挂单撮合（触及价成交） | P1 |
 | FX-FLATTEN | flatten 按 ticket 全平 | 现按净敲算 net_vol 发单一 CLOSE；同时持多空两方向需按 ticket 逐笔全平 | P1 |
 | FX-DUR-GUARD | run_fx_live duration 护栏 | 负/零 duration 静默转不限时，宜显式报错或提示 | P1 |
+| FX-BT-RESULT | 回测结果展示增强（BacktestView） | ① 交易明细表补**时间戳列**：FX 侧 `FxTrade` 已含 `entry_time`/`exit_time`（前端成交表仅显示方向/品种/开仓价/平仓价/数量/盈亏/手续费/持仓Bars，未展示时间），补开仓/平仓时间；币安 dual_ma 引擎成交结构需核对时间字段。② 成交明细“**最近 20 笔**”硬编码 `.slice(0,20)`（FX `fxTrades`/币安 `trades` 两表）改为**显示全部 / 手动输入条数**：FX 全量 trades 已在 result 内（纯前端去 slice），币安 trades API 现 `?limit=100` 需后端放开 | P2 |
 | FX-BT-PORT | 多品种组合资金曲线 | 现顺序回放、品种独立；补组合级 equity/夏普/回撤（BT-005 关联） | P2 |
 | FX-BT-EQ | equity_curve 采样滞后 | ~1 bar 滞后（on_bar 在 advance 后、下单前），影响可忽略 | P2 |
 | FX-BT-ANNUAL | 年化 bars_per_year | 现 365 天约定，FX 实际 ~5 天/周，年化偏乐观 | P2 |
@@ -220,10 +221,47 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 
 ---
 
+## 六·六、运行模式（webgui 三态）与研究 GUI 策略信号可视化
+
+> 背景（2026-09-22 用户定案）：框架以 **SDK 形式**交付给策略（借鉴 tqsdk：`def strategy(api: KqApi)` + `while api.wait_update()` 自驱动，策略是独立程序）；前端定位为**策略研究层**（只做行情/指标/信号展示 + 回测，不含交易）。据此确立“运行模式三态”——**前端启动由策略侧 `webgui` 开关控制**（策略入口是原生进程，对 spawn gateway/托管前端有完全权限，无“前端反向拉起死后端”的鸡生蛋问题），而非独立 launcher 守护进程。
+
+### 运行模式三态
+
+| 态 | 触发 | 前端 | 策略 | 现状 |
+|----|------|------|------|------|
+| ① 纯行情看板 | 独立启动 web 栈（start_all.ps1 / gateway，**无策略**） | 行情/指标/信号展示 + 回测工作台 | 不运行 | ✅ 已具备（gateway + lc-live.html + BacktestView） |
+| ② 实盘 headless | `run_fx_live`（默认，无 web） | 无 | LiveRunner 独立跑，纯执行剥离 UI | ✅ 已具备（run_fx_live/run_crypto_live；尚无显式 `webgui` 开关，默认即 headless） |
+| ③ 策略研究（带 GUI） | `run_fx_live --webgui` | 拉起 web 栈 + **叠加运行中策略**的信号/持仓/所声明指标 | LiveRunner 与 web 栈共存 | ⬜ 待做（WEBGUI-L1 拉起 + WEBGUI-L2 信号叠加） |
+
+**关键约束（用户强调）**：`webgui` 开关**不得假设“总有策略在跑”**——态①（纯看板）必须能在无任何策略时独立启动与运行；态③只是在态①的 web 栈上“挂接”一个运行中策略的视图层。
+
+### 任务
+
+| 编号 | 任务 | 说明 | 优先级 | 状态 |
+|------|------|------|--------|------|
+| WEBGUI-L1 | `webgui` 开关 + 态③拉起 web 栈 | runner 入口（run_fx_live/run_crypto_live 等）增 `--webgui`：True 时跑策略的同时拉起 gateway（托管前端 dist + API）并开浏览器，False 保持 headless。**宿主拓扑待定**（策略为主进程 + gateway 后台线程 / gateway 为主 + 策略受管任务）；需处理 LiveRunner `signal.signal` 仅主线程可用的限制 | P1 | ⬜ 设计中 |
+| WEBGUI-L2 | 研究 GUI 叠加运行中策略信号（**Level 2**） | 态③下前端叠加“这个正在跑的策略”的实时信号/持仓/所声明指标，走 `api.plot/state → gateway.state → WS → 前端` 推送通道。**依赖**：IND-108 盘中触发 + 接线层增量推送缺口（IndicatorView 引用封装 / is_changing 覆盖指标列 / 增量传输）。**约束**：与态①纯看板并存——无策略挂接时前端照常作行情看板，有策略挂接才显示其信号层。**用户定案：必做，但非当下（先固化态①/②，L2 延后）** | P1 | ⬜ 规划中（延后） |
+
+---
+
+## 六·七、代码健康度专项（全项目深度精读发现 · P0 最高优先级）
+
+> 背景（2026-09-22）：对 KlineQuant 全项目 15 个模块组（protocol/config/storage → 6 引擎 → SDK → gateway → 前端 → 策略样例/脚本 → 测试）逐行精读后，发现 4 项影响功能正确性的问题——1 个真实 bug、2 处接线缺口、1 处样式污染。用户指令：**列为最高优先级（P0），优先于其他所有 BACKLOG 项实施**。四项均已用真实代码坐实根因，附精确「文件:行号」与修复方向。
+
+| 编号 | 任务 | 根因与修复方向 | 优先级 | 状态 |
+|------|------|--------------|--------|------|
+| QH-001 | 通用 Webhook 渠道无法添加 | **真实 bug**：`gateway/routers/alert.py:223-224` 的 `else` 分支执行 `cls(webhook_url=body.webhook_url)`，但 `core/notification/channels.py:317-319` 的 `WebhookChannel.__init__(self, url, headers=None, **kwargs)` 形参是 `url`（必填位置参数）→ `TypeError: missing 1 required positional argument: 'url'` → 被 `alert.py:228-229` except 转成 400 并泄露内部文案；钉钉/飞书/Telegram 形参恰好对上，唯 Webhook 不匹配。**修复**：`else` 分支改 `cls(url=body.webhook_url)`（一行）。**测试盲区**：`test_phase2_modules.py:570` 用对了 `WebhookChannel(url=...)` 却未覆盖 add_channel 路由的 webhook 分支，需补路由级用例 | P0 | ⬜ |
+| QH-002 | signal_engine 孤岛装配 | **接线缺口**：`core/signal_engine/` 功能完整（Crossover/Threshold/Comparison 规则 + And/Or/Not 组合 + 冷却 + 三路由 AUTO/SEMI_AUTO/ALERT_ONLY）且 `test_signal_engine.py` 38 用例全绿，但 `gateway/state.py` 只装配 alert/strategy/risk/indicator 四引擎、**未装配 signal_engine**，且**无路由、无 WS publisher**（`grep signals gateway/`=0）→ 前端 SignalView 三源全打空（REST 404 + confirm 404 + WS `topic:"signals"` 能 ack 但无数据源）。**修复**：state.py 装配 SignalEngine + 新建 `gateway/routers/signal.py`（规则 CRUD / 信号列表 / 确认）+ WS signals publisher 桥接 `engine.subscribe_signals` | P0 | ⬜ |
+| QH-003 | RiskView 三处接线脱节 | **接线缺口**：① `frontend/src/views/RiskView.vue` onMounted 只调 fetchLogs+fetchStats，**从不调 fetchRules**，规则表是前端硬编码 12 条（后端 `/api/v1/risk/rules` 已就绪未被消费）；② fetchStats 字段名不匹配——前端要 `total_rejects/reject_rate`，后端 `gateway/routers/risk.py` 给 `total_rejected` 且无 reject_rate；③ `risk.py` 的 `/logs` 返回 `_risk_logs` 永空内存列表（`MAX_RISK_LOGS` 定义了却无任何 append，风控触发不回写）。**修复**：RiskView 补 fetchRules 消费后端规则 + 前后端 stats 字段对齐 + risk.py 在风控触发处 append `_risk_logs` | P0 | ⬜ |
+| QH-004 | style.css 脚手架残留污染 | **样式污染**：`frontend/src/style.css:91-387` 为 Vite 脚手架残留，重复定义 `:root/body/#app` 覆盖 KlineQuant 主题（`--accent` 青绿 #00d4aa→紫 #aa3bff、`--border` 深色→浅色、`#app` 强加 1126px 居中）；且 `StrategyView.vue` 的 CSS 用 `var(--text)` **只在此残留段定义**（隐藏跨文件耦合，直接删会白屏）。**修复**：先解耦——把 StrategyView 依赖的 `--text` 等变量迁到正式主题段（1-90 行），再删 91-387 残留段；顺带清死代码：`HelloWorld.vue`（无引用）、`demo/multi_symbols.py`（空）、`demo/macd_strategy_demo.py`（纯 docstring 草稿）、`alert_manager.py` 未用的 `self._queue` | P0 | ⬜ |
+
+---
+
 ## 七、BACKLOG 总池（当前全部未闭环项）
 
 | 编号 | 项目 | 目标版本 | 状态 |
 |------|------|---------|------|
+| QH-001~004 | 代码健康度专项（webhook bug / signal_engine 装配 / RiskView 接线 / style.css 清理） | 最高优先级 P0 | ⬜ 待实施（详见六·七，深度精读发现） |
 | UI-001~005 | UI 重新设计 | v1.1.0 | ✅ 已完成（lc-live.html 基线，v1.3.0-mockup） |
 | CH-001~008 | 图表二次开发 | v1.1.0 | 🔄 规划中 |
 | IND-101~110 | 指标后端统一计算 + 真增量引擎 + 策略端接线 + ZigZag/盘中触发 + 自定义指标体系 + def 式指标语言 | v1.1.0 | 🔄 进行中（IND-101/102/106 完成；IND-103 前端零计算落地：内置五指标全切后端引擎、本地计算函数删除，单测 553 passed；IND-110 def 式指标语言已完成） |
@@ -238,11 +276,12 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | MKT-PLG | 市场源插件框架 + IG 外汇接入 | 提前落地（v1.1 期） | ✅ 已实现并验证（IG demo 全链路通过，2026-08-08） |
 | MKT-THS | 国内 A 股数据源（thsdk） | v2.0.0（已提前） | ✅ 已实现（2026-08-31：插件+注册+单测+联调完成，盘中实时聚合待交易时段验证） |
 | MKT-TF | 高周期与自定义周期（周/月/季/年 + 自定义倍率） | 提前落地（v1.1 期） | ✅ 已实现（2026-08-31：后端派生周期层 derived.py 从日 K 统一聚合，1w 各源原生直供；路由拦截+指标预热透传+WS 实时聚合（日 K 驱动+冷启动预填）；前端四档按钮+自定义弹层；单测 587 passed，REST/WS/浏览器冒烟全通） |
-| INT-CLOSED | 交易闭环验证（行情→指标→信号→风控→下单→持仓→结算） | 提前落地（下一轮） | ⬜ 规划中（后端 strategy/trade/risk API 齐备但未接前端基线） |
 | MKT-IB | 盈透证券 API 接入 | 提前落地（v1.1 期，下一轮任务） | ⬜ 规划中（接入方式与 Paper 账户待确认） |
 | DOC | 用户手册/API 文档 | v2.0.0 | ⬜ BACKLOG |
 | DOCKER | Docker 部署方案 | v2.0.0 | ⬜ BACKLOG（非必需） |
 | INT-003 | 实盘验证 | v2.1.0-live（最后） | ⬜ BACKLOG（用户明确留到最后） |
+| WEBGUI-L1 | webgui 开关 + 研究态拉起 web 栈 | 提前落地（下一轮） | ⬜ 设计中（宿主拓扑待定，详见六·六） |
+| WEBGUI-L2 | 研究 GUI 叠加运行中策略信号（Level 2） | 提前落地（延后必做） | ⬜ 规划中（用户定案：必做非当下，详见六·六） |
 
 ---
 
@@ -284,3 +323,6 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | 2026-09-01 | v2.12 | **阶段收尾：前端基础功能 + 插件式数据源接入告一段落（用户修正定性：仅完成展示层与数据接入，交易闭环尚未跑通）**。已交付全景：① 前端基础功能——UI 重设计（lc-live.html 基线）、图表二次开发（懒加载/分屏/右键菜单/价格标签倒计时）、指标后端统一计算（前端零计算 + def 式指标语言 + MACD 倍数族）、品种列表收藏夹化（跨源混排 + 本地持久化）、全周期体系（周/月/季/年 + 自定义倍率周期）；② 数据源——币安（加密）+ MT5（外汇，子进程隔离 + 掉线自愈）+ THS（A 股，登录护栏 + 会话保活）三源插件式接入，盘中实时聚合/精度闭环/全史深度均已验证。全部代码已推送 origin/main（最新 tag v1.9.1-mockup）。**闭环现状**：lc-live.html 仍为纯行情终端（无策略管理/持仓/订单/盈亏 UI），后端 strategy/trade/risk/backtest API 齐备（strategy router 含 CRUD+start/stop/pause/logs）但未接前端，「行情→指标→信号→风控→下单→持仓→结算」未端到端验证；新增 INT-CLOSED 闭环验证任务（下一轮）。已知遗留：BUG-001 调参全量重建、BUG-002 退市股历史、MT5/THS 盘中时段持续观察 |
 | 2026-09-22 | v2.13 | 新增「六·五、外汇（FX）交易与回测迭代计划」专项节：归拢 FX 已完成核心闭环（FX-ORD 订单系统 v2.0 / FX-MT5 市场源 / FX-HEDGE 对冲 ticket 平仓 / FX-MULTI 多品种单进程多线程 / FX-CLOSE 收盘价模型 / FX-BT 回测实盘同构 / FX-CONV 跨币种换算，对应 tag v2.0.0~v2.1.0、v9.31~v9.37）；当前迭代 FX-BT-UI（前端 BacktestView 接 FX 同构回测）；遗留增强分 P1（FX-BT-LIMIT 挂单撮合 / FX-FLATTEN 按 ticket 全平 / FX-DUR-GUARD duration 护栏）与 P2（FX-BT-PORT 组合资金曲线 / FX-BT-EQ 采样滞后 / FX-BT-ANNUAL 年化约定 / FX-CONV-HIST 交叉盘历史汇率 / FX-CLOSE-LIMIT 挂单平仓 ticket / FX-FEED-SCALE 50 品种轮询优化） |
 | 2026-09-23 | v2.14 | 补记 v9.39（加密同构实盘模拟 + MarketBackend 抽象）：① 六·五节扩展为「FX + Crypto 同构」，新增「已完成（Crypto 同构 + MarketBackend 抽象）」子表——MKT-BACKEND（MarketBackend 协议抽象，LiveRunner 市场无关，Mt5Backend 逐行等价搬迁保 FX 零退化，为国内期货 CTP/P3-002 铺路）+ CRYPTO-LIVE（币安 USDT-M Futures Demo 同构实盘模拟：BinanceExecutor async→sync 桥接 + MT5 同形 dict、BinanceDataFeed fstream WS、BinanceBackend 独立 event loop 线程、One-way 净持仓 reduceOnly 平仓、load_spec_from_binance 实测合约规格、run_crypto_live.py）；② 全量单测 715 passed / 0 failed（新增 4 文件 34 用例：spec_loader/executor/feed/backend）；③ 遗留：run_crypto_live 连 demo-fapi 实跑 fx_simple_test BTCUSDT 1m 真实下单待用户手动验证（One-way/Hedge、avgPrice 依赖、代理 7897） |
+| 2026-09-22 | v2.15 | 新增「六·六、运行模式（webgui 三态）与研究 GUI 策略信号可视化」专项节（用户定案）：① 确立框架以 SDK 形式交付（借鉴 tqsdk，`def strategy(api)` + `wait_update` 自驱动）、前端定位研究层，**前端启动由策略侧 `webgui` 开关控制**而非独立 launcher/前端反向拉后端（原生进程无鸡生蛋问题）；② 运行模式三态——态①纯行情看板（无策略，✅ 已具备 gateway+lc-live.html+BacktestView）/态②实盘 headless（`webgui=False` 默认，✅ 已具备 run_fx_live/run_crypto_live）/态③策略研究带 GUI（`webgui=True`，LiveRunner 与 web 栈共存，⬜ 待做）；③ 关键约束：`webgui` 不得假设总有策略在跑，态①必须能无策略独立启动运行；④ 新增 WEBGUI-L1（`--webgui` 开关 + 态③拉起 web 栈，宿主拓扑待定，需处理 LiveRunner signal 仅主线程限制，P1 设计中）与 **WEBGUI-L2（Level 2：研究 GUI 叠加运行中策略信号/持仓/所声明指标，走 api.plot/state→gateway.state→WS→前端，依赖 IND-108 + 接线层增量推送缺口，用户定案“必做但非当下”，P1 延后）**；⑤ 同步七·BACKLOG 总池 |
+| 2026-09-22 | v2.16 | 六·五节「遗留/后续增强」新增 **FX-BT-RESULT**（回测结果展示增强，P2，用户指令）：① 交易明细表补**时间戳列**——FX 侧 `FxTrade` 已含 `entry_time`/`exit_time` 但前端成交表未展示（补开仓/平仓时间列），币安 dual_ma 引擎成交结构需核对时间字段；② 成交明细“**最近 20 笔**”硬编码 `.slice(0,20)`（FX `fxTrades`/币安 `trades`）改为**显示全部 / 手动输入条数**（FX 全量 trades 已在 result 内纯前端去 slice；币安 trades API 现 `?limit=100` 需后端放开）。以 FX 引擎为主、币安旧路由同 |
+| 2026-09-22 | v2.17 | 新增「六·七、代码健康度专项」（全项目 15 模块组逐行深度精读发现，用户指令列最高优先级 P0，置顶 BACKLOG 总池）：QH-001 通用 Webhook 渠道无法添加（alert.py:224 else 分支 `cls(webhook_url=)` 调 WebhookChannel(url=) → TypeError → 400，一行修复 + 补路由级测试）；QH-002 signal_engine 孤岛装配（功能完整 + 38 单测全绿，但 state.py 未装配 / 无路由 / 无 WS publisher → SignalView 空壳，需装配 + signal router + WS 桥接）；QH-003 RiskView 三处接线脱节（不调 fetchRules 用硬编码 12 条 / stats 字段名 total_rejected vs total_rejects 不匹配 / risk.py _risk_logs 永空）；QH-004 style.css:91-387 脚手架残留污染主题变量（--accent/--border/#app 被覆盖，StrategyView var(--text) 反向依赖，先解耦再删 + 清死文件） |
