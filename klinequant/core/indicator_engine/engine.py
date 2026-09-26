@@ -214,14 +214,19 @@ class IndicatorEngine:
         indicator: IndicatorBase,
         df: pl.DataFrame,
     ) -> Optional[Dict[str, Any]]:
-        """增量指标预热：重置状态后逐根重放，同步建立有效值序列（剔除预热段）"""
+        """增量指标预热：重置状态后逐根重放，同步建立有效值序列（剔除预热段）
+
+        降级场景（源深度 < 全局预热且指标支持 partial）：逐字段部分输出，
+        窗口未满足的字段出 null（前端逐字段补空），短周期线仍可用——对齐 TV 观感
+        """
         indicator.reset()
         series: Deque[Tuple[int, Dict[str, Any]]] = deque(maxlen=self._max_cache_size)
         self._series[key][self.ind_key(indicator.name, indicator.params)] = series
+        partial = len(df) < indicator.min_periods and getattr(indicator, "supports_partial", False)
         values: Optional[Dict[str, Any]] = None
         for row in df.iter_rows(named=True):
-            values = indicator.update_bar(row, True)
-            if values is not None:
+            values = indicator.update_bar(row, True, partial=partial) if partial else indicator.update_bar(row, True)
+            if values is not None and any(v is not None for v in values.values()):
                 series.append((row["timestamp"], dict(values)))
         return series[-1][1] if series else None
 

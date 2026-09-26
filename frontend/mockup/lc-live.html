@@ -112,6 +112,13 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .gear-btn { display:inline-flex; align-items:center; background:none; border:none; color:var(--text-sub); cursor:pointer; padding:2px; border-radius:4px; flex:none; }
 .gear-btn:hover { color:var(--accent); background:var(--bg-elevated); }
 .gear-btn svg { width:12px; height:12px; }
+/* 显隐勾选框：图例行首（整指标显隐，TV 眼睛图标等价）+ 弹窗「样式」页每条线/柱行首（隐藏该条线/柱）；
+   隐藏线图例值置灰但保留宽度（防行宽抖动）；整指标隐藏时整行置灰（勾选框除外） */
+.ind-vis-chk { width:12px; height:12px; margin:0 2px 0 0; vertical-align:middle; cursor:pointer; accent-color:var(--accent); flex:none; }
+/* 弹窗样式行内勾选框须以 .modal input.ind-fvis-chk 提升特异性，压过 .modal input 的 width:100%/padding/border，否则撑成整行 */
+.modal input.ind-fvis-chk { width:13px; height:13px; margin:0; padding:0; border:none; background:none; border-radius:0; cursor:pointer; accent-color:var(--accent); flex:none; }
+.legend-row span.lg-off { opacity:.35; }
+.legend-row.row-off > *:not(.ind-vis-chk) { opacity:.45; }
 /* 指标弹窗：线条样式区（色板 + 线型选择，逐线配置） */
 .ind-style-sec { margin-top:2px; }
 .ind-style-row { display:flex; align-items:center; gap:8px; padding:4px 0; flex-wrap:wrap; }
@@ -124,7 +131,8 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .ind-line-sel:focus { border-color:var(--accent); }
 /* MACD HIST 四槽子行（零轴上/下 × 增大/缩小） */
 .hist-wrap { flex-direction:column; align-items:stretch; gap:5px; }
-.hist-wrap > .ind-style-name { width:auto; padding-bottom:2px; }
+.hist-head { display:flex; align-items:center; gap:6px; }
+.hist-head .ind-style-name { width:auto; padding-bottom:0; }
 .hist-sub { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .hist-sub-name { font-size:11px; color:var(--text-sub); width:66px; flex:none; }
 /* 副图参考线配置区（数值 + 颜色 + 线型，可增删行；持久化于 styleUI.refLines） */
@@ -675,8 +683,9 @@ const IND_CATALOG = {
   boll: { title: 'BOLL 布林带',    pane: 'main', desc: '中轨 ± N 倍标准差',          defaults: { period: 20, mult: 2 } },
   macd: { title: 'MACD',           pane: 'sub',  desc: 'DIF/DEA 与柱状图', defaults: { fast: 12, slow: 26, signal: 9 } },
   kd:   { title: 'KD 随机指标',    pane: 'sub',  desc: 'K/D 超买超卖',       refLines: [20, 50, 80], defaults: { n: 9, m: 3 } },
-  rsi:  { title: 'RSI 相对强弱',   pane: 'sub',  desc: 'Wilder 平滑 RSI',    refLines: [70, 30], defaults: { period: 14 } },
+  rsi:  { title: 'RSI 相对强弱',    pane: 'sub',  desc: 'Wilder 平滑 RSI',    refLines: [70, 30], defaults: { period: 14 } },
 };
+/* 显隐粒度 = 逐条线/柱（弹窗「样式」页每行行首勾选框），参数只涉及计算不作显隐维度（v9.63） */
 const IND_META = {
   ma:   { title: 'MA 均线参数', fields: [
     { key: 'short', label: '短周期', min: 2, max: 'kline' },
@@ -734,8 +743,8 @@ const IND_LAYOUT_DEFAULT = [
 let indLayout = [];
 if (savedLayout && Array.isArray(savedLayout.indLayout) && savedLayout.indLayout.every(x => IND_CATALOG[x.type] || (x.type === 'custom' && x.name))) {
   indLayout = savedLayout.indLayout.map(x => x.type === 'custom'
-    ? { type: 'custom', name: x.name, params: { ...x.params }, styleUI: x.styleUI ?? null }
-    : { type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params }, styleUI: x.styleUI ?? null });   // styleUI（逐线颜色/线型/柱四色/参考线）须随条目恢复，否则刷新后自选样式丢失（2026-09-01 实证）
+    ? { type: 'custom', name: x.name, params: { ...x.params }, styleUI: x.styleUI ?? null, fieldHidden: null, off: !!x.off }
+    : { type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params }, styleUI: x.styleUI ?? null, fieldHidden: null, off: !!x.off });   // styleUI 与整指标 off 须随条目恢复；fieldHidden（逐线/柱隐藏）仅会话内有效（重载丢弃，用户预期刷新后默认全显），会话内切周期/重建仍经 saveLayout 条目携带
 } else {
   indLayout = IND_LAYOUT_DEFAULT.map(x => ({ type: x.type, params: { ...x.params } }));
   if (savedLayout && savedLayout.indParams) {
@@ -781,7 +790,9 @@ async function fetchIndSeries(indicator, params, gen) {
   } catch (e) { console.error('indicator history timeout:', indicator, params); return null; }
   if (!r.ok) { console.error('indicator history failed:', r.status, indicator, params); return null; }
   const json = await r.json();
-  if (gen !== loadGen || !json.warmed || !json.data || !json.data.length) return null;
+  /* 降级部分序列（warmed=false 但 data 非空，v9.60）：源深度不足全局预热时后端逐字段透传 null，
+     各渲染分支逐字段补空（短周期线仍绘）；仅空数据丢弃 */
+  if (gen !== loadGen || !json.data || !json.data.length) return null;
   return json.data;
 }
 /* WS 指标增量推送：按 (指标名+参数组合) 匹配实例订阅，更新 series 末点与 lastVals 缓存（图例随十字线 seriesData 自动跟随） */
@@ -915,9 +926,14 @@ const CUSTOM_COLORS = ['#e6c229', '#42a5f5', '#ab47bc', '#26a69a', '#ef5350', '#
 let maColorIdx = 0;
 let indInstances = [];   // [{id, type, params, series:[...], legendEl, legendVals:{}, pane}]
 const LINE_BASE = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+/* 主图叠加指标线不参与价格轴自适应：autoscale 只由 K 线决定。
+   超长周期线（如布林 280±2.7σ / sma764）在高波动段取值极宽，若参与自适应会把轴撑到
+   K 线波幅数倍、K 线压成窄带（对齐 TV 观感：通道极值出屏而非撑轴）；
+   副图指标仍走默认自适应（各窗格刻度依赖自身序列），故仅 pane 0 series 展开本选项 */
+const NO_AUTOSCALE = { autoscaleInfoProvider: () => ({ priceRange: null }) };
 /* ═══ 阶梯线渲染（Series Primitives API）：Pine plot.style_stepline 观感还原 ═══
    lwc 无原生阶梯线型；挂到字段 LineSeries 上：series 线体设透明仅承载数据
-   （autoscale/十字线图例照常），draw 时直读 series.data() 自绘「水平段+垂直跳变」，
+   （十字线图例照常；主图 autoscale 已按 NO_AUTOSCALE 统一排除），draw 时直读 series.data() 自绘「水平段+垂直跳变」，
    不增加时间槽位、K 线布局零影响；历史 setData / 实时 update 两条路径天然同步
    （数据变化→图表重绘→draw 重读）；只绘可见区（二分定位）。 */
 const STEP_DASH = { 1: [1, 2], 2: [4, 2], 3: [8, 4] };   // lwc LineStyle 1点线/2虚线/3大虚线 → canvas setLineDash
@@ -929,6 +945,9 @@ class StepLinePrimitive {
   constructor(opts) {
     this._opts = { color: '#ffffff', lineStyle: 0, lineWidth: 1, ...opts };
     this._series = null; this._chart = null; this._invalidate = null; this._drawErrLogged = false;
+    /* 显隐开关：lwc 的 primitive 渲染不检查 series.visible（PrimitivePaneViewWrapper.renderer 直调 paneView.renderer），
+       series 隐后阶梯线仍会自绘，故由 applyInstVisibility 统一调 setVisible 同步 */
+    this._visible = true;
     /* 缓存 renderer/paneView：lwc 基于数组引用做内部缓存，paneViews() 须返回同一数组（视图集未变时）。
        关键契约：IPrimitivePaneView.renderer 是「方法」（v5.2.0 typings），返回带 draw(target) 的 IPrimitivePaneRenderer；
        曾误写为 renderer 属性对象，致 lwc 调 view.renderer() 抛「not a function」中断整个渲染帧（蜡烛与全部指标一起黑屏） */
@@ -944,10 +963,12 @@ class StepLinePrimitive {
   attached(param) { this._series = param.series; this._chart = param.chart; this._invalidate = param.requestUpdate; }
   detached() { this._series = null; this._chart = null; this._invalidate = null; }
   applyOptions(opts) { Object.assign(this._opts, opts); if (this._invalidate) this._invalidate(); }
+  setVisible(v) { this._visible = !!v; if (this._invalidate) this._invalidate(); }
   paneViews() { return this._paneViews; }
   _draw(target) {
     const s = this._series;
     if (!s || !this._chart) return;
+    if (!this._visible) return;
     const data = s.data();
     if (!data || data.length < 2) return;
     const ts = this._chart.timeScale();
@@ -1017,21 +1038,22 @@ function catOf(it) {
 function buildInstance(it, styleUI) {
   const id = nextIndId(it.type);
   const cat = catOf(it);
-  const inst = { id, type: it.type, name: it.name, params: { ...it.params }, series: [], legendVals: {}, pane: 0, styleUI: styleUI || null };
+  const inst = { id, type: it.type, name: it.name, params: { ...it.params }, series: [], legendVals: {}, pane: 0, styleUI: styleUI || null,
+    fieldHidden: Array.isArray(it.fieldHidden) ? it.fieldHidden : [], off: !!it.off };   // 显隐态：逐线/柱隐藏字段索引集 + 整指标 off
   const parts = [];   // 图例片段 [{label, color}]
   if (it.type === 'ma') {
     const st1 = indSeriesStyle(inst, 0), st2 = indSeriesStyle(inst, 1);
     inst.series = [
-      chart.addSeries(LineSeries, { color: st1.color, ...LINE_BASE, ...st1.opt }, 0),
-      chart.addSeries(LineSeries, { color: st2.color, ...LINE_BASE, ...st2.opt }, 0),
+      chart.addSeries(LineSeries, { color: st1.color, ...LINE_BASE, ...st1.opt, ...NO_AUTOSCALE }, 0),
+      chart.addSeries(LineSeries, { color: st2.color, ...LINE_BASE, ...st2.opt, ...NO_AUTOSCALE }, 0),
     ];
     parts.push({ key: 's', label: `MA${it.params.short}:`, color: st1.color }, { key: 'l', label: `MA${it.params.long}:`, color: st2.color });
   } else if (it.type === 'boll') {
     const bc = [indSeriesStyle(inst, 0), indSeriesStyle(inst, 1), indSeriesStyle(inst, 2)];
     inst.series = [
-      chart.addSeries(LineSeries, { color: bc[0].color, ...LINE_BASE, ...bc[0].opt }, 0),
-      chart.addSeries(LineSeries, { color: bc[1].color, lineStyle: 2, ...LINE_BASE, ...bc[1].opt }, 0),
-      chart.addSeries(LineSeries, { color: bc[2].color, ...LINE_BASE, ...bc[2].opt }, 0),
+      chart.addSeries(LineSeries, { color: bc[0].color, ...LINE_BASE, ...bc[0].opt, ...NO_AUTOSCALE }, 0),
+      chart.addSeries(LineSeries, { color: bc[1].color, lineStyle: 2, ...LINE_BASE, ...bc[1].opt, ...NO_AUTOSCALE }, 0),
+      chart.addSeries(LineSeries, { color: bc[2].color, ...LINE_BASE, ...bc[2].opt, ...NO_AUTOSCALE }, 0),
     ];
     parts.push({ key: 'u', label: 'U', color: bc[0].color }, { key: 'm', label: 'M', color: bc[1].color }, { key: 'l', label: 'L', color: bc[2].color });
   } else if (it.type === 'macd') {
@@ -1069,20 +1091,20 @@ function buildInstance(it, styleUI) {
       const bs = backendFieldStyle(inst, i);
       if (bs?.plot === 'histogram') {
         /* 柱字段：逐点着色（四槽），series 不预设色；图例取上增槽色（用户自选 > 后端声明） */
-        inst.series.push(chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, inst.pane));
+        inst.series.push(chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false, ...(inst.pane === 0 ? NO_AUTOSCALE : {}) }, inst.pane));
         parts.push({ key: f, label: f, color: fieldHistColors(inst, i)?.[0] || '#787b86' });
         return;
       }
       const st = indSeriesStyle(inst, i);
       if (bs?.step === true) {
         /* 阶梯线字段：series 线体透明仅承载数据，StepLinePrimitive 自绘（图例/自选色仍用 st.color） */
-        const s = chart.addSeries(LineSeries, { color: 'transparent', ...LINE_BASE, ...st.opt }, inst.pane);
+        const s = chart.addSeries(LineSeries, { color: 'transparent', ...LINE_BASE, ...st.opt, ...(inst.pane === 0 ? NO_AUTOSCALE : {}) }, inst.pane);
         const prim = new StepLinePrimitive({ color: st.color, lineStyle: st.opt.lineStyle ?? 0, lineWidth: LINE_BASE.lineWidth });
         s.attachPrimitive(prim);
         inst.series.push(s);
         (inst.stepPrims ||= [])[i] = prim;
       } else {
-        inst.series.push(chart.addSeries(LineSeries, { color: st.color, ...LINE_BASE, ...st.opt }, inst.pane));
+        inst.series.push(chart.addSeries(LineSeries, { color: st.color, ...LINE_BASE, ...st.opt, ...(inst.pane === 0 ? NO_AUTOSCALE : {}) }, inst.pane));
       }
       parts.push({ key: f, label: f, color: st.color });
     });
@@ -1091,7 +1113,8 @@ function buildInstance(it, styleUI) {
      移到值 span 的 title 悬停提示（鼠标移到指标名/数值上显示对应参数）——避免图例过宽。
      .legend-row overflow:hidden 会裁掉 CSS 伪元素提示，故统一用原生 title（OS 渲染不受裁剪） */
   const ps = indParams(it), nameTip = ps ? `(${ps})` : '';   // 指标名悬停提示：参数带括号，如 (5,20)
-  const rowHtml = `<button class="gear-btn" data-ind-id="${id}" title="调整参数"></button>` +
+  const rowHtml = `<input type="checkbox" class="ind-vis-chk" data-ind-id="${id}" title="显示/隐藏指标"${inst.off ? '' : ' checked'}>` +
+    `<button class="gear-btn" data-ind-id="${id}" title="调整参数"></button>` +
     `<span class="muted" id="lg-label-${id}" title="${nameTip}">${indBaseName(it)}</span>` +
     parts.map(p => `<span style="color:${p.color}" title="${p.label}"><span id="lg-${id}-${p.key}">--</span></span>`).join(' ');   // 值用 span（非 <b>）：字重与指标名一致、不再加粗
   if (cat.pane === 'main') {
@@ -1115,6 +1138,7 @@ function buildInstance(it, styleUI) {
   applyRefLines(inst);
   inst.legendEl.querySelector('.gear-btn').innerHTML = GEAR_SVG;
   parts.forEach(p => { inst.legendVals[p.key] = document.getElementById(`lg-${id}-${p.key}`); });
+  applyInstVisibility(inst);   // 恢复显隐态（整指标 off / 参数级隐藏线）
   /* 悬停冻结（与静态图例行同机制） */
   const rowEl = inst.legendEl.querySelector('.legend-row') || inst.legendEl;
   rowEl.addEventListener('pointerenter', () => { legendFrozen = true; });
@@ -1239,13 +1263,14 @@ function indStyleUI(inst) {
           swList.map(c => `<button type="button" class="ind-sw${c === cur ? ' active' : ''}" data-c="${c}" style="background:${c}" title="${c}"></button>`).join('') +
           `</div></div>`;
       }).join('');
-      return `<div class="ind-style-row hist-wrap" data-si="${i}"><span class="ind-style-name">${label}</span>${subs}</div>`;
+      return `<div class="ind-style-row hist-wrap" data-si="${i}"><div class="hist-head"><input type="checkbox" class="ind-fvis-chk" data-si="${i}" title="取消勾选隐藏此柱"${fieldHidden(inst, i) ? '' : ' checked'}><span class="ind-style-name">${label}</span></div>${subs}</div>`;
     }
     const s = inst.styleUI?.[i] || {};
     const cur = s.color || indSeriesStyle(inst, i, false).color;
     const curStyle = s.lineStyle != null ? s.lineStyle : (inst.type === 'boll' && i === 1 ? 2 : (backendFieldStyle(inst, i)?.line_style ?? 0));
     const swList = IND_SWATCHES.includes(cur) ? IND_SWATCHES : [cur, ...IND_SWATCHES];   // 后端声明色/持久化色不在色板时动态插入保选中态
     return `<div class="ind-style-row" data-si="${i}">` +
+      `<input type="checkbox" class="ind-fvis-chk" data-si="${i}" title="取消勾选隐藏此线"${fieldHidden(inst, i) ? '' : ' checked'}>` +
       `<span class="ind-style-name">${label}</span><div class="ind-swatches">` +
       swList.map(c => `<button type="button" class="ind-sw${c === cur ? ' active' : ''}" data-c="${c}" style="background:${c}" title="${c}"></button>`).join('') +
       `</div>${lineStyleSel(curStyle)}</div>`;
@@ -1368,6 +1393,28 @@ function applyInstStyles(inst, styleUI) {
     if (keys[i]) inst.legendVals[keys[i]].parentElement.style.color = st.color;
   });
   applyRefLines(inst);   // 参考线自选变化：就地重建（默认→自选→清空均可）
+}
+
+/* ═══ 指标显隐（两级勾选） ═══
+   整指标：图例行首 .ind-vis-chk（inst.off，TV 眼睛图标等价），全部线一起隐；
+   逐线级：弹窗「样式」页每条线/柱行首勾选框（inst.fieldHidden = 取消勾选的字段索引），
+   显隐粒度 = 具体线/柱（参数只涉及计算，不作显隐维度）；两级叠加（off 优先）。
+   隐藏 = series.visible=false（副图 autoscale 亦不再计入），图例值置灰但保留宽度防抖 */
+function fieldHidden(inst, i) {
+  return (inst.fieldHidden || []).includes(i);
+}
+function applyInstVisibility(inst) {
+  const rowEl = inst.legendEl.querySelector('.legend-row') || inst.legendEl;
+  rowEl.classList.toggle('row-off', !!inst.off);
+  const keys = Object.keys(inst.legendVals);
+  inst.series.forEach((s, i) => {
+    const vis = !inst.off && !fieldHidden(inst, i);
+    s.applyOptions({ visible: vis });
+    const prim = inst.stepPrims?.[i];
+    if (prim) prim.setVisible(vis);   // 阶梯线自绘不受 series.visible 控制，须同步
+    const el = inst.legendVals[keys[i]];
+    if (el) el.parentElement.classList.toggle('lg-off', !vis);
+  });
 }
 
 function destroyInstance(inst) {
@@ -1920,7 +1967,8 @@ function openIndModal(id) {
   const meta = indModalMeta(inst);
   curIndEdit = id;
   document.getElementById('ind-modal-title').textContent = meta.title;
-  document.getElementById('ind-fields').innerHTML = meta.fields.map(f => `
+  document.getElementById('ind-fields').innerHTML = meta.fields.map(f => {
+    return `
     <div class="field">
       <div class="field-label"><span>${f.label}</span><span class="muted">${f.min} ~ ${fieldMax(f)}</span></div>
       <div class="input-box">
@@ -1930,11 +1978,12 @@ function openIndModal(id) {
           <button type="button" class="step-btn" data-dir="-1" data-target="ind-f-${f.key}" tabindex="-1" title="减少">▼</button>
         </span>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   document.getElementById('ind-style-wrap').innerHTML = indStyleUI(inst);
   indTabTo('params');   // 每次打开默认回参数页签
   indModal.classList.add('show');
-  document.querySelector('#ind-fields input')?.focus();
+  document.querySelector('#ind-fields input[type=number]')?.focus();   // 跳过显隐勾选框，聚焦首个参数输入框
 }
 /* 参数 ± 步进：点击按 step 增减对应输入框值，自动钳位到 min~max（免每次手输）；
    格式化与确认采集一致（step<1 保留 1 位小数，否则取整） */
@@ -1963,6 +2012,18 @@ document.addEventListener('click', e => {
   const btn = e.target.closest('.gear-btn');
   if (btn && btn.dataset.indId) openIndModal(btn.dataset.indId);
 });
+/* 图例行首显隐勾选框：即时生效 + 布局持久化（不弹窗；TV 眼睛图标等价） */
+document.addEventListener('change', e => {
+  const chk = e.target.closest('.ind-vis-chk');
+  if (!chk || !chk.dataset.indId) return;
+  const inst = instById(chk.dataset.indId);
+  if (!inst) return;
+  inst.off = !chk.checked;
+  const ref = layoutRef(inst);
+  if (ref) ref.off = inst.off;
+  applyInstVisibility(inst);
+  saveLayout();
+});
 document.getElementById('ind-cancel').addEventListener('click', () => indModal.classList.remove('show'));
 document.getElementById('ind-close').addEventListener('click', () => indModal.classList.remove('show'));
 /* 遮罩关闭：仅当按下点也在遮罩上才关——输入框内选取文本拖出弹窗外松开时 click 目标会落在遮罩，避免误关 */
@@ -1989,15 +2050,19 @@ document.getElementById('ind-ok').addEventListener('click', () => {
     return;   // 快线必须小于慢线
   }
   const styleUI = collectIndStyles(inst);
+  /* 逐线/柱显隐采集：样式页每行行首勾选框，取消勾选的字段索引存入 fieldHidden（会话内有效） */
+  const hiddenFields = [...document.querySelectorAll('#ind-style-ui .ind-fvis-chk')].filter(c => !c.checked).map(c => +c.dataset.si);
   const ref = layoutRef(inst);
   const sameParams = ref && JSON.stringify(ref.params) === JSON.stringify(next);
   /* 回写 indLayout 同源条目；仅样式变化时就地应用不重建（避免后端指标重拉与窗格高度动画重跑） */
-  if (ref) { ref.params = next; ref.styleUI = styleUI; }
+  if (ref) { ref.params = next; ref.styleUI = styleUI; ref.fieldHidden = hiddenFields.length ? hiddenFields : null; }
   if (sameParams) {
     applyInstStyles(inst, styleUI);
     inst.params = { ...next };
+    inst.fieldHidden = hiddenFields;
+    applyInstVisibility(inst);   // 显隐变化随样式就地生效（不重建）
   } else {
-    if (!ref) { inst.params = { ...next }; inst.styleUI = styleUI; }
+    if (!ref) { inst.params = { ...next }; inst.styleUI = styleUI; inst.fieldHidden = hiddenFields; }
     rebuildIndicators();
   }
   indModal.classList.remove('show');

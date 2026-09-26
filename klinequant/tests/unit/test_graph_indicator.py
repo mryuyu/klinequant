@@ -157,6 +157,21 @@ def test_step_style_in_custom_indicator_meta():
     assert style[1].get("step") is True   # E_1X（ema）阶梯线
 
 
+def test_custom_indicator_fields_order_and_style_alignment():
+    """def 式指标 fields 取返回 dict 插入序、style 按位置对齐（v9.57 错位修复回归锁）；
+    参数级显隐契约（param_fields）已废弃（v9.63），display_meta 不再下发该键"""
+    import custom_indicators  # noqa: F401
+
+    reg = get_registry()
+    cycle_meta = reg.create("MR_Y_CYCLE", None).display_meta
+    # fields = def 返回 dict 插入序；style 颜色按其位置对齐（顺序错位会致颜色旋转错配）
+    assert cycle_meta["fields"] == ["K_1X", "D_1X", "K_16X", "D_16X", "K_32X", "D_32X",
+                                    "K_64X", "D_64X", "K_256X", "D_256X", "K_1024X", "D_1024X"]
+    assert cycle_meta["style"][4]["color"] == "#d8a6d9"   # 32x K 色落在 32x 字段位
+    assert cycle_meta["style"][10]["color"] == "#e01b7a"   # 1024x K 色不被旋转错配
+    assert "param_fields" not in cycle_meta   # 参数级显隐契约已废弃，不再下发
+
+
 def test_price_lines_contract_validation():
     """price_lines 声明校验：price 必填数值；color/line_style 可选校验；未声明返回 None"""
     from core.indicator_engine.graph.dsl import _validate_price_lines
@@ -250,6 +265,24 @@ def test_snapshot_replay_idempotent():
     next_row = {**extra, "timestamp": extra["timestamp"] + 60_000,
                 "close": extra["close"] * 1.005}
     assert ind.update_bar(next_row, True) is not None
+
+
+def test_degraded_partial_series_when_source_shallow():
+    """降级场景（源深度 < 全局预热）：逐字段部分输出——递推型字段冷启动即有值、
+    窗口型字段未满足出 null、序列不整体清空（周线 MR_Y_MAIN 消失修复 v9.60）；正常场景 trim 不变"""
+    import custom_indicators  # noqa: F401
+
+    engine = IndicatorEngine()
+    df = _gen_df(200)   # MR_Y_MAIN 全局预热 764 > 200 → 降级
+    ind = engine.ensure_indicator("MR_Y_MAIN", {}, "BTCUSDT", "binance", "1w")
+    engine.warmup("BTCUSDT", "binance", "1w", df)
+    assert not ind.is_warmed_up   # 降级标记保持
+    series = engine.get_series("MR_Y_MAIN", {}, "BTCUSDT", "binance", "1w")
+    assert len(series) == 200   # 不整体清空，逐字段透传
+    assert series[0]["values"]["E_1X"] is not None   # ema 冷启动即有值
+    assert series[0]["values"]["M_1X"] is None   # sma(3) 前两根窗口未满足
+    assert series[-1]["values"]["M_1X"] is not None   # 短周期线尾段可用
+    assert series[-1]["values"]["M_256X"] is None   # sma(764) 深度不足恒 null
 
 
 # ─── 引擎集成：warmup + update_kline → IndicatorValue ───

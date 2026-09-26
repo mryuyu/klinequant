@@ -15,6 +15,8 @@
       契约只收 #RRGGBB，取实色
     - hline 的 linewidth 契约不支持，丢弃；线型保留（85/18 虚线，其余实线）
     - Pine 原版 32x 组标题与 1x 重复（%K/%D），字段统一命名 K_32X/D_32X
+    - 字段输出顺序与 style 位置对齐（1x→16x→32x→64x→256x→1024x）；
+      fields 取 def 返回 dict 插入序（dsl.py），顺序错位会致颜色映射旋转错配
 """
 from core.indicator_engine.graph import (
     ema,
@@ -68,16 +70,19 @@ def mr_y_cycle(high, low, close, n1=1, n2=1, n3=1,
     k = ema(_stoch(close, high, low, n1 * bet_1x), n2 * bet_1x * 2)
     out["K_1X"] = k
     out["D_1X"] = ema(k, n3 * bet_1x)
-    # 16x / 64x / 256x / 1024x：周期 = n × bet
-    for bet, tag in ((bet_16x, "16X"), (bet_64x, "64X"),
-                     (bet_256x, "256X"), (bet_1024x, "1024X")):
-        k = ema(_stoch(close, high, low, n1 * bet), n2 * bet)
-        out[f"K_{tag}"] = k
-        out[f"D_{tag}"] = ema(k, n3 * bet)
-    # 32x：周期直接用 bet_32x（原版不乘 n）
+    # 16x：周期 = n × bet
+    k = ema(_stoch(close, high, low, n1 * bet_16x), n2 * bet_16x)
+    out["K_16X"] = k
+    out["D_16X"] = ema(k, n3 * bet_16x)
+    # 32x：周期直接用 bet_32x（原版不乘 n）；输出须插在 16x 与 64x 之间对齐 style
     k = ema(_stoch(close, high, low, bet_32x), bet_32x)
     out["K_32X"] = k
     out["D_32X"] = ema(k, bet_32x)
+    # 64x / 256x / 1024x：周期 = n × bet
+    for bet, tag in ((bet_64x, "64X"), (bet_256x, "256X"), (bet_1024x, "1024X")):
+        k = ema(_stoch(close, high, low, n1 * bet), n2 * bet)
+        out[f"K_{tag}"] = k
+        out[f"D_{tag}"] = ema(k, n3 * bet)
     return out
 
 

@@ -353,6 +353,9 @@ class GraphIndicator(IndicatorBase):
     def supports_incremental(self) -> bool:
         return True
 
+    # 降级场景（源深度 < 全局预热）支持逐字段部分输出（update_bar partial=True）
+    supports_partial = True
+
     @property
     def display_meta(self) -> Dict[str, Any]:
         return self._gdef.display_meta
@@ -374,7 +377,7 @@ class GraphIndicator(IndicatorBase):
         self._reset_runtime()
 
     def update_bar(
-        self, bar: Dict[str, Any], is_closed: bool
+        self, bar: Dict[str, Any], is_closed: bool, partial: bool = False
     ) -> Optional[Dict[str, Any]]:
         ts = bar["timestamp"]
         if self._last_ts is not None and ts < self._last_ts:
@@ -393,13 +396,16 @@ class GraphIndicator(IndicatorBase):
 
         if self._count >= self.min_periods:
             self._warmed_up = True
-        if not self._warmed_up:
-            return None
-        if any(v is None for v in values.values()):
-            return None  # 结构性预热未完成（或除零等奇异点）：不输出失真数据
-
-        out = {k: float(v) for k, v in values.items()}
-        self._last_values = out
+        if not partial:
+            if not self._warmed_up:
+                return None
+            if any(v is None for v in values.values()):
+                return None  # 结构性预热未完成（或除零等奇异点）：不输出失真数据
+        # partial（降级场景：源深度不足全局预热）：逐字段透传 null，
+        # 窗口型原语未满足出 null、递推型出冷启动值——与 TV 逐线自满足起点绘制同观感
+        out = {k: (None if v is None else float(v)) for k, v in values.items()}
+        if all(v is not None for v in out.values()):
+            self._last_values = out
         return out
 
 
