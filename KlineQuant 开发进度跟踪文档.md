@@ -1,8 +1,8 @@
 # KlineQuant 开发进度跟踪文档
 
-> **版本**：v9.64
+> **版本**：v9.67
 > **创建日期**：2026-07-29
-> **最后更新**：2026-09-27
+> **最后更新**：2026-10-02
 > **状态标记**：⬜ 未开始 / 🔄 进行中 / ✅ 已完成 / ❌ 失败 / ⏸️ 暂停  
 > **测试标记**：🧪 待测试 / ✅ 测试通过 / ❌ 测试失败  
 > **交付原则**：每个模块必须单元测试通过后方可交付
@@ -195,7 +195,7 @@
 | IND-009 | 指标注册表（registry.py） | P0 | ✅ | ✅ | IND-001~007 | — |
 | IND-010 | 增量计算引擎（新 K 线仅增量更新） | P0 | ✅ | ✅ | IND-009 | — |
 | IND-011 | 多周期指标独立计算 | P0 | ✅ | ✅ | IND-010 | — |
-| IND-012 | 指标预热（加载历史数据初始化） | P0 | ✅ | ✅ | IND-010,R-001 | — |
+| IND-012 | 指标预热（加载历史数据初始化） | P0 | ✅ | ✅ | IND-010,R-001 | 2026-10-02 性能修正：`ensure_warmed` 曾按订阅逐个 REST 各触发 `engine.warmup` 全量重放所有已注册指标（M 请求×M 指标=O(M²) 逐根重放），改为 `warmup(only_key=...)` 定向预热降为 O(M)；前端加 `indReady` 门控消除切品种/周期“只显示最新一根”过渡态。首屏明显提速（TV 式冷启动进一步秒开列为 IND-111 备选） |
 | IND-013 | IndicatorEngine 主循环 | P0 | ✅ | ✅ | IND-010,T-002 | — |
 | SIG-001 | 规则引擎基类（crossover/threshold/comparison） | P0 | ✅ | ✅ | P-005,IND-009 | — |
 | SIG-002 | 组合条件（AND/OR/NOT） | P0 | ✅ | ✅ | SIG-001 | — |
@@ -216,6 +216,7 @@
 | IND-T-006 | 增量计算：全量 vs 增量结果一致性 | ✅ |
 | IND-T-007 | 指标预热：MA(200) 需 ≥ 200 根 K 线 | ✅ |
 | IND-T-008 | polars 性能：10000 根 K 线 MA 计算 < 100ms | ✅ |
+| IND-T-009 | 定向预热：`warmup(only_key=...)` 仅重放目标指标、其余序列不受影响（O(M²)→O(M) 回归锁） | ✅ |
 
 **SIG 模块单元测试清单：**
 
@@ -576,3 +577,6 @@
 | 2026-09-27 | v9.63 | **显隐粒度重构：参数级→逐线/柱级（用户澄清根本语义）**（用户：“真正的参数设置页勾选框应该具体到哪条线/柱，而不是参数，参数只涉及指标计算”）：**语义定调**——显隐维度 = 具体输出线/柱，参数只是计算输入、绝不作显隐维度；此前 v9.55~v9.62 的“参数级勾选框 + paramFields 参数→驱动线映射”方案整体废弃（根本缺陷：把计算维度误当显隐维度，导致 MACD_MULTI 全驱参数 s/p 取消会隐整个指标）。**重构（纯前端 lc-live.html）**：①勾选框从弹窗「参数」页迁至「样式」页每条线/柱行首（.ind-fvis-chk，data-si=字段索引，普通线与 MACD 柱四槽行均适用）；②状态 inst.paramHidden（参数 key 数组）→ inst.fieldHidden（字段索引数组），仅会话内有效（重载丢弃、切周期/重建携带，同 v9.59 语义）；③ fieldHidden(inst,i)=inst.fieldHidden.includes(i)，删除 paramFieldsOf；④ applyInstVisibility 不变（已逐字段调用 fieldHidden）；⑤确认采集改从 #ind-style-ui .ind-fvis-chk 读取；⑥移除 IND_CATALOG 内置指标与 customCatalog 的全部 paramFields 声明及误导注释。前端 paramFields 引用归零，node 内联脚本语法校验通过。**后端惰性元数据**：display_meta.param_fields 及 5 个 custom 指标 @pyindicator(param_fields=) 声明现已无前端消费方，尚未清理（移除需改 dsl.py _validate_param_fields + 装饰器 + test_graph_indicator.py 断言，属独立后端契约清理，待用户决定）。待用户人工验证（样式页每条线/柱行首有勾选框；取消任一条→仅该条隐、其余不受影响；MACD_MULTI 取消任一 DIF/DEA/柱只隐对应那条；重勾恢复；刷新后默认全显；行首整指标勾选不变）。未提交 git |
 | 2026-09-27 | v9.64 | **后端清理 param_fields 契约（v9.63 显隐重构的配套收尾）**：v9.63 将显隐粒度改为逐线/柱后，后端 param_fields（参数→驱动字段索引映射）已无任何前端消费方，成为惰性元数据，用户确认彻底清理。**链路定位**：param_fields 仅服务于已废弃的“参数级显隐勾选框”，与指标计算（build_graph/propagate）、fields/style/min_periods 推导、预热、降级部分输出、WS 推送全解耦，删除零计算影响。**删除面**：① dsl.py——删 _validate_param_fields 函数及契约注释、GraphDef.__init__ 形参与 self._param_fields_raw、试构图后的校验调用、display_meta 的 param_fields 键、pyindicator 装饰器形参/docstring/GraphDef 构造透传；② 5 个 custom 指标（mr_y_main/mr_y_cycle/macd_multi/trix/dema）删装饰器 param_fields={...} 声明及注释（mr_y_cycle docstring “style/param_fields 位置对齐”改为仅 style）；③ test_graph_indicator.py——删 test_param_fields_contract_validation 整个函数，把 test_param_fields_in_custom_indicator_meta 改造为 test_custom_indicator_fields_order_and_style_alignment（**保留** MR_Y_CYCLE fields 名序 + style[4]/style[10] 颜色回归锁，即 v9.57 dict 插入序错位修复锁；新增 “param_fields 不在 display_meta” 守卫）。ruff --select F 我改动文件全通过（无新增未用导入/变量；dsl.py 剩 43 项均为既有 UP006/UP045/UP035/E501 风格警告，非本次引入）。全量 tests/unit **677 passed** 零回归（较 v9.60 的 678 少 1 为删除的 test_param_fields_contract_validation）。部署：后端契约变更需**重启 gateway** 使其不再下发 param_fields（前端 v9.63 已忽略该键，不重启也不影响功能）。未提交 git |
 | 2026-09-27 | 推送记录 | v9.54~v9.64 批量提交并推送（commit cbea3ab，5016a27..cbea3ab main -> main，6 文件 +167/-42）：指标两级显隐重构（整指标 .ind-vis-chk 持久化 + 逐线/柱 .ind-fvis-chk 会话内有效；废弃 v9.55~v9.62 参数级 paramFields 方案，显隐粒度=具体线/柱、参数只涉及计算）+ MR_Y_CYCLE 字段序对齐 style 修颜色旋转错配（v9.57）+ StepLinePrimitive setVisible 修阶梯线不随 series.visible 隐藏（v9.58）+ 降级场景逐字段部分输出修周线指标整体消失（v9.60）+ 后端彻底清理 param_fields 契约（v9.64）；后端全量单测 677 passed 零回归，前端 node 语法校验通过；**版本标签：已在 HEAD（866dbcc）打附注标签 v2.2.0 并推送 origin**（覆盖 v9.40~v9.64；v9.40~v9.53（5016a27）当时漏打 tag，一并纳入 v2.2.0） |
+| 2026-10-02 | v9.65 | **首屏/切品种周期加载性能修正（O(M²)→O(M) + 前端过渡态门控）**（用户报：刚启动或切新品种/周期时所有指标只显示最新一根、要等很久才铺满）：**根因**——后端 ensure_warmed 按订阅逐个 REST 各触发 engine.warmup 全量重放所有已注册指标（M 请求 × M 指标 = O(M²) 逐根 Python 重放，自定义 graph 指标 update_bar 为耗时主因）；前端 load() 同步置 initialLoaded=true，致 WS 增量在历史回齐前注入最新一根（“只显示最新一根”过渡态）。**修复**：① engine.warmup / _warmup_incremental 增 only_key 形参，ensure_warmed 传 only_key=ind_key(name,params) 只定向重放目标指标，降为 O(M)；② 前端新增 indReady 门控——renderIndData 批量 setData 全就绪前置 false，applyIndPush 在 !initialLoaded||!indReady 时丢弃增量，消除过渡态。新增回归 test_warmup_only_key_targets_single_indicator（only_key 只预热 MA、RSI 序列保持空）。全量 679 passed 零回归。首屏明显提速（TV 式冷启动进一步秒开列为 IND-111 备选，暂不实施）。部署：需重启 gateway + 普通刷新。未提交 git |
+| 2026-10-02 | v9.66 | **A股浅源指标只画尾段修复（force_partial 降级）**（用户报：换其他品种都没问题、只有股票上出现；002069 1h MR_Y_MAIN/MR_Y_CYCLE 只画最右一小段）：**实证**——ths 60m 源深度仅 808 根，MR_Y_MAIN min_periods=764，808 仅略大于 764；v9.60 降级 partial 契约触发条件仅 len(df)<min_periods，此场景 len(df)=808≥764 不触发 partial，非 partial 门控吃掉几乎整个显示窗口，仅剩 808−764+1=45 根尾段（MACD_MULTI min_periods 小故 808 根全画，对比明显）。蜡烛中段“空洞”经间隔分布核验为 A股非交易时段正常留白（隔夜/周末/节假日），非数据错误。**修复**：engine.warmup / _warmup_incremental 增 force_partial 形参，partial 条件改为 (len(df)<min_periods or force_partial) and supports_partial；ensure_warmed 传 force_partial=len(bars)<target（源返回深度<预热目标即强制逐字段从第 0 根绘制）。进程内验证 45→808 根铺满。新增回归 test_force_partial_when_depth_barely_above_min_periods（含 off-by-one 锁 n−764+1）。全量 679 passed。部署：需重启 gateway + 普通刷新。未提交 git |
+| 2026-10-02 | v9.67 | **「自动适配」恢复默认视图修复 + 首屏K线数量可配置（纯前端）**（用户明确：自动适配=手动缩放/平移后一键恢复原始状态；并要求右键菜单可设首屏K线数量、自动适配按该值恢复）：**修复**——① 自动适配原为裸 fitContent()，不尊重 curRightOffset（fit 完最新 K 线贴右缘、留白丢失），改为 setVisibleLogicalRange 确定性重建“显示 N 根 + 右侧留白 + 最新右对齐”；② 首屏 fit 同口径改造（替代 isFirst 分支裸 fitContent，使首屏与自动适配视图一致）。**新增**——常量 PAGE_SIZE(1000) 改为可调持久化变量 firstScreenBars（右键菜单「首屏K线」数字框 100~30000，localStorage firstScreen 字段，改值即时 firstFit=true+load() 重载生效）；load() 首屏 need 与自动适配 show 均取 firstScreenBars（不足则全部已加载）；右键菜单底部定位钳位 130→170px 防新增行裁切。前端逻辑/CSS 自查通过（setVisibleLogicalRange 与既有切换分支同款 API，变量作用域核对无误）。待用户人工验证。未提交 git |

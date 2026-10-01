@@ -381,7 +381,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
         <button class="tool-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20L20 4"/></svg>画线</button>
         <button class="tool-btn" id="ind-btn" title="添加指标"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>指标</button>
         <div style="flex:1"></div>
-        <button class="tool-btn" id="fit-btn" title="右键图表可设置 K 线数量 / 右侧留白">自动适配</button>
+        <button class="tool-btn" id="fit-btn" title="恢复默认视图：铺满已加载 K 线 + 右侧留白（手动缩放/平移后一键还原）">自动适配</button>
       </div>
 
       <!-- 自定义周期输入弹层（点击「自定」开关） -->
@@ -535,6 +535,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 
 <div class="ctx-menu" id="ctx-menu">
   <div class="ctx-title">图表设置</div>
+  <div class="ctx-row"><span>首屏K线</span><input id="ctx-ps" class="ctx-input" type="number" min="100" max="30000" step="100"></div>
   <div class="ctx-row"><span>右侧留白</span><input id="ctx-ro" class="ctx-input" type="number" min="0" max="100"></div>
   <div class="ctx-row"><span>成交量</span><input id="ctx-vol" type="checkbox" checked></div>
   <div class="ctx-row"><span>涨跌配色</span><select id="ctx-scheme" class="ctx-input"><option value="gd">绿涨红跌</option><option value="cn">红涨绿跌</option></select></div>
@@ -553,7 +554,7 @@ let curSymbol = 'BTCUSDT';
 let curTf = '15m';
 let curExchange = 'binance';    // 当前市场源（binance/ig，后端插件注册表驱动）
 const sourcesMeta = {};         // exchange -> 插件元数据（label/周期支持/默认品种/成交量）
-const PAGE_SIZE = 1000;         // 首屏首拉根数（保快速首绘）
+let firstScreenBars = 1000;     // 首屏 K 线数量（右键菜单可调，默认 1000，localStorage 持久化）
 const PRELOAD_PAGE_SIZE = 5000; // 左滑按需加载页大小（后端已支持大页；源插件内部分页）
 let curRightOffset = 20;        // 图表右侧预留空 K 线数：可调，默认 20
 let showVol = true;             // 成交量显示开关（右键菜单切换，持久化）
@@ -634,6 +635,7 @@ if (savedLayout) {
   if (savedLayout.symW) root.style.setProperty('--sym-w', savedLayout.symW);
   if (savedLayout.posH) root.style.setProperty('--pos-h', savedLayout.posH);
   if (typeof savedLayout.rightOffset === 'number') curRightOffset = savedLayout.rightOffset;
+  if (typeof savedLayout.firstScreen === 'number') firstScreenBars = Math.min(30000, Math.max(100, savedLayout.firstScreen));
   if (savedLayout.tf && tfValid(savedLayout.tf)) curTf = savedLayout.tf;
   if (savedLayout.symbol) curSymbol = savedLayout.symbol;
   if (savedLayout.exchange) curExchange = savedLayout.exchange;
@@ -651,6 +653,7 @@ function saveLayout() {
       posCollapsed: document.getElementById('pos-bar')?.classList.contains('collapsed') || false,
       tradeHidden: document.querySelector('.main')?.classList.contains('no-trade') || false,
       rightOffset: curRightOffset,
+      firstScreen: firstScreenBars,
       tf: curTf,
       symbol: curSymbol,
       exchange: curExchange,
@@ -797,7 +800,7 @@ async function fetchIndSeries(indicator, params, gen) {
 }
 /* WS 指标增量推送：按 (指标名+参数组合) 匹配实例订阅，更新 series 末点与 lastVals 缓存（图例随十字线 seriesData 自动跟随） */
 function applyIndPush(msg) {
-  if (!initialLoaded) return;
+  if (!initialLoaded || !indReady) return;   // 历史序列批量渲染就绪前忽略增量，防切品种/周期只显示最新一根
   const parts = msg.topic.split('.');
   if (parts[1] !== curExchange || parts[2] !== curSymbol || parts[3] !== curTf) return;
   for (const item of msg.data || []) {
@@ -1608,6 +1611,8 @@ setInterval(layoutPaneLegends, 300);
 /* ═══ 数据装载（REST 历史 K 线） ═══ */
 let klines = [];
 let initialLoaded = false;   // 首屏数据是否就绪（拦截冷启动竞态下的 WS 推送）
+let indReady = false;        // 指标历史批量渲染是否就绪；未就绪时忽略 WS 指标增量，
+                             // 避免切品种/周期期间历史序列未回齐时只显示最新一根（“动画计算”观感）
 let sbInfo = '';             // 状态栏基础信息（装载完成后更新，WS 延迟由定时器每秒拼接刷新）
 /* 全量渲染单个实例：系列全部取自后端历史序列（前端零计算）；reset=true（切品种/周期）立即清空防旧周期残留，
    并返回 apply 闭包由调用方等全部就绪后批量显示（避免逐条跳入的“动画计算”观感） */
@@ -1669,7 +1674,9 @@ function renderIndData(reset = false) {
     const pr = renderInstance(inst, reset);
     if (pr) applies.push(pr);
   }
-  if (applies.length) Promise.all(applies).then(fns => fns.forEach(fn => fn && fn()));
+  if (!applies.length) { indReady = true; return; }   // 无后端订阅（如仅本地占位）直接就绪
+  indReady = false;   // 历史拉取期间暂存 WS 增量，待全部 setData 完成后一次放行
+  Promise.all(applies).then(fns => { fns.forEach(fn => fn && fn()); indReady = true; });
 }
 function renderChart(reset = false) {
   candleSeries.setData(klines.map(k => ({ time: k.time, open: k.open, high: k.high, low: k.low, close: k.close })));
@@ -1730,7 +1737,7 @@ async function load() {
     /* 数据加载约定：按屏按需加载——首屏渲染后即完成，不后台预载更深历史（防切周期反复全量重绘卡顿）；
        更早历史由左滑按需续载（loadMore），直至数据源尽头 */
     const gen = loadGen;
-    const need = PAGE_SIZE;
+    const need = firstScreenBars;
     /* 瞬时失败自动重试：市场源会话劣化/终端掉线时后端有 30s 冷却自愈重建，
        前端重试两次覆盖恢复窗口，避免页面停在 ✕ 需手动刷新（2026-09-01 MT5 掉线实证） */
     let firstPage = null;
@@ -1764,7 +1771,11 @@ async function load() {
     renderChart(true);
     if (!panesSized) { panesSized = true; setTimeout(applyPaneHeights, 200); }   // 首屏就绪后应用副图高度（等 autoSize 布局稳定）
     const isFirst = firstFit;
-    if (isFirst) { firstFit = false; chart.timeScale().fitContent(); }   // 首屏铺满；此后切换保持原比例 + 最新 K 线右对齐
+    if (isFirst) {   // 首屏：铺满首屏K线数量 + 右侧留白（与「自动适配」同一口径）；此后切换保持原比例 + 最新 K 线右对齐
+      firstFit = false;
+      const to = klines.length - 1 + curRightOffset;
+      chart.timeScale().setVisibleLogicalRange({ from: klines.length - Math.min(firstScreenBars, klines.length) - 0.5, to });
+    }
     initialLoaded = true;   // 首屏就绪，开始接收 WS 增量
     if (!isFirst && span) {   // 非首屏：显示根数不变（即缩放比例不变），最新 K 线对齐右侧留白
       const to = klines.length - 1 + curRightOffset;
@@ -1907,17 +1918,27 @@ tfCustomInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyCus
 document.addEventListener('pointerdown', e => {
   if (!tfCustomPop.contains(e.target) && e.target.id !== 'tf-custom-btn') tfCustomPop.style.display = 'none';
 }, true);
-document.getElementById('fit-btn').addEventListener('click', () => chart.timeScale().fitContent());
+/* 自动适配 = 一键恢复原始视图：手动缩放/平移后回到“显示首屏K线数量根 + 右侧留白 + 最新 K 线右对齐”。
+   显示根数按用户在右键菜单设置的首屏K线数量（firstScreenBars），不足则显示全部已加载；
+   不用裸 fitContent()（它不尊重 curRightOffset/自定义根数），改用 setVisibleLogicalRange 确定性重建默认视窗 */
+document.getElementById('fit-btn').addEventListener('click', () => {
+  if (!klines.length) return;
+  const show = Math.min(firstScreenBars, klines.length);
+  const to = klines.length - 1 + curRightOffset;
+  chart.timeScale().setVisibleLogicalRange({ from: klines.length - show - 0.5, to });
+});
 /* 右侧留白等：图表区右键菜单 */
 const ctxMenu = document.getElementById('ctx-menu');
 const ctxRo = document.getElementById('ctx-ro');
+const ctxPs = document.getElementById('ctx-ps');
 document.getElementById('chart').addEventListener('contextmenu', e => {
   e.preventDefault();
   ctxRo.value = curRightOffset;
+  ctxPs.value = firstScreenBars;
   document.getElementById('ctx-vol').checked = showVol;
   document.getElementById('ctx-scheme').value = colorScheme;
   ctxMenu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
-  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 130) + 'px';
+  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 170) + 'px';
   ctxMenu.classList.add('show');
 });
 document.addEventListener('click', e => { if (!ctxMenu.contains(e.target)) ctxMenu.classList.remove('show'); });
@@ -1936,6 +1957,16 @@ ctxRo.addEventListener('change', () => {
   curRightOffset = v;
   chart.timeScale().applyOptions({ rightOffset: v });
   saveLayout();
+});
+/* 首屏 K 线数量：钳位 100~30000，持久化并即时重载当前品种/周期生效；「自动适配」按此值恢复显示根数 */
+ctxPs.addEventListener('change', () => {
+  const v = Math.min(30000, Math.max(100, parseInt(ctxPs.value) || 1000));
+  ctxPs.value = v;
+  if (v === firstScreenBars) return;
+  firstScreenBars = v;
+  saveLayout();
+  firstFit = true;   // 变更首屏根数 = 重置为新的初始视图（而非沿用旧缩放比例）
+  load();
 });
 
 /* ═══ 指标参数调整弹窗（齿轮图标 → 参数表单 → 移除/取消/确认，基于实例 id） ═══ */

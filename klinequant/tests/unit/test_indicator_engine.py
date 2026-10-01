@@ -334,6 +334,22 @@ class TestWarmup:
         results = engine.warmup("BTCUSDT", "binance", "1m", df)
         assert "MA" not in results
 
+    def test_warmup_only_key_targets_single_indicator(self):
+        """定向预热：only_key 仅重放目标指标，其余已注册指标不受影响（消除 O(M²) 重放）"""
+        engine = IndicatorEngine()
+        engine.add_indicator(MA(params={"period": 5}), "BTCUSDT", "binance", "1m")
+        engine.add_indicator(RSI(params={"period": 14}), "BTCUSDT", "binance", "1m")
+
+        closes = [100.0 + i * 0.5 for i in range(20)]
+        df = make_kline_df(closes)
+        only = engine.ind_key("MA", {"period": 5})
+        results = engine.warmup("BTCUSDT", "binance", "1m", df, only_key=only)
+
+        # 仅目标指标被预热，RSI 未重放（序列仍空）
+        assert "MA" in results and "RSI" not in results
+        assert engine.get_series("MA", {"period": 5}, "BTCUSDT", "binance", "1m")
+        assert engine.get_series("RSI", {"period": 14}, "BTCUSDT", "binance", "1m") == []
+
 
 # ─── IND-T-008: polars 性能 ───
 

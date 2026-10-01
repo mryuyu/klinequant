@@ -162,6 +162,8 @@ class IndicatorEngine:
         exchange: str,
         timeframe: str,
         historical_df: pl.DataFrame,
+        only_key: Optional[str] = None,
+        force_partial: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         """使用历史数据预热指标
 
@@ -170,6 +172,14 @@ class IndicatorEngine:
             exchange: 交易所
             timeframe: 周期
             historical_df: 历史 K 线 DataFrame
+            only_key: 仅预热该计算契约 key=(指标名|参数) 的实例；None 表示预热全部。
+                网关按订阅逐个 REST 拉历史时传此参数，避免每次请求都重放全部
+                已注册指标（否则 M 个请求 × M 个指标 = O(M²) 全量重放，切换
+                新品种/周期时预热极慢）。
+            force_partial: 源深度不足（返回根数 < 请求 target）时强制逐字段部分输出。
+                浅源（如 A 股 60m 仅数百根）若仍走非 partial 门控，预热段会吃掉几乎
+                全部显示窗口（如 808 根 - min_periods 764 = 仅剩 44 根可画），
+                指标只显示最新一小段；强制 partial 后从第 0 根逐字段绘制（TV 观感）。
 
         Returns:
             各指标最新值字典
@@ -183,9 +193,11 @@ class IndicatorEngine:
 
         results = {}
         for indicator in self._indicators.get(key, []):
+            if only_key is not None and self.ind_key(indicator.name, indicator.params) != only_key:
+                continue   # 定向预热：跳过非目标指标，不重复重放
             if indicator.supports_incremental:
                 # 增量指标：逐根重放建立递推状态，序列即预热后的有效值
-                values = self._warmup_incremental(key, indicator, historical_df)
+                values = self._warmup_incremental(key, indicator, historical_df, force_partial)
             else:
                 result_df = indicator.calculate(historical_df)
                 values = None
@@ -213,6 +225,7 @@ class IndicatorEngine:
         key: KlineKey,
         indicator: IndicatorBase,
         df: pl.DataFrame,
+        force_partial: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """增量指标预热：重置状态后逐根重放，同步建立有效值序列（剔除预热段）
 
@@ -222,7 +235,9 @@ class IndicatorEngine:
         indicator.reset()
         series: Deque[Tuple[int, Dict[str, Any]]] = deque(maxlen=self._max_cache_size)
         self._series[key][self.ind_key(indicator.name, indicator.params)] = series
-        partial = len(df) < indicator.min_periods and getattr(indicator, "supports_partial", False)
+        partial = (
+            len(df) < indicator.min_periods or force_partial
+        ) and getattr(indicator, "supports_partial", False)
         values: Optional[Dict[str, Any]] = None
         for row in df.iter_rows(named=True):
             values = indicator.update_bar(row, True, partial=partial) if partial else indicator.update_bar(row, True)

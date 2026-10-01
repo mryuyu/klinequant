@@ -89,7 +89,15 @@ async def ensure_warmed(
     if not bars:
         return indicator
 
-    engine.warmup(symbol, exchange, timeframe, _bars_to_df(bars))
+    # 源深度不足（返回根数 < 请求 target）→ 强制逐字段部分输出：浅源（A 股 60m 等）
+    # 若走非 partial 门控，预热段会吃掉几乎全部显示窗口，指标只显示最新一小段
+    force_partial = len(bars) < target
+    engine.warmup(
+        symbol, exchange, timeframe, _bars_to_df(bars),
+        only_key=engine.ind_key(name, params),   # 定向预热：仅重放本次请求的指标，
+        # 避免 M 个订阅请求 × M 个已注册指标 = O(M²) 全量重放（切品种/周期预热极慢）
+        force_partial=force_partial,
+    )
     return indicator
 
 

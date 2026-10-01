@@ -285,6 +285,33 @@ def test_degraded_partial_series_when_source_shallow():
     assert series[-1]["values"]["M_256X"] is None   # sma(764) 深度不足恒 null
 
 
+def test_force_partial_when_depth_barely_above_min_periods():
+    """浅源但深度略大于 min_periods（A 股 60m 实测 808 根 vs MR_Y_MAIN 764）：
+    非 partial 门控会被预热段吃掉几乎全部显示窗口（仅剩 44 根可画，指标只显示最新一小段）；
+    ensure_warmed 在返回深度 < 请求 target 时传 force_partial=True，逐字段从第 0 根绘制铺满全宽"""
+    import custom_indicators  # noqa: F401
+
+    n = 808
+    df = _gen_df(n)
+
+    # 不强制 partial（旧行为）：预热门控截断，可显示序列仅剩 n - min_periods 尾段
+    eng_old = IndicatorEngine()
+    eng_old.ensure_indicator("MR_Y_MAIN", {}, "002069", "ths", "1h")
+    eng_old.warmup("002069", "ths", "1h", df)
+    tail = eng_old.get_series("MR_Y_MAIN", {}, "002069", "ths", "1h")
+    assert len(tail) == n - 764 + 1   # 仅剩尾段（第 764 根起输出，BUG 复现基准）
+
+    # 强制 partial（修复后）：从第 0 根逐字段输出，铺满全宽
+    eng = IndicatorEngine()
+    ind = eng.ensure_indicator("MR_Y_MAIN", {}, "002069", "ths", "1h")
+    eng.warmup("002069", "ths", "1h", df, force_partial=True)
+    series = eng.get_series("MR_Y_MAIN", {}, "002069", "ths", "1h")
+    assert len(series) == n
+    assert series[0]["values"]["E_1X"] is not None   # 递推型冷启动即有值（TV 观感）
+    assert series[0]["values"]["M_256X"] is None     # 长窗口字段未满足出 null
+    assert ind.is_warmed_up   # 深度≥min_periods，预热标记仍成立（实时增量可用）
+
+
 # ─── 引擎集成：warmup + update_kline → IndicatorValue ───
 
 def test_engine_integration_graph_indicator():
