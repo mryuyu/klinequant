@@ -85,6 +85,16 @@ class MarketSourceManager:
         if cached and time.monotonic() - cached[0] < SYMBOLS_CACHE_TTL:
             return cached[1]
         rows = await source.list_symbols()
+        # 降级回退不写缓存：源重写了 list_symbols（有动态全量目录）但本次返回的却是
+        # default_symbols 归一化副本（如 ths 启动早期未连上/目录接口瞬时失败）；若缓存会
+        # 把降级目录锁满 TTL（30min），源就绪后仍拿不到真实目录。未重写 list_symbols 的源
+        # （如 IG 静态目录）其 default_symbols 即真实目录，照常缓存
+        if type(source).list_symbols is not MarketSource.list_symbols and rows == [
+            {"symbol": s["symbol"], "name": s.get("name", s["symbol"]),
+             "type": s.get("type", ""), "code": s.get("code", s["symbol"])}
+            for s in (source.default_symbols or [])
+        ]:
+            return rows
         self._symbols_cache[source.name] = (time.monotonic(), rows)
         return rows
 

@@ -22,6 +22,8 @@ class _FakeMt5:
         self.selected: list[str] = []
         self.range_calls: list[tuple] = []
         self.shutdown_calls = 0
+        self.available = True       # 模拟 Mt5Api.available（worker 子进程是否存活）
+        self.rates_none = False     # 置 True 时 copy_rates 返回 None（驱动级失败）
 
     def initialize(self, **kwargs):
         return self.ok
@@ -45,6 +47,8 @@ class _FakeMt5:
         return self.catalog
 
     def copy_rates_from_pos(self, symbol, timeframe, start_pos, count):
+        if self.rates_none:
+            return None
         return self.rows[-count:]
 
     def copy_rates_range(self, symbol, timeframe, date_from, date_to):
@@ -206,6 +210,28 @@ async def test_reconnect_on_connection_lost():
     drv.ok = True
     src._try_reconnect()
     assert src.available is True
+
+
+async def test_fetch_klines_active_reconnect_when_worker_dead():
+    """worker 子进程已死 + copy_rates 返回 None → 用户请求主动触发重连后重试（而非被动等后台）"""
+    drv = _FakeMt5(rows=[_row(1786000000, 1.15)])
+    drv.rates_none = True       # 驱动级失败：copy_rates 返回 None
+    drv.available = False       # worker 子进程已死
+    src = Mt5Source(driver=drv)
+    with pytest.raises(RuntimeError):
+        await src.fetch_klines("EURUSD", "1m", limit=10)
+    assert drv.shutdown_calls == 1   # 已触发 _try_reconnect（shutdown+initialize）
+
+
+async def test_fetch_klines_no_reconnect_when_worker_alive():
+    """worker 存活时的 None（个别品种无数据/非法品种）→ 不重启健康驱动，直接报错"""
+    drv = _FakeMt5(rows=[_row(1786000000, 1.15)])
+    drv.rates_none = True
+    drv.available = True        # worker 存活
+    src = Mt5Source(driver=drv)
+    with pytest.raises(RuntimeError):
+        await src.fetch_klines("EURUSD", "1m", limit=10)
+    assert drv.shutdown_calls == 0   # 未触发重连，避免殃及并发请求
 
 
 # ─── 全量品种目录：path 资产分类 + trade_mode 过滤 ───

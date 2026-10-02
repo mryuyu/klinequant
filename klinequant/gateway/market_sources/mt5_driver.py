@@ -162,7 +162,10 @@ class Mt5Api:
     """
 
     _CALL_TIMEOUT = 8.0
-    _RECONNECT_COOLDOWN = 30.0
+    # 重建冷却与前端 load() 的 ~8s 重试窗（2 次 4s 退避）对齐：旧值 30s 远超前窗，
+    # 掉线死窗内切品种必空且前端重试覆盖不到，只能被动等后台 stream_loop；缩至 8s 后
+    # 用户切品种/前端重试即可跨越冷却触发重建（子进程为本地拉起，8s 退避不足以耗尽终端资源）
+    _RECONNECT_COOLDOWN = 8.0
 
     def __init__(self) -> None:
         self._lock = threading.Lock()

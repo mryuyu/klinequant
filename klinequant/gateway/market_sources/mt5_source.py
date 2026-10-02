@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 
 POLL_INTERVAL = float(os.getenv("MT5_POLL_INTERVAL", "0.5"))
 TICKER_CACHE_TTL = 5.0
-RECONNECT_COOLDOWN = 30.0
+# 与驱动 _RECONNECT_COOLDOWN 及前端 ~8s 重试窗对齐（原 30s 致掉线死窗远超前端覆盖，
+# 切外汇品种持续报“数据源不可用”、需切走等够时间才恢复）；后台 stream_loop 重连节奏同步加快
+RECONNECT_COOLDOWN = 8.0
 
 # 品种目录：完全可交易模式常量 + path 顶层目录 → 资产类别
 _TRADE_MODE_FULL = _tf_const("SYMBOL_TRADE_MODE_FULL", 4)
@@ -186,17 +188,29 @@ class Mt5Source(MarketSource):
         if not tf_const:
             raise ValueError(f"MT5 unsupported timeframe: {timeframe}")
         sym = symbol.upper()
-        if end_time:
-            # 翻页加深：按 end_time（含）向前回溯 limit 根（窗口留 2 倍冗余防缺口）
-            dt_to = datetime.fromtimestamp(end_time / 1000, tz=timezone.utc)
-            dt_from = dt_to - timedelta(seconds=TF_SECONDS[timeframe] * limit * 2)
-            rows = await asyncio.to_thread(
-                self._klines_sync, sym, tf_const, timeframe, limit, dt_from, dt_to
-            )
-        else:
-            rows = await asyncio.to_thread(
+
+        async def _pull():
+            if end_time:
+                # 翻页加深：按 end_time（含）向前回溯 limit 根（窗口留 2 倍冗余防缺口）
+                dt_to = datetime.fromtimestamp(end_time / 1000, tz=timezone.utc)
+                dt_from = dt_to - timedelta(seconds=TF_SECONDS[timeframe] * limit * 2)
+                return await asyncio.to_thread(
+                    self._klines_sync, sym, tf_const, timeframe, limit, dt_from, dt_to
+                )
+            return await asyncio.to_thread(
                 self._klines_sync, sym, tf_const, timeframe, limit, None, None
             )
+
+        rows = await _pull()
+        if rows is None and not self._driver.available:
+            # rows is None 专指驱动级失败（非“该品种无数据”，后者返回 []）。仅当 worker 子进程
+            # 已死（掉线/调用超时被强杀→处于重建冷却）时，才由本次用户请求主动触发重连：
+            # _try_reconnect 会绕过驱动重建冷却立即拉起子进程（受源级 8s 冷却护栏），
+            # 让“切品种/前端重试”即时驱动源恢复，而非只能被动等后台 stream_loop。
+            # worker 仍存活时的 None 多为个别品种无数据/非法品种，不据此重启健康驱动
+            # （避免殃及并发请求），终端级断连交由后台 stream_loop 统一处理。
+            await asyncio.to_thread(self._try_reconnect)
+            rows = await _pull()
         if rows is None:
             raise RuntimeError(f"MT5 copy_rates failed for {sym}/{timeframe}")
         bars = [self._to_bar(r) for r in rows]
@@ -305,7 +319,7 @@ class Mt5Source(MarketSource):
                 # 源掉线后只能靠用户请求碰驱动冷却重建，页面报「未返回 K 线数据」久不自愈）；
                 # 重连含子进程拉起 + 8s poll，必须工作线程执行——同步直调曾把事件循环
                 # 堵死 10s（全线程栈实证），期间全部 HTTP/WS 停摆
-                logger.warning("MT5 source unavailable: terminal not connected, retrying every 30s")
+                logger.warning(f"MT5 source unavailable, retrying every {RECONNECT_COOLDOWN:.0f}s")
                 while not self.available:
                     await asyncio.to_thread(self._try_reconnect)
                     if not self.available:

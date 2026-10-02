@@ -1038,11 +1038,15 @@ function catOf(it) {
 }
 /* 构建单个实例的 series 与图例行；主图指标进 lg-main-items，副图指标独占一行；
    styleUI：用户自选的逐线颜色/线型（持久化于 indLayout[].styleUI，缺省走默认配色） */
-function buildInstance(it, styleUI) {
+function buildInstance(it, styleUI, opts = {}) {
   const id = nextIndId(it.type);
   const cat = catOf(it);
   const inst = { id, type: it.type, name: it.name, params: { ...it.params }, series: [], legendVals: {}, pane: 0, styleUI: styleUI || null,
     fieldHidden: Array.isArray(it.fieldHidden) ? it.fieldHidden : [], off: !!it.off };   // 显隐态：逐线/柱隐藏字段索引集 + 整指标 off
+  if (opts.baseColors) inst.baseColors = [...opts.baseColors];   // 单实例重建：继承原 MA 色，避免颜色漂移（见 indSeriesStyle consume 分支）
+  /* 副图窗格索引：原位重建（opts.pane）复用旧索引，避免新增空窗格/窗格错位；新建走 chart.panes().length 追加。
+     主图指标（ma/boll 及 custom main）恒为 pane 0，不经此路径 */
+  const paneOf = () => (opts.pane != null ? opts.pane : chart.panes().length);
   const parts = [];   // 图例片段 [{label, color}]
   if (it.type === 'ma') {
     const st1 = indSeriesStyle(inst, 0), st2 = indSeriesStyle(inst, 1);
@@ -1060,7 +1064,7 @@ function buildInstance(it, styleUI) {
     ];
     parts.push({ key: 'u', label: 'U', color: bc[0].color }, { key: 'm', label: 'M', color: bc[1].color }, { key: 'l', label: 'L', color: bc[2].color });
   } else if (it.type === 'macd') {
-    const pane = chart.panes().length;
+    const pane = paneOf();
     inst.pane = pane;
     const mc = [indSeriesStyle(inst, 1), indSeriesStyle(inst, 2)];
     inst.series = [
@@ -1071,7 +1075,7 @@ function buildInstance(it, styleUI) {
     const histLegendC = inst.styleUI?.[0]?.histColors?.[0] || '#787b86';   // 自定义柱色（取零轴上增大槽）同步图例，否则中性灰
     parts.push({ key: 'h', label: 'HIST', color: histLegendC }, { key: 'd', label: 'DIF', color: mc[0].color }, { key: 'e', label: 'DEA', color: mc[1].color });
   } else if (it.type === 'kd') {
-    const pane = chart.panes().length;
+    const pane = paneOf();
     inst.pane = pane;
     const kc = [indSeriesStyle(inst, 0), indSeriesStyle(inst, 1)];
     inst.series = [
@@ -1080,7 +1084,7 @@ function buildInstance(it, styleUI) {
     ];
     parts.push({ key: 'k', label: 'K', color: kc[0].color }, { key: 'd', label: 'D', color: kc[1].color });
   } else if (it.type === 'rsi') {
-    const pane = chart.panes().length;
+    const pane = paneOf();
     inst.pane = pane;
     const rc = indSeriesStyle(inst, 0);
     inst.series = [chart.addSeries(LineSeries, { color: rc.color, ...LINE_BASE, ...rc.opt }, pane)];
@@ -1089,7 +1093,7 @@ function buildInstance(it, styleUI) {
     /* IND-110：def 式指标通用渲染——每个输出字段一条线，主/副图由 display_meta.pane 决定 */
     inst.name = it.name;
     inst.fields = cat.fields;
-    inst.pane = cat.pane === 'main' ? 0 : chart.panes().length;
+    inst.pane = cat.pane === 'main' ? 0 : paneOf();
     cat.fields.forEach((f, i) => {
       const bs = backendFieldStyle(inst, i);
       if (bs?.plot === 'histogram') {
@@ -1127,14 +1131,17 @@ function buildInstance(it, styleUI) {
     row.className = 'legend-row';
     row.dataset.indId = id;
     row.innerHTML = rowHtml;
-    document.getElementById('lg-main-items').appendChild(row);
+    const host = document.getElementById('lg-main-items');
+    /* 单实例重建：图例行原位插回（保持纵向顺序），否则默认追加到末尾 */
+    opts.legendBefore && opts.legendBefore.parentNode === host ? host.insertBefore(row, opts.legendBefore) : host.appendChild(row);
     inst.legendEl = row;
   } else {
     const div = document.createElement('div');
     div.className = 'legend mono';
     div.dataset.indId = id;
     div.innerHTML = `<div class="legend-row" id="lg-row-${id}">${rowHtml}</div>`;
-    document.getElementById('ind-legends').appendChild(div);
+    const host = document.getElementById('ind-legends');
+    opts.legendBefore && opts.legendBefore.parentNode === host ? host.insertBefore(div, opts.legendBefore) : host.appendChild(div);
     inst.legendEl = div;
   }
   /* 副图固定参考线：默认源 = 内置目录 refLines / def 式后端声明，可被弹窗自选覆盖（持久化于 styleUI.refLines） */
@@ -1219,7 +1226,18 @@ function indSeriesStyle(inst, i, consume = true) {
   const s = inst.styleUI && inst.styleUI[i];
   let color;
   if (inst.type === 'ma' && !s?.color) {
-    color = MA_COLORS[(consume ? maColorIdx++ : maColorIdx) % MA_COLORS.length];
+    /* MA 默认色仅在构建期（consume=true）按全局色槽 maColorIdx 顺序分配，并缓存到实例 baseColors；
+       非构建期（弹窗回显 indStyleUI / 就地改样式 applyInstStyles，consume=false）必须读实例缓存的
+       实际分配色，绝不能再读已漂移的 maColorIdx——否则回显色错位，确认时 collectIndStyles 会把错位色
+       当作用户自选写入 styleUI，导致「只切显隐却让 MA 线变色并持久化（刷新仍在，须删除重加才恢复）」 */
+    if (consume) {
+      /* 单实例重建（改参）时实例已携带原 baseColors：直接复用已分配色且不推进全局 maColorIdx，
+         保证改参 MA 颜色不漂移、其余 MA 实例色序不受影响；无携带时按色槽顺序新分配 */
+      color = inst.baseColors?.[i] ?? MA_COLORS[maColorIdx++ % MA_COLORS.length];
+      (inst.baseColors ||= [])[i] = color;
+    } else {
+      color = inst.baseColors?.[i] ?? MA_COLORS[maColorIdx % MA_COLORS.length];
+    }
   } else {
     color = s?.color || indDefaultColor(inst, i);
   }
@@ -1388,7 +1406,7 @@ function applyInstStyles(inst, styleUI) {
       if (keys[i]) inst.legendVals[keys[i]].parentElement.style.color = (cols && cols[0]) || '#787b86';
       return;
     }
-    const st = indSeriesStyle(inst, i);
+    const st = indSeriesStyle(inst, i, false);   // 就地改样式作用于已构建实例：读缓存色（consume=false），不再漂移全局 maColorIdx
     const prim = inst.stepPrims?.[i];
     /* 阶梯线字段：series 保持透明，颜色/线型改到 primitive 上就地生效 */
     s.applyOptions({ color: prim ? 'transparent' : st.color, ...st.opt });
@@ -1455,6 +1473,39 @@ function rebuildIndicators() {
   if (panesSized && subPending.length) setTimeout(() => applyPaneHeights(), 50);
   if (klines.length) renderIndData();
   layoutPaneLegends();
+}
+
+/* 单实例重建（仅改参触发）：只销毁重建被改实例，其余实例 series/窗格/图例/色序全部不动。
+   相较 rebuildIndicators 全量链路——不重置 maColorIdx（改参 MA 继承原色）、不清空全部图例 DOM、
+   不重拉未改参实例的后端历史（后端对未改参组合本就复用预热序列，前端也不再重复请求），
+   仅被改实例重新拉取一次历史序列。entry = indLayout 同源条目（已回写新参数/样式）；定位失败兜底全量重建。 */
+function rebuildInstanceInPlace(inst, entry) {
+  const idx = indInstances.indexOf(inst);
+  if (idx < 0) return rebuildIndicators();
+  const savedPane = inst.pane;
+  const savedBaseColors = inst.baseColors ? [...inst.baseColors] : null;   // MA 色继承（防漂移，见 common_pitfalls：全局计数器不可事后回读）
+  const legendBefore = inst.legendEl ? inst.legendEl.nextSibling : null;   // 新图例插在旧图例之后，销毁旧图例后新图例即占其位（保持纵向顺序）
+  /* 副图窗格高度快照：重建全程窗格非空（见下），高度本不变；快照仅用于末了防御性复位（保留用户手动拖拽高） */
+  const paneHeights = savedPane > 0 ? chart.panes().map(p => p.getHeight()) : null;
+  /* 关键顺序：先建新实例（新 series 加入原窗格，窗格始终非空）再销毁旧实例。
+     lwc v5 removeSeries 在窗格 series 被清空时会自动移除该副图窗格（model.Qd：非主图且空且窗格数>1 → splice），
+     导致其后所有副图索引前移——若先销毁后建，savedPane 会指向别的指标窗格（多副图时两指标挤入同一窗格/其一塌陷）。
+     先建后销保证窗格不空、索引不漂移。 */
+  const newInst = buildInstance(entry, entry.styleUI, {
+    pane: savedPane > 0 ? savedPane : null,   // 副图复用原窗格索引（旧 series 尚在，窗格存在）；主图(0)由 buildInstance 恒置 0
+    legendBefore,
+    baseColors: savedBaseColors,
+  });
+  destroyInstance(inst);   // 移除旧 series（此时窗格已有新 series，不会被自动移除）与旧图例 DOM
+  indInstances[idx] = newInst;   // 原位替换，实例顺序不变（layoutRef 按顺序+类型定位仍成立）
+  /* 防御性按快照复位窗格高度（窗格未空时本已保持，权重之和 == 总高 → 精确复位） */
+  if (paneHeights) applyPaneStretch(i => paneHeights[i] ?? SUB_PANE_H);
+  if (klines.length) {
+    indReady = false;   // 拉取期间暂存 WS 增量，防新实例只显示最新一根；完成后放行
+    renderInstance(newInst).then(fn => { fn && fn(); indReady = true; });
+  }
+  layoutPaneLegends();   // 新副图图例元素重新定位（窗格高度已复位，主图行随 DOM 顺序自然堆叠）
+  return newInst;
 }
 
 /* 副图窗格高度：一次性设定各窗格「拉伸权重」(stretch factor)。
@@ -2092,8 +2143,11 @@ document.getElementById('ind-ok').addEventListener('click', () => {
     inst.params = { ...next };
     inst.fieldHidden = hiddenFields;
     applyInstVisibility(inst);   // 显隐变化随样式就地生效（不重建）
+  } else if (ref) {
+    /* 改参：单实例重建——仅重算/重拉被改指标，其余实例 series/窗格/图例/色序不动（BUG-001 修复） */
+    rebuildInstanceInPlace(inst, ref);
   } else {
-    if (!ref) { inst.params = { ...next }; inst.styleUI = styleUI; inst.fieldHidden = hiddenFields; }
+    inst.params = { ...next }; inst.styleUI = styleUI; inst.fieldHidden = hiddenFields;
     rebuildIndicators();
   }
   indModal.classList.remove('show');
@@ -2652,8 +2706,10 @@ function renderSymbols() {
         ? (s.sym ? fmtSym(s.sym, s.price) : s.price.toLocaleString('en-US', { minimumFractionDigits: (String(s.price).split('.')[1] || '').length }))
         : '--';
       const activeCls = s.sym && s.sym === curSymbol && (!s.ex || s.ex === curExchange) ? ' active' : '';
-      /* 展示码优先取后端目录 code（A 股去前缀纯数字）；desc 为中文品种描述（股票即股票名称） */
-      const label = dispOf(s.sym);
+      /* 展示码优先取实时目录 symCode（dispOf）；目录降级未命中时回退收藏持久化的展示码
+         s.name（添加/回填时即存 A股去前缀纯数字码）；s.name 为原码或中文名（=desc）时再兜底原码 */
+      const label = dispOf(s.sym) !== s.sym ? dispOf(s.sym)
+        : (s.name && s.name !== s.sym && s.name !== s.desc ? s.name : s.sym);
       html += `<div class="wl-row${activeCls}" data-ex="${s.ex || ''}" data-real="${s.sym}" data-sym="${s.name}">
         <span class="wl-ico" style="background:${icoFor(s.name)}">${(label[0] || '?').toUpperCase()}</span>
         <span class="wl-name"><span class="wl-code">${label}</span>${s.desc ? `<span class="wl-desc">${s.desc}</span>` : ''}</span>
@@ -2942,7 +2998,7 @@ syncTradeToggle();
 /* ═══ 启动（所有定义就绪后；先拉市场源注册表再初始化图表链路） ═══ */
 (async () => {
   await initSources();
-  loadSrFull().then(refreshSymLabels).catch(() => {});   // 展示码目录：顶栏/水印改显纯数字（不阻塞首屏）
+  loadSrFull().then(() => { refreshSymLabels(); renderSymbols(); }).catch(() => {});   // 展示码目录就绪：刷新顶栏/水印 + 重渲染品种列表（去 A股代码前缀，不阻塞首屏）
   await fetchBackendMeta();   // IND-110：后端 def 式指标目录（失败不阻塞内置指标）
   rebuildIndicators();   // 按 indLayout 构建指标实例（首屏数据就绪前，series 空数据）
   connectWS();
