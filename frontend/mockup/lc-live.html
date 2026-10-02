@@ -41,13 +41,13 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .app { display:grid; grid-template-rows:48px 1fr 26px; height:100vh; }
 
 /* ── 顶栏 ── */
-.topbar { display:flex; align-items:center; gap:16px; background:var(--bg-panel); border-bottom:1px solid var(--border); padding:0 14px; }
+.topbar { display:flex; align-items:center; gap:12px; background:var(--bg-panel); border-bottom:1px solid var(--border); padding:0 14px; }
 .logo { display:flex; align-items:center; gap:8px; font-weight:700; font-size:15px; }
 .logo-mark { width:24px; height:24px; border-radius:6px; background:linear-gradient(135deg,var(--accent),#0084ff); display:flex; align-items:center; justify-content:center; font-size:13px; color:#0b0e14; font-weight:900; }
 .symbol-picker { display:flex; align-items:center; gap:10px; background:var(--bg-elevated); border-radius:6px; padding:6px 12px; cursor:pointer; border:1px solid transparent; }
 .symbol-picker:hover { border-color:var(--border-light); }
 .symbol-name { font-weight:700; font-size:14px; }
-.ticker { display:flex; gap:22px; }
+.ticker { display:flex; gap:16px; }
 .ticker-item { display:flex; flex-direction:column; gap:1px; }
 .ticker-label { font-size:10px; color:var(--text-sub); }
 .ticker-value { font-size:13px; font-weight:600; }
@@ -79,10 +79,25 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .nav-item:hover { background:var(--bg-elevated); color:var(--text); }
 .nav-item.active { background:var(--accent-dim); color:var(--accent); }
 .sidebar-spacer { flex:1; }
+/* 画线工具栏（侧边竖向：原模块导航腾空后的位置；绘制交互后续迭代，当前为单选 UI 占位） */
+.draw-toolbar { display:flex; flex-direction:column; align-items:center; gap:4px; }
+.draw-btn { width:40px; height:40px; border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--text-sub); background:none; border:none; transition:all .15s; }
+.draw-btn svg { width:20px; height:20px; }
+.draw-btn:hover { background:var(--bg-elevated); color:var(--text); }
+.draw-btn.active { background:var(--accent-dim); color:var(--accent); }
+.draw-sep { width:18px; height:1px; background:var(--border); margin:4px 0; }
+/* 系统模块卡片弹层（原侧边模块导航回收至此，点击「系统」以小卡片弹出） */
+.sys-pop { position:fixed; left:64px; bottom:12px; z-index:60; display:grid; grid-template-columns:repeat(4,76px); gap:8px; padding:10px; background:var(--bg-panel); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 28px rgba(0,0,0,.45); }
+.sys-card { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; padding:12px 4px; border-radius:8px; cursor:pointer; color:var(--text-sub); font-size:11px; background:var(--bg-elevated); transition:all .15s; }
+.sys-card svg { width:20px; height:20px; }
+.sys-card:hover { color:var(--text); background:var(--bg-base); }
+.sys-card.active { color:var(--accent); background:var(--accent-dim); }
 
 /* 中央 */
 .center { display:flex; flex-direction:column; min-width:0; min-height:0; }
-.chart-toolbar { display:flex; align-items:center; gap:6px; padding:6px 12px; border-bottom:1px solid var(--border); }
+/* 顶栏周期/指标组（原图表工具栏上移，为图表腾出整行高度）；组内紧凑间距、按钮收窄 */
+.topbar-tf { display:flex; align-items:center; gap:2px; }
+.topbar-tf .tf-btn { padding:3px 7px; }
 .tf-btn { padding:4px 10px; border-radius:4px; cursor:pointer; font-size:12px; color:var(--text-sub); background:none; border:none; font-family:var(--font-ui); }
 .tf-btn:hover { color:var(--text); background:var(--bg-elevated); }
 .tf-btn.active { color:var(--accent); background:var(--accent-dim); font-weight:600; }
@@ -168,13 +183,18 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .pane-max-btn.show { opacity:1; pointer-events:auto; }
 .pane-max-btn:hover { color:var(--accent); background:var(--bg-elevated); }
 .pane-max-btn svg { width:13px; height:13px; }
-.ctx-menu { position:fixed; z-index:200; display:none; min-width:132px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:8px; padding:6px; box-shadow:0 8px 24px rgba(0,0,0,.5); font-size:12px; }
+/* 右键菜单（TV 风格：深色卡片 + 较高行高 + 浅灰标签 + 左图标 + 分组分隔线） */
+.ctx-menu { position:fixed; z-index:200; display:none; min-width:216px; background:var(--bg-base); border:1px solid var(--border-light); border-radius:6px; padding:4px 0; box-shadow:0 10px 30px rgba(0,0,0,.6); font-size:13px; }
 .ctx-menu.show { display:block; }
-.ctx-title { color:var(--text-sub); padding:4px 10px 6px; font-size:11px; }
-.ctx-row { display:flex; justify-content:space-between; align-items:center; gap:14px; padding:5px 10px; color:var(--text-sub); }
-.ctx-input { width:70px; background:var(--bg-base); border:1px solid var(--border); color:var(--text); border-radius:4px; font-size:12px; padding:3px 6px; outline:none; font-family:var(--font-ui); }
+.ctx-row { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:9px 14px; color:var(--text); }
+.ctx-input { width:70px; background:transparent; border:1px solid var(--border-light); color:var(--text); border-radius:4px; font-size:12px; padding:3px 6px; outline:none; font-family:var(--font-ui); }
 .ctx-input:focus { border-color:var(--accent); }
 .ctx-row input[type="checkbox"] { width:14px; height:14px; accent-color:var(--accent); cursor:pointer; }
+/* 动作行（左图标+标签可点击，如「重置图表」）与分组分隔线；悬停提亮同 TV */
+.ctx-action { cursor:pointer; justify-content:flex-start; gap:10px; }
+.ctx-action svg { width:15px; height:15px; color:var(--text); flex:none; }
+.ctx-row:hover { background:var(--bg-elevated); }
+.ctx-sep { height:1px; background:var(--border); margin:4px 0; }
 .watermark { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:40px; font-weight:800; color:rgba(209,212,220,0.05); pointer-events:none; letter-spacing:4px; z-index:0; }
 /* 当前价标签（自定义：价格 + K 线收盘倒计时同框，替代 LC 内置轴标签），垂直居中于当前价坐标 */
 .price-tag { position:absolute; right:0; z-index:6; display:none; flex-direction:column; align-items:flex-end; gap:1px; padding:3px 8px 4px; border-radius:2px; pointer-events:none; white-space:nowrap; font-family:var(--font-mono); }
@@ -339,6 +359,22 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
       <span class="symbol-name" id="top-symbol">BTCUSDT</span>
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
     </div>
+    <div class="topbar-tf">
+      <button class="tf-btn" data-tf="1m">1分</button>
+      <button class="tf-btn" data-tf="5m">5分</button>
+      <button class="tf-btn active" data-tf="15m">15分</button>
+      <button class="tf-btn" data-tf="1h">1时</button>
+      <button class="tf-btn" data-tf="4h">4时</button>
+      <button class="tf-btn" data-tf="1d">日线</button>
+      <button class="tf-btn" data-tf="1w">周线</button>
+      <button class="tf-btn" data-tf="1M">月线</button>
+      <button class="tf-btn" data-tf="1Q">季线</button>
+      <button class="tf-btn" data-tf="1Y">年线</button>
+      <button class="tf-btn" id="tf-custom-btn" title="自定义周期：数字+单位（d/w/M）">自定</button>
+      <div class="toolbar-sep"></div>
+      <button class="tool-btn" id="ind-btn" title="添加指标"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>指标</button>
+    </div>
+    <div class="toolbar-sep"></div>
     <div class="ticker mono">
       <div class="ticker-item"><span class="ticker-label">最新价</span><span class="ticker-value up" id="tk-price">--</span></div>
       <div class="ticker-item"><span class="ticker-label">24h 涨跌</span><span class="ticker-value" id="tk-chg">--</span></div>
@@ -351,38 +387,36 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
   <div class="main">
     <!-- 侧边导航 -->
     <nav class="sidebar">
-      <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-6 4 3 6-8 3 4"/><path d="M3 21h18"/></svg>行情</div>
-      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 4v16M17 4v16M4 8h6M14 16h6"/></svg>交易</div>
-      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>策略</div>
-      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L4.5 13H11l-1 9 8.5-11H13l1-9z"/></svg>信号</div>
-      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>回测</div>
-      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="12" rx="2"/><path d="M3 11h18M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>账户</div>
-      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l8 4v5c0 4.5-3.2 7.7-8 9-4.8-1.3-8-4.5-8-9V7l8-4z"/></svg>风控</div>
-      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10.5 21h3"/></svg>告警</div>
+      <!-- 画线工具栏（原模块导航腾空后的竖向工具条；绘制交互后续迭代，当前单选 UI 占位） -->
+      <div class="draw-toolbar" id="draw-toolbar">
+        <button class="draw-btn" data-tool="trend" title="趋势线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.6"/><circle cx="19" cy="5" r="1.6"/></svg></button>
+        <button class="draw-btn" data-tool="hline" title="水平线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h18"/></svg></button>
+        <button class="draw-btn" data-tool="ray" title="水平射线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h12"/><path d="M15 8l5 4-5 4"/></svg></button>
+        <button class="draw-btn" data-tool="rect" title="矩形"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
+        <button class="draw-btn" data-tool="fib" title="斐波那契回调"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16M4 10h16M4 14h16M4 19h16"/></svg></button>
+        <button class="draw-btn" data-tool="text" title="文本"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 6h14M12 6v13"/></svg></button>
+        <div class="draw-sep"></div>
+        <button class="draw-btn" data-tool="del" title="删除选中画线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg></button>
+        <button class="draw-btn" data-tool="clear" title="清空全部画线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6M14 11v6"/></svg></button>
+      </div>
       <div class="sidebar-spacer"></div>
-      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>系统</div>
+      <div class="nav-item" id="sys-btn" title="系统：模块导航"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>系统</div>
     </nav>
+
+    <!-- 系统模块卡片弹层（原侧边模块导航回收至此，点击「系统」以小卡片弹出） -->
+    <div id="sys-pop" class="sys-pop" style="display:none">
+      <div class="sys-card active" data-mod="行情"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-6 4 3 6-8 3 4"/><path d="M3 21h18"/></svg><span>行情</span></div>
+      <div class="sys-card" data-mod="交易"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 4v16M17 4v16M4 8h6M14 16h6"/></svg><span>交易</span></div>
+      <div class="sys-card" data-mod="策略"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6M9 13h6M9 17h3"/></svg><span>策略</span></div>
+      <div class="sys-card" data-mod="信号"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L4.5 13H11l-1 9 8.5-11H13l1-9z"/></svg><span>信号</span></div>
+      <div class="sys-card" data-mod="回测"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg><span>回测</span></div>
+      <div class="sys-card" data-mod="账户"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="12" rx="2"/><path d="M3 11h18M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2"/></svg><span>账户</span></div>
+      <div class="sys-card" data-mod="风控"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l8 4v5c0 4.5-3.2 7.7-8 9-4.8-1.3-8-4.5-8-9V7l8-4z"/></svg><span>风控</span></div>
+      <div class="sys-card" data-mod="告警"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10.5 21h3"/></svg><span>告警</span></div>
+    </div>
 
     <!-- 中央 -->
     <section class="center">
-      <div class="chart-toolbar">
-        <button class="tf-btn" data-tf="1m">1分</button>
-        <button class="tf-btn" data-tf="5m">5分</button>
-        <button class="tf-btn active" data-tf="15m">15分</button>
-        <button class="tf-btn" data-tf="1h">1时</button>
-        <button class="tf-btn" data-tf="4h">4时</button>
-        <button class="tf-btn" data-tf="1d">日线</button>
-        <button class="tf-btn" data-tf="1w">周线</button>
-        <button class="tf-btn" data-tf="1M">月线</button>
-        <button class="tf-btn" data-tf="1Q">季线</button>
-        <button class="tf-btn" data-tf="1Y">年线</button>
-        <button class="tf-btn" id="tf-custom-btn" title="自定义周期：数字+单位（d/w/M）">自定</button>
-        <div class="toolbar-sep"></div>
-        <button class="tool-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20L20 4"/></svg>画线</button>
-        <button class="tool-btn" id="ind-btn" title="添加指标"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>指标</button>
-        <div style="flex:1"></div>
-        <button class="tool-btn" id="fit-btn" title="恢复默认视图：铺满已加载 K 线 + 右侧留白（手动缩放/平移后一键还原）">自动适配</button>
-      </div>
 
       <!-- 自定义周期输入弹层（点击「自定」开关） -->
       <div id="tf-custom-pop" class="tf-custom-pop" style="display:none">
@@ -534,7 +568,8 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 </div>
 
 <div class="ctx-menu" id="ctx-menu">
-  <div class="ctx-title">图表设置</div>
+  <div class="ctx-row ctx-action" id="ctx-reset"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg><span>重置图表</span></div>
+  <div class="ctx-sep"></div>
   <div class="ctx-row"><span>首屏K线</span><input id="ctx-ps" class="ctx-input" type="number" min="100" max="30000" step="100"></div>
   <div class="ctx-row"><span>右侧留白</span><input id="ctx-ro" class="ctx-input" type="number" min="0" max="100"></div>
   <div class="ctx-row"><span>成交量</span><input id="ctx-vol" type="checkbox" checked></div>
@@ -879,7 +914,7 @@ const chart = createChart(container, {
     vertLine: { color: '#758696', width: 1, style: 3, labelBackgroundColor: '#2a2e39' },
     horzLine: { color: '#758696', width: 1, style: 3, labelBackgroundColor: '#2a2e39' },
   },
-  rightPriceScale: { borderColor: '#2a2e39', scaleMargins: { top: 0.08, bottom: 0.22 } },
+  rightPriceScale: { borderColor: '#2a2e39', scaleMargins: { top: 0.10, bottom: 0.22 } },
   handleDoubleClickZoom: false,   // 双击让位给副图最大化/还原切换
   timeScale: {
     borderColor: '#2a2e39', timeVisible: true, secondsVisible: false, rightOffset: curRightOffset,
@@ -914,7 +949,7 @@ function sourceSupportsVolume() { const m = sourcesMeta[curExchange]; return !m 
 function applyVolVisibility() {
   const vol = showVol && sourceSupportsVolume();
   volumeSeries.applyOptions({ visible: vol });
-  chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: vol ? 0.22 : 0.05 } });
+  chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.10, bottom: vol ? 0.22 : 0.05 } });
   document.getElementById('lg-vol').style.display = vol ? '' : 'none';
   const ctxVol = document.getElementById('ctx-vol');
   ctxVol.checked = showVol;
@@ -1822,7 +1857,7 @@ async function load() {
     renderChart(true);
     if (!panesSized) { panesSized = true; setTimeout(applyPaneHeights, 200); }   // 首屏就绪后应用副图高度（等 autoSize 布局稳定）
     const isFirst = firstFit;
-    if (isFirst) {   // 首屏：铺满首屏K线数量 + 右侧留白（与「自动适配」同一口径）；此后切换保持原比例 + 最新 K 线右对齐
+    if (isFirst) {   // 首屏：铺满首屏K线数量 + 右侧留白（与「重置图表」同一口径）；此后切换保持原比例 + 最新 K 线右对齐
       firstFit = false;
       const to = klines.length - 1 + curRightOffset;
       chart.timeScale().setVisibleLogicalRange({ from: klines.length - Math.min(firstScreenBars, klines.length) - 0.5, to });
@@ -1969,14 +2004,47 @@ tfCustomInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyCus
 document.addEventListener('pointerdown', e => {
   if (!tfCustomPop.contains(e.target) && e.target.id !== 'tf-custom-btn') tfCustomPop.style.display = 'none';
 }, true);
-/* 自动适配 = 一键恢复原始视图：手动缩放/平移后回到“显示首屏K线数量根 + 右侧留白 + 最新 K 线右对齐”。
-   显示根数按用户在右键菜单设置的首屏K线数量（firstScreenBars），不足则显示全部已加载；
+/* 重置图表（右键菜单动作，原「自动适配」）：一键恢复原始视图——显示首屏K线数量根 + 右侧留白 + 最新 K 线右对齐；
    不用裸 fitContent()（它不尊重 curRightOffset/自定义根数），改用 setVisibleLogicalRange 确定性重建默认视窗 */
-document.getElementById('fit-btn').addEventListener('click', () => {
+document.getElementById('ctx-reset').addEventListener('click', () => {
+  ctxMenu.classList.remove('show');
   if (!klines.length) return;
   const show = Math.min(firstScreenBars, klines.length);
   const to = klines.length - 1 + curRightOffset;
   chart.timeScale().setVisibleLogicalRange({ from: klines.length - show - 0.5, to });
+});
+/* ═══ 侧边栏：画线工具栏 + 系统模块卡片弹层 ═══
+   原侧边模块导航（行情/交易/…/告警）回收进「系统」按钮，点击以小卡片弹出；
+   腾空的竖向工具条作为画线工具栏（绘制交互后续迭代，当前工具按钮仅单选高亮占位）。 */
+const sysPop = document.getElementById('sys-pop');
+const sysBtn = document.getElementById('sys-btn');
+sysBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  sysPop.style.display = sysPop.style.display === 'none' ? 'grid' : 'none';
+});
+/* 卡片选中：切换 active 并收起弹层（模块路由为后续迭代，当前仅记录选中态） */
+sysPop.addEventListener('click', e => {
+  const card = e.target.closest('.sys-card');
+  if (!card) return;
+  sysPop.querySelectorAll('.sys-card').forEach(x => x.classList.toggle('active', x === card));
+  sysPop.style.display = 'none';
+});
+/* 外部点击 / Esc 收起系统弹层 */
+document.addEventListener('pointerdown', e => {
+  if (sysPop.style.display !== 'none' && !sysPop.contains(e.target) && !sysBtn.contains(e.target)) {
+    sysPop.style.display = 'none';
+  }
+}, true);
+window.addEventListener('keydown', e => { if (e.key === 'Escape') sysPop.style.display = 'none'; });
+/* 画线工具栏：工具按钮单选高亮（再点一次取消）；del/clear 为瞬时动作不保留选中态 */
+document.getElementById('draw-toolbar').addEventListener('click', e => {
+  const btn = e.target.closest('.draw-btn');
+  if (!btn) return;
+  const tool = btn.dataset.tool;
+  if (tool === 'del' || tool === 'clear') return;   // 瞬时动作占位：绘制交互后续迭代
+  const wasActive = btn.classList.contains('active');
+  document.querySelectorAll('#draw-toolbar .draw-btn').forEach(x => x.classList.remove('active'));
+  if (!wasActive) btn.classList.add('active');
 });
 /* 右侧留白等：图表区右键菜单 */
 const ctxMenu = document.getElementById('ctx-menu');
@@ -1989,7 +2057,7 @@ document.getElementById('chart').addEventListener('contextmenu', e => {
   document.getElementById('ctx-vol').checked = showVol;
   document.getElementById('ctx-scheme').value = colorScheme;
   ctxMenu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
-  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 170) + 'px';
+  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 205) + 'px';
   ctxMenu.classList.add('show');
 });
 document.addEventListener('click', e => { if (!ctxMenu.contains(e.target)) ctxMenu.classList.remove('show'); });
@@ -2009,7 +2077,7 @@ ctxRo.addEventListener('change', () => {
   chart.timeScale().applyOptions({ rightOffset: v });
   saveLayout();
 });
-/* 首屏 K 线数量：钳位 100~30000，持久化并即时重载当前品种/周期生效；「自动适配」按此值恢复显示根数 */
+/* 首屏 K 线数量：钳位 100~30000，持久化并即时重载当前品种/周期生效；「重置图表」按此值恢复显示根数 */
 ctxPs.addEventListener('change', () => {
   const v = Math.min(30000, Math.max(100, parseInt(ctxPs.value) || 1000));
   ctxPs.value = v;

@@ -7,7 +7,8 @@
       下增 #FFCDD2 / 下缩 #EF5350）+ DIF + DEA
     - 4X/16X/64X：仅 DIF + DEA（周期 = 基础周期 × 倍数）
 适配说明：
-    - Pine 阶梯线（style_stepline）lwc 无对应线型，降级实线
+    - Pine 阶梯线（plot.style_stepline）→ style.step=true，仅 DIF 线声明，
+      由前端 Series Primitive 自绘还原（bar 内水平、下一 bar 跳变）
     - 带透明度颜色（#FFA500@8%、#e01b7af6）契约只收 #RRGGBB，取实色
 """
 from core.indicator_engine.graph import ema, pyindicator
@@ -19,14 +20,14 @@ from core.indicator_engine.graph import ema, pyindicator
     style=[
         {"plot": "histogram",   # 1X 柱：四槽色 = 零轴上增/上缩/下增/下缩
          "hist_colors": ["#0f9d8f", "#B2DFDB", "#FFCDD2", "#EF5350"]},
-        {"color": "#20e3d6"},   # DIF_1X（Pine 原为阶梯线）
-        {"color": "#2962ff"},   # DEA_1X
-        {"color": "#19c613"},   # DIF_4X
-        {"color": "#ffa500"},   # DEA_4X
-        {"color": "#d8bfd8"},   # DIF_16X
-        {"color": "#8a2be2"},   # DEA_16X
-        {"color": "#e01b7a"},   # DIF_64X
-        {"color": "#00ffff"},   # DEA_64X
+        {"color": "#20e3d6", "step": True},   # DIF_1X（Pine 阶梯线）
+        {"color": "#2962ff"},                 # DEA_1X
+        {"color": "#19c613", "step": True},   # DIF_4X
+        {"color": "#ffa500"},                 # DEA_4X
+        {"color": "#d8bfd8", "step": True},   # DIF_16X
+        {"color": "#8a2be2"},                 # DEA_16X
+        {"color": "#e01b7a", "step": True},   # DIF_64X
+        {"color": "#00ffff"},                 # DEA_64X
     ],
     price_lines=[{"price": 0}],   # 零轴参考线（缺省灰色虚线）
 )
