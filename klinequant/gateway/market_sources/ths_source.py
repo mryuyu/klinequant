@@ -323,11 +323,28 @@ class ThsSource(MarketSource):
         self._states: dict[str, _SymState] = {}
         self._sym_tfs: dict[str, set[str]] = {}     # code -> 当前订阅周期集
         self._ticker_cache: dict[str, tuple[float, dict | None]] = {}
+        self._latency_at = 0.0                      # probe_latency_ms 缓存计时（同 MT5，降争锁）
 
     # ─── 精度：A 股固定 2 位下限，订阅数据推导抬升 ───
 
     def price_precision(self, symbol: str) -> int:
         return max(super().price_precision(symbol), _MIN_PREC)
+
+    async def probe_latency_ms(self) -> float | None:
+        """同花顺无原生 ping 接口：以「单只快照调用的应用层往返」近似本地↔行情服务器延迟。
+
+        thsdk 未暴露连接层 RTT，只能测一次轻量 market_data_cn 单只快照的调用墙钟耗时；
+        含 SDK 全局锁 + 限频节流开销，故略大于纯网络 RTT，休市亦有值（返回最近快照）。
+        上证指数 USHI1A0001 恒有效且流动性最好；3s 缓存降 IPC/争锁频率。
+        """
+        now = time.monotonic()
+        if self._latency_at and now - self._latency_at < 3.0:
+            return self.latency_ms
+        self._latency_at = now
+        t0 = time.perf_counter()
+        rows = await asyncio.to_thread(self._driver.snapshot, ["USHI1A0001"])
+        self.latency_ms = round((time.perf_counter() - t0) * 1000, 1) if rows is not None else None
+        return self.latency_ms
 
     # ─── 全量品种目录（股票 + 指数） ───
 

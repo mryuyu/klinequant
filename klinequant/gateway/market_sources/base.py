@@ -50,6 +50,8 @@ class MarketSource(ABC):
     default_symbols: list[dict[str, str]] = []
     #: 无订阅者时的默认监控集 [(symbol, timeframe)]，保持旧行为
     watched_targets: list[tuple[str, str]] = []
+    #: 到目标行情服务器的最近网络往返延迟 RTT(ms)（ping 式，源自行维护）；None=未知/不支持
+    latency_ms: float | None = None
 
     def _track_prec(self, symbol: str, values) -> None:
         """从订阅到的原始价格更新品种精度缓存（只增不减：新批次可能碰巧整数价）"""
@@ -84,6 +86,15 @@ class MarketSource(ABC):
     async def fetch_ticker(self, symbol: str) -> dict[str, Any] | None:
         """最新行情摘要（可选实现；默认返回 None 由前端兜底）"""
         return None
+
+    async def probe_latency_ms(self) -> float | None:
+        """探测到本源目标服务器的网络往返延迟 RTT(ms)（ping 式，可选实现）
+
+        与行情数据无关，休市/无订阅时仍可测（只要连接层存活）。各源用自身连接层：
+        币安复用 WS conn.latency（接收循环持续写入 self.latency_ms），MT5 用
+        terminal_info().ping_last。默认直接返回 self.latency_ms（None=不支持）。
+        """
+        return self.latency_ms
 
     async def list_symbols(self) -> list[dict[str, str]]:
         """全量可交易品种目录 [{symbol, name, type}]（可选实现；默认返回 default_symbols）

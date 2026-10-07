@@ -74,6 +74,7 @@ class Mt5Source(MarketSource):
         #: symbol -> (ts, ticker)
         self._ticker_cache: dict[str, tuple[float, dict | None]] = {}
         self._last_reconnect_at = 0.0
+        self._latency_at = 0.0   # probe_latency_ms 缓存时刻（terminal_info 走子进程 IPC+全局锁，短缓存降频）
         if self.available:
             self._probe_symbols()
 
@@ -220,6 +221,21 @@ class Mt5Source(MarketSource):
         if end_time:
             bars = [b for b in bars if b["timestamp"] <= end_time]
         return bars[-limit:]
+
+    async def probe_latency_ms(self) -> float | None:
+        """MT5 终端↔经纪商服务器 ping（terminal_info.ping_last 微秒→ms），即终端右下角网络延迟。
+
+        休市亦可测（终端与服务器连接常驻）；terminal_info 走子进程 IPC + 全局锁，
+        加 3s 缓存避免与行情请求频繁争锁。
+        """
+        now = time.monotonic()
+        if self._latency_at and now - self._latency_at < 3.0:
+            return self.latency_ms
+        info = await asyncio.to_thread(self._driver.terminal_info)
+        self._latency_at = now
+        ping_us = info.get("ping_last") if isinstance(info, dict) else None
+        self.latency_ms = round(ping_us / 1000, 1) if ping_us else None
+        return self.latency_ms
 
     async def fetch_ticker(self, symbol: str) -> dict | None:
         cached = self._ticker_cache.get(symbol)

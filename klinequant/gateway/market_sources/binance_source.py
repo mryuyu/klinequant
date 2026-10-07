@@ -180,6 +180,7 @@ class BinanceSource(MarketSource):
             nonlocal last_event_at
             backoff = WS_RECONNECT_BASE
             while True:
+                self.latency_ms = None   # 本轮重连开始先清空；连上后由接收循环主动 ping 更新
                 targets = market_manager.active_targets(self.name)
                 streams = "/".join(f"{s.lower()}@kline_{tf}" for s, tf in sorted(targets))
                 # 单个流用直连路径 /ws/<stream>，多个流用组合路径 /stream?streams=a/b
@@ -214,6 +215,7 @@ class BinanceSource(MarketSource):
                         _rx_count = 0          # 本轮连接收到的原始消息数（诊断）
                         _pub_count = 0         # 本轮连接实际广播的 bar 数（诊断）
                         _last_stat_at = time.monotonic()
+                        _last_ping_at = 0.0    # 主动 ping 计时；0 → 连上后首轮循环立即测首个 RTT（不等 keepalive）
                         while True:
                             try:
                                 raw = await asyncio.wait_for(conn.recv(), timeout=1.0)
@@ -222,6 +224,21 @@ class BinanceSource(MarketSource):
 
                             # 周期性诊断/控制面检查（无论是否有消息都执行）
                             now = time.monotonic()
+                            # 每 5s 主动 ping 测「本地↔币安服务器」RTT：await conn.ping() 返回纯帧往返秒数
+                            # （websockets 16 为 Awaitable[float]）。不依赖 keepalive 首个 ping（ping_interval=20s），
+                            # 消除启动/切所后延时长时间显「—」的预热空窗；连上后首轮即测。
+                            if now - _last_ping_at >= 5.0:
+                                _last_ping_at = now
+                                try:
+                                    # websockets 16：conn.ping() 是 async 方法，await 它得到的是
+                                    # 「pong 等待 Future」（此刻仍 pending），需再 await 该 Future 才拿到
+                                    # 纯帧往返 RTT(秒)。旧写法只 await 一层 → round(Future*1000) 抛 TypeError
+                                    # 被吞 → latency_ms 恒 None（前端加密源延时永远显「—」）。
+                                    pong = await conn.ping()
+                                    rtt = await asyncio.wait_for(pong, timeout=3.0)
+                                    self.latency_ms = round(rtt * 1000, 1)
+                                except Exception:
+                                    self.latency_ms = None
                             if now - _last_stat_at >= 10:
                                 logger.info(f"Binance WS stats: rx={_rx_count} pub={_pub_count} targets={len(connected_targets)}")
                                 _rx_count = 0; _pub_count = 0; _last_stat_at = now

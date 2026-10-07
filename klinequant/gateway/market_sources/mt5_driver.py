@@ -317,6 +317,10 @@ class Mt5Api:
     def symbol_info_tick(self, symbol: str) -> Optional[dict]:
         return self._call("symbol_info_tick", symbol)
 
+    def terminal_info(self) -> Optional[dict]:
+        """终端信息（含 ping_last：终端↔交易服务器最近往返延迟，单位微秒）"""
+        return self._call("terminal_info")
+
     def symbols_get(self):
         if not _HAS_MT5:
             return None

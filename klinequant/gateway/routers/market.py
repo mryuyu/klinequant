@@ -40,6 +40,29 @@ async def get_sources():
     return {"sources": [s.meta() for s in market_manager.list_sources()]}
 
 
+@router.get("/latency")
+async def get_latency(
+    exchange: Optional[str] = Query(None, description="市场源，缺省返回全部已注册所"),
+):
+    """到目标行情服务器的网络往返延迟 RTT(ms)（ping 式，源连接层探测；与行情无关，休市亦可测）
+
+    前端状态栏「WS 后延时」显示用。各源自测：币安=WS conn.latency（后端↔币安服务器），
+    MT5=terminal_info.ping_last（终端↔经纪商）；不支持的源（如 ths）返回 null。
+    """
+    sources = (
+        [s for s in [market_manager.get(exchange)] if s]
+        if exchange else market_manager.list_sources()
+    )
+    out: dict[str, Optional[float]] = {}
+    for s in sources:
+        try:
+            out[s.name] = await s.probe_latency_ms()
+        except Exception as e:
+            logger.debug(f"probe latency failed [{s.name}]: {e}")
+            out[s.name] = None
+    return {"latency": out}
+
+
 @router.get("/klines")
 async def get_klines(
     symbol: str = Query("BTCUSDT", description="交易对，如 BTCUSDT / EURUSD"),
