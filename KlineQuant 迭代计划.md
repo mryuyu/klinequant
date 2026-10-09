@@ -1,8 +1,8 @@
 # KlineQuant 迭代计划文档
 
-> **版本**：v2.17  
+> **版本**：v2.19  
 > **创建日期**：2026-07-30  
-> **最后更新**：2026-09-22（v2.17 新增：六·七节「代码健康度专项」——全项目 15 模块组逐行深度精读发现的 4 项 P0 最高优先级修复：QH-001 通用 Webhook 渠道无法添加、QH-002 signal_engine 孤岛装配、QH-003 RiskView 三处接线脱节、QH-004 style.css 脚手架残留污染主题变量）  
+> **最后更新**：2026-10-09（v2.19 新增：SDK 执行拓扑定为 Z（symbol 粒度线程隔离 + 线程内多周期单循环，取代原拓扑 B 单循环）；数据供给层压测裁定稳态无需优化（100 品种×3 周期 62ms/轮，占 poll_interval 12%）；冷启动预热纳入 Phase M M7；feed 多线程隔离 snapshot per-api + per-symbol event 纳入 M4）  
 > **当前基线**：v1.9.1-mockup（轻量版行情终端，lc-live.html 唯一迭代基线，commit a45ffe2 已推送）  
 > **仓库**：https://github.com/mryuyu/klinequant  
 > **版本命名规范**：`主版本.次版本.修订号-后缀`，后缀 `-paper` = 模拟盘可用，`-live` = 实盘已验证，无后缀 = 正式版
@@ -218,7 +218,7 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | FX-BT-ANNUAL | 年化 bars_per_year | 现 365 天约定，FX 实际 ~5 天/周，年化偏乐观 | P2 |
 | FX-CONV-HIST | 交叉盘 rate 历史时点 | 现用加载时点汇率，补逐 bar 历史交叉汇率（区间波动大时） | P2 |
 | FX-CLOSE-LIMIT | 挂单类平仓 ticket 路径 | LIMIT/STOP CLOSE 未走 ticket 精确平仓 | P2 |
-| FX-FEED-SCALE | 50 品种 feed 轮询优化 | wait_update 单 Event 电平触发 + _poll_loop 串行，大品种数需优化 | P2 |
+| FX-FEED-SCALE | 数据供给层稳态**无需优化**（2026-10-09 压测证伪原“50 品种需优化”） | 实测（真实 MT5，38 品种 30 轮）：单次 IPC tick 0.11ms/bar 0.16ms，稳态单轮严格线性，100 品种×3 周期外推 ≈62ms/轮（占 poll_interval 500ms 的 12%）→ 无瓶颈，原担忧过虑。**冷启动**（count=300 首次拉冷门品种历史 >8s 超时→worker 重建+冷却连锁）是独立问题，归 SDK Phase M **M7**；多线程隔离（snapshot per-api + per-symbol event）归 **M4**。详见 SDK 阶段实施规划“数据供给层压测结论”小节 | ⏸️ 已证伪（稳态无需优化） |
 
 ---
 
@@ -232,7 +232,7 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 |----|------|------|------|------|
 | ① 纯行情看板 | 独立启动 web 栈（start_all.ps1 / gateway，**无策略**） | 行情/指标/信号展示 + 回测工作台 | 不运行 | ✅ 已具备（gateway + lc-live.html + BacktestView） |
 | ② 实盘 headless | `run_fx_live`（默认，无 web） | 无 | LiveRunner 独立跑，纯执行剥离 UI | ✅ 已具备（run_fx_live/run_crypto_live；尚无显式 `webgui` 开关，默认即 headless） |
-| ③ 策略研究（带 GUI） | `run_fx_live --webgui` | 拉起 web 栈 + **叠加运行中策略**的信号/持仓/所声明指标 | LiveRunner 与 web 栈共存 | ⬜ 待做（WEBGUI-L1 拉起 + WEBGUI-L2 信号叠加） |
+| ③ 策略研究（带 GUI） | `run_fx_live --webgui` | 拉起 web 栈 + **叠加运行中策略**的信号/持仓/所声明指标 | LiveRunner 与 web 栈共存 | ⬜ 待做（WEBGUI-L1 拉起 + WEBGUI-L2 信号叠加 + WEBGUI-L3 策略图形标注） |
 
 **关键约束（用户强调）**：`webgui` 开关**不得假设“总有策略在跑”**——态①（纯看板）必须能在无任何策略时独立启动与运行；态③只是在态①的 web 栈上“挂接”一个运行中策略的视图层。
 
@@ -242,6 +242,7 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 |------|------|------|--------|------|
 | WEBGUI-L1 | `webgui` 开关 + 态③拉起 web 栈 | runner 入口（run_fx_live/run_crypto_live 等）增 `--webgui`：True 时跑策略的同时拉起 gateway（托管前端 dist + API）并开浏览器，False 保持 headless。**宿主拓扑待定**（策略为主进程 + gateway 后台线程 / gateway 为主 + 策略受管任务）；需处理 LiveRunner `signal.signal` 仅主线程可用的限制 | P1 | ⬜ 设计中 |
 | WEBGUI-L2 | 研究 GUI 叠加运行中策略信号（**Level 2**） | 态③下前端叠加“这个正在跑的策略”的实时信号/持仓/所声明指标，走 `api.plot/state → gateway.state → WS → 前端` 推送通道。**依赖**：IND-108 盘中触发 + 接线层增量推送缺口（IndicatorView 引用封装 / is_changing 覆盖指标列 / 增量传输）。**约束**：与态①纯看板并存——无策略挂接时前端照常作行情看板，有策略挂接才显示其信号层。**用户定案：必做，但非当下（先固化态①/②，L2 延后）** | P1 | ⬜ 规划中（延后） |
+| WEBGUI-L3 | 研究 GUI 策略图形标注叠加（**复用 DrawingPrimitive**，用户 2026-10-08 定案） | 策略端图形级输出（ZigZag 折线/买卖点标注/通道矩形/文本等，策略用 `api.bar()` 取整段 OHLC 自行算形态）与 L2 的序列绘图**双通道**分层：① 序列类（`api.plot` 的 hist/line/step_line）走既有指标序列链路（后端引擎→WS→lwc series）；② **图形标注复用前端手工画线 DrawingPrimitive**（v9.74~v9.79 已落地）——策略推送的 shape 与手工画线**同构**（`{type, points:[{time,price}], style}`），直接喂 `drawPrim.setShapes()`，同一份 `_drawShape` 渲染，观感（线段/水平线/射线/矩形/文本/信息线 + 数据空间锚点缩放不变形）与手工绘制完全一致。**语义分层**：`source:'strategy'` 标记——只读（hitTest 跳过，同 skipLocked 待遇，不可拖拽/样式弹窗/右键菜单）；不入 localStorage `kq-drawings-live` 手工桶（会话级或独立快照开关）；生命周期随策略（停止/断开即清除，或按研究需要冻结留档）；`wait_update` 后增量重推（如 ZigZag 尾段变化）。**依赖**：WEBGUI-L2 推送通道（api.plot/state → gateway.state → WS → 前端）；前端渲染层几乎零新增（序列/图形两条链路均现成），主要工作量在 SDK 声明收集 + gateway 推送 | P1 | ⬜ 规划中（延后，随 L2） |
 
 ---
 
@@ -283,6 +284,8 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | INT-003 | 实盘验证 | v2.1.0-live（最后） | ⬜ BACKLOG（用户明确留到最后） |
 | WEBGUI-L1 | webgui 开关 + 研究态拉起 web 栈 | 提前落地（下一轮） | ⬜ 设计中（宿主拓扑待定，详见六·六） |
 | WEBGUI-L2 | 研究 GUI 叠加运行中策略信号（Level 2） | 提前落地（延后必做） | ⬜ 规划中（用户定案：必做非当下，详见六·六） |
+| WEBGUI-L3 | 研究 GUI 策略图形标注叠加（复用 DrawingPrimitive） | 提前落地（随 L2） | ⬜ 规划中（用户 2026-10-08 定案：复用手工画线渲染层，详见六·六） |
+| SDK-TOPO-Z | SDK 执行模型拓扑 Z（symbol 粒度线程隔离 + 线程内多周期单循环）/ Phase M（M4 feed 多线程隔离 snapshot per-api+per-symbol event / M6 品种级看门狗 / M7 冷启动预热优化） | 提前落地 | ⬜ 规划中（2026-10-09 定案：取代原拓扑 B 单循环；数据供给层压测裁定稳态无需优化，详见 SDK 阶段实施规划 Phase M） |
 
 ---
 
@@ -327,3 +330,5 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | 2026-09-22 | v2.15 | 新增「六·六、运行模式（webgui 三态）与研究 GUI 策略信号可视化」专项节（用户定案）：① 确立框架以 SDK 形式交付（借鉴 tqsdk，`def strategy(api)` + `wait_update` 自驱动）、前端定位研究层，**前端启动由策略侧 `webgui` 开关控制**而非独立 launcher/前端反向拉后端（原生进程无鸡生蛋问题）；② 运行模式三态——态①纯行情看板（无策略，✅ 已具备 gateway+lc-live.html+BacktestView）/态②实盘 headless（`webgui=False` 默认，✅ 已具备 run_fx_live/run_crypto_live）/态③策略研究带 GUI（`webgui=True`，LiveRunner 与 web 栈共存，⬜ 待做）；③ 关键约束：`webgui` 不得假设总有策略在跑，态①必须能无策略独立启动运行；④ 新增 WEBGUI-L1（`--webgui` 开关 + 态③拉起 web 栈，宿主拓扑待定，需处理 LiveRunner signal 仅主线程限制，P1 设计中）与 **WEBGUI-L2（Level 2：研究 GUI 叠加运行中策略信号/持仓/所声明指标，走 api.plot/state→gateway.state→WS→前端，依赖 IND-108 + 接线层增量推送缺口，用户定案“必做但非当下”，P1 延后）**；⑤ 同步七·BACKLOG 总池 |
 | 2026-09-22 | v2.16 | 六·五节「遗留/后续增强」新增 **FX-BT-RESULT**（回测结果展示增强，P2，用户指令）：① 交易明细表补**时间戳列**——FX 侧 `FxTrade` 已含 `entry_time`/`exit_time` 但前端成交表未展示（补开仓/平仓时间列），币安 dual_ma 引擎成交结构需核对时间字段；② 成交明细“**最近 20 笔**”硬编码 `.slice(0,20)`（FX `fxTrades`/币安 `trades`）改为**显示全部 / 手动输入条数**（FX 全量 trades 已在 result 内纯前端去 slice；币安 trades API 现 `?limit=100` 需后端放开）。以 FX 引擎为主、币安旧路由同 |
 | 2026-09-22 | v2.17 | 新增「六·七、代码健康度专项」（全项目 15 模块组逐行深度精读发现，用户指令列最高优先级 P0，置顶 BACKLOG 总池）：QH-001 通用 Webhook 渠道无法添加（alert.py:224 else 分支 `cls(webhook_url=)` 调 WebhookChannel(url=) → TypeError → 400，一行修复 + 补路由级测试）；QH-002 signal_engine 孤岛装配（功能完整 + 38 单测全绿，但 state.py 未装配 / 无路由 / 无 WS publisher → SignalView 空壳，需装配 + signal router + WS 桥接）；QH-003 RiskView 三处接线脱节（不调 fetchRules 用硬编码 12 条 / stats 字段名 total_rejected vs total_rejects 不匹配 / risk.py _risk_logs 永空）；QH-004 style.css:91-387 脚手架残留污染主题变量（--accent/--border/#app 被覆盖，StrategyView var(--text) 反向依赖，先解耦再删 + 清死文件） |
+| 2026-10-08 | v2.18 | 六·六节新增 **WEBGUI-L3（研究 GUI 策略图形标注叠加，复用 DrawingPrimitive）**（用户定案）：策略输出的图形级元素（ZigZag/买卖点/通道矩形/文本）与 `api.plot` 序列绘图**双通道**分层——序列走既有指标链路（后端引擎→WS→lwc series），**图形标注复用 v9.74~v9.79 已落地的 lc-live.html 手工画线 DrawingPrimitive**：shape 与手工同构（`{type, points:[{time,price}], style}`）直接喂 `drawPrim.setShapes()`，同一份 `_drawShape` 渲染、观感与手工绘制完全一致；语义分层：`source:'strategy'` 只读（hitTest 跳过）、不入 localStorage 手工桶、策略停止即清除（或冻结留档开关）、`wait_update` 后增量重推；依赖 WEBGUI-L2 推送通道，前端渲染层几乎零新增，主要工作量在 SDK 声明收集 + gateway 推送。同步七·BACKLOG 总池 |
+| 2026-10-09 | v2.19 | **SDK 执行拓扑定为 Z**（symbol 粒度线程隔离 + 线程内多周期单循环：每品种一工作线程 OS 级并行硬隔离，线程内一个 strategy(api) 用 wait_update+is_changing 处理该品种所有周期，取代原拓扑 B 单循环管全部品种）——满足用户“品种间硬隔离并行、杜绝 A 品种在途订单堵住后续所有品种、规模 <=100、品种间不阻塞则 S/L 无虞”需求（2026-10-09 定案）。**数据供给层压测**（真实 MT5，38 主流品种，30 轮）：单次 IPC tick 0.11ms/bar(count=2) 0.16ms，稳态单轮严格线性（单周期 0.145ms/IPC、三周期 0.155ms/IPC），100 品种×3 周期外推 ≈62ms/轮（占 poll_interval 500ms 的 12%）→ **裁定稳态无需优化**（证伪 FX-FEED-SCALE “50 品种 _poll_loop 需优化”担忧）。**冷启动预热**（count=300 首次拉冷门品种历史 >8s 超时→worker 强杀重建+8s 冷却连锁，100 品种冷启动 30-50s）纳入 SDK Phase M **M7**（懒加载/超时降级/预热解耦）；**feed 多线程隔离**纳入 Phase M **M4**（M4-a snapshot per-api 消除多线程 wait_update 基线污染现存 bug + M4-b per-symbol event 避免惊群）。同步《SDK 阶段实施规划》文档（定案⑨/M4/M6/M7/假设风险/交接状态改 Z + 新增压测结论小节）；一次性压测脚本 bench_mt5_feed.py 实测数据固化后删除；本轮不提交 git（连同 v2.18 遗留待用户指示） |

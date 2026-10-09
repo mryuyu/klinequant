@@ -72,6 +72,10 @@ class BinanceDataFeed:
         self._event = threading.Event()
         self._running = False
 
+        # R5 断线闸门心跳：上次「驱动响应」的单调时刻（收到 WS 推送即刷新，与行情是否变动无关）。
+        #   初值=构造时刻，使刚建好的 feed 不会立即被判 stale。
+        self._last_data_mono: float = time.monotonic()
+
     # ─── 生命周期 ───
 
     def start(self) -> None:
@@ -112,12 +116,16 @@ class BinanceDataFeed:
 
         # ③ 启动 WS
         await self._adapter.start_ws()
+        # 预热 + 订阅 + WS 启动全部完成 → 重置 R5 心跳（避免冷启动 REST 下载时长预先老化）
+        self._last_data_mono = time.monotonic()
 
     # ─── WS 回调（async，loop 线程）───
 
     async def _on_kline(self, kline: Kline) -> None:
         if not self._running:
             return
+        # 收到 WS 推送即视为连接存活（即使 bar/tick 值未变）→ 刷新 R5 心跳，与「休市/清淡」区分
+        self._last_data_mono = time.monotonic()
         symbol = kline.symbol.upper()
         period = kline.timeframe
         key = f"{symbol}/{period}"
@@ -203,6 +211,10 @@ class BinanceDataFeed:
 
     def now_ms(self) -> int:
         return int(time.time() * 1000)
+
+    def seconds_since_update(self) -> float:
+        """R5：距上次收到 WS 推送的秒数（心跳龄）。断线时持续增长，超阈即 degraded。"""
+        return time.monotonic() - self._last_data_mono
 
     # ─── 工具 ───
 

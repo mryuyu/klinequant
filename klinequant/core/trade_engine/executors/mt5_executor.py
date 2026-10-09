@@ -265,13 +265,16 @@ class Mt5Executor:
             comment=last_comment or "close failed",
         )
 
-    def cancel(self, order_ticket: int, symbol: str) -> bool:
-        """撤销挂单"""
+    def cancel(self, order_ticket: int, symbol: str, magic: Optional[int] = None) -> bool:
+        """撤销挂单。
+
+        magic 传入时按订单实际 magic 撤（多 tag 隔离，R1）；None 回落实例级 self._magic。
+        """
         request = {
             "action": TRADE_ACTION_REMOVE,
             "order": order_ticket,
             "symbol": symbol,
-            "magic": self._magic,
+            "magic": magic if magic is not None else self._magic,
         }
         result = self._driver.order_send(request)
         if result is None:
@@ -281,17 +284,69 @@ class Mt5Executor:
 
     # ─── 查询 ───
 
-    def query_positions(self, symbol: str = "") -> List[Dict]:
-        """查询 MT5 持仓"""
-        return self._driver.positions_get(symbol)
+    def query_positions(self, symbol: str = "", magic: Optional[int] = None) -> List[Dict]:
+        """查询 MT5 持仓。magic 非 None 时按 magic 客户端过滤（R3 多策略隔离）。"""
+        return self._filter_magic(self._driver.positions_get(symbol), magic)
 
     def query_account(self) -> Optional[Dict]:
         """查询 MT5 账户信息"""
         return self._driver.account_info()
 
-    def query_orders(self, symbol: str = "") -> List[Dict]:
-        """查询 MT5 挂单"""
-        return self._driver.orders_get(symbol)
+    def query_orders(self, symbol: str = "", magic: Optional[int] = None) -> List[Dict]:
+        """查询 MT5 挂单。magic 非 None 时按 magic 客户端过滤（R3 多策略隔离）。"""
+        return self._filter_magic(self._driver.orders_get(symbol), magic)
+
+    def query_order_outcome(self, client_order_id: str, symbol: str = "") -> Optional[Dict]:
+        """R3 恢复：凭 client_order_id（写入 MT5 comment）反查单笔订单真实结局。
+
+        收敛顺序：挂单仍在→OPEN；持仓可归因（comment 继承自开仓单）→FILLED；
+        历史成交可归因→FILLED（精确量价）；均无→None（查无此单）。
+        注：MT5 无「按 comment 直查」原生接口，持仓/历史成交的 comment 归因为
+        尽力而为（依赖券商传递）；即使误判为 None，reconcile 仍会按 venue 净持仓
+        权威回补 ledger，账本不会错（仅 journal 审计行偶有偏差，已告警）。
+        """
+        # ① 挂单仍在 → OPEN
+        for o in self._driver.orders_get(symbol):
+            if o.get("comment") == client_order_id:
+                return {"state": "OPEN", "ticket": int(o.get("ticket", 0))}
+        # ② 持仓可归因 → FILLED（用持仓量/开仓价作成交代理）
+        for p in self._driver.positions_get(symbol):
+            if p.get("comment") == client_order_id:
+                return {
+                    "state": "FILLED", "ticket": int(p.get("ticket", 0)),
+                    "filled_qty": Decimal(str(p.get("volume", 0))),
+                    "filled_price": Decimal(str(p.get("price_open", 0))),
+                }
+        # ③ 历史成交可归因 → FILLED（精确加权量价）
+        deals = [
+            d for d in self._driver.history_deals_get(0)
+            if d.get("comment") == client_order_id
+        ]
+        if deals:
+            qty = sum(
+                (Decimal(str(d.get("volume", 0))) for d in deals), Decimal("0")
+            )
+            value = sum(
+                (
+                    Decimal(str(d.get("volume", 0))) * Decimal(str(d.get("price", 0)))
+                    for d in deals
+                ),
+                Decimal("0"),
+            )
+            price = (value / qty) if qty else Decimal("0")
+            return {
+                "state": "FILLED", "ticket": int(deals[0].get("order", 0)),
+                "filled_qty": qty, "filled_price": price,
+            }
+        # ④ 查无此单
+        return None
+
+    @staticmethod
+    def _filter_magic(rows: List[Dict], magic: Optional[int]) -> List[Dict]:
+        """magic 非 None 时按 magic 字段客户端过滤（None=不过滤，向后兼容无身份路径）。"""
+        if magic is None:
+            return rows
+        return [r for r in rows if int(r.get("magic", 0)) == magic]
 
     # ─── 内部方法 ───
 

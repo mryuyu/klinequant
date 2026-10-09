@@ -32,6 +32,7 @@ from core.backtest_engine.performance import (
     PerformanceReport,
     Trade,
 )
+from core.indicator_engine.engine import IndicatorEngine
 from core.trade_engine.ledger import ExposureLedger
 from core.trade_engine.resolver import UnifiedResolver
 from core.trade_engine.spec_loader import load_spec_from_mt5
@@ -40,6 +41,7 @@ from protocol.types import SymbolInfo
 from strategy.sdk.api import KqApi
 from strategy.sdk.backtest_executor import BacktestExecutor
 from strategy.sdk.backtest_feed import BacktestDataFeed
+from strategy.sdk.order_id import OrderIdFactory
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +199,10 @@ class BacktestRunner:
             ),
         )
         ledger = ExposureLedger()
-        resolver = UnifiedResolver()
+        resolver = UnifiedResolver(order_id_gen=OrderIdFactory().make)
+        # Phase 1：进程内指标引擎（与实盘同构，回放循环逐 bar 经 wait_update 桥接推进）
+        engine = IndicatorEngine()
+        engine.start()
         api = KqApi(
             symbol=sym,
             period=self._period,
@@ -207,6 +212,8 @@ class BacktestRunner:
             resolver=resolver,
             executor=executor,
             feed=feed,
+            engine=engine,
+            exchange="mt5",
         )
 
         logger.info(f"[{sym}] strategy starting ({len(bars)} bars)")

@@ -195,6 +195,16 @@ class ExposureLedger:
                     return True
             return False
 
+    def is_order_tracked(self, symbol: str, tag: str, order_id: str) -> bool:
+        """该 (symbol, tag) 是否已跟踪此 order_id 的在途记录。
+
+        R3 reconcile 缺口2 去重用：_recover() 已凭 journal 恢复的挂单会被跟踪，
+        reconcile 扫 venue 挂单时据此跳过，避免同一挂单 in_flight 双计。
+        """
+        with self._lock:
+            tp = self._positions.get((symbol, tag))
+            return bool(tp and order_id in tp.pending_orders)
+
     def all_positions(self) -> List[Position]:
         """所有持仓快照"""
         with self._lock:

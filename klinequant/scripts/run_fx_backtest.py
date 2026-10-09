@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from strategy.sdk.backtest_runner import BacktestRunner  # noqa: E402
+from config.accounts import AccountConfigError, resolve_account  # noqa: E402
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -75,6 +76,8 @@ def main():
                         help="手续费模型 fixed/percentage/tiered (default: fixed)")
     parser.add_argument("--fee-value", type=float, default=0.0,
                         help="手续费参数值（fixed=每笔金额, percentage=费率）(default: 0)")
+    parser.add_argument("--account", default="",
+                        help="账户名（config/accounts.yaml，供给 MT5 历史数据连接；default: 空=回落 main/env）")
     parser.add_argument("-v", "--verbose", action="store_true", help="DEBUG 日志")
     args = parser.parse_args()
 
@@ -88,12 +91,26 @@ def main():
 
     strategy_fn = _load_strategy(args.strategy)
 
+    # 解析账户（供给 MT5 历史数据连接；无则 None=回落 env 行为）
+    try:
+        account = resolve_account(args.account or None, market="fx")
+    except AccountConfigError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    mt5_kwargs = account.mt5.init_kwargs() if (account and account.mt5) else None
+
     # 按模型类型组装参数字典（与引擎工厂函数对齐）
     slippage_params = _slippage_params(args.slippage, args.slippage_value)
     fee_params = _fee_params(args.fee, args.fee_value)
 
+    acct_desc = (
+        f"{account.name} (market={account.market}"
+        f"{', main' if account.main else ''}, role={account.role})"
+        if account else "<env default> (no account bound)"
+    )
     print("=" * 60)
     print("  KlineQuant FX Backtest Runner (回测/实盘同构)")
+    print(f"  Account: {acct_desc}")
     print(f"  Symbols: {','.join(symbols)}  Period: {args.period}")
     print(f"  Strategy: {args.strategy}  History: {args.bars} bars")
     print(f"  Capital/symbol: {args.capital}  "
@@ -114,6 +131,7 @@ def main():
         slippage_params=slippage_params,
         fee_model=args.fee,
         fee_params=fee_params,
+        mt5_kwargs=mt5_kwargs,
     )
     report = runner.run()
     print()

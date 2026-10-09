@@ -100,17 +100,24 @@ class BinanceExecutor:
         """提交订单（同步桥接 async REST）。"""
         return self._run(self._submit_async(spec))
 
-    def cancel(self, order_ticket: int, symbol: str) -> bool:
+    def cancel(self, order_ticket: int, symbol: str, magic: Optional[int] = None) -> bool:
+        # 币安撤单按 orderId，无 magic 概念（参数仅为对齐 ExecutorProtocol，R1）
         return self._run(self._cancel_async(order_ticket, symbol))
 
-    def query_positions(self, symbol: str = "") -> List[Dict]:
+    def query_positions(self, symbol: str = "", magic: Optional[int] = None) -> List[Dict]:
+        # 币安无 magic 概念（隔离靠 API key/账户）；magic 仅为对齐 ExecutorProtocol，忽略
         return self._run(self._query_positions_async(symbol))
 
     def query_account(self) -> Optional[Dict]:
         return self._run(self._query_account_async())
 
-    def query_orders(self, symbol: str = "") -> List[Dict]:
+    def query_orders(self, symbol: str = "", magic: Optional[int] = None) -> List[Dict]:
+        # 同 query_positions：币安无 magic，忽略（隔离靠 API key）
         return self._run(self._query_orders_async(symbol))
+
+    def query_order_outcome(self, client_order_id: str, symbol: str = "") -> Optional[Dict]:
+        """R3 恢复：凭 origClientOrderId 向币安反查单笔订单真实结局（权威）。"""
+        return self._run(self._query_order_outcome_async(client_order_id, symbol))
 
     # ─── async 实现 ───
 
@@ -288,8 +295,42 @@ class BinanceExecutor:
                 "volume_current": float(item.get("origQty", "0") or "0"),
                 "price_open": float(item.get("price", "0") or "0"),
                 "time_setup": int(float(item.get("time", 0) or 0) // 1000),
+                # R3 reconcile 缺口2：凭 client_order_id 恢复挂单 in_flight（与 MT5 comment 同义）
+                "client_order_id": item.get("clientOrderId", ""),
+                "magic": self._magic,
             })
         return out
+
+    async def _query_order_outcome_async(
+        self, client_order_id: str, symbol: str = ""
+    ) -> Optional[Dict]:
+        """GET /fapi/v1/order?origClientOrderId=… 按状态映射 OPEN/FILLED/DEAD/None。"""
+        raw: Dict[str, Any] = {"origClientOrderId": client_order_id}
+        if symbol:
+            raw["symbol"] = symbol.upper()
+        params = self._sign_params(raw)
+        resp = await self._client.get(
+            "/fapi/v1/order", params=params, headers=self._headers()
+        )
+        if resp.status_code == 400:
+            # -2013 = Order does not exist → 查无此单
+            return None
+        if resp.status_code != 200:
+            # 其他错误（限频/服务不可用）→ 抛出，调用方判定 venue 异常
+            raise RuntimeError(f"binance queryOrder failed: {self._error_msg(resp)}")
+        data = resp.json()
+        status = data.get("status", "")
+        ticket = int(data.get("orderId", 0) or 0)
+        if status in ("NEW", "PARTIALLY_FILLED"):
+            return {"state": "OPEN", "ticket": ticket}
+        if status == "FILLED":
+            return {
+                "state": "FILLED", "ticket": ticket,
+                "filled_qty": Decimal(str(data.get("executedQty", "0") or "0")),
+                "filled_price": Decimal(str(data.get("avgPrice", "0") or "0")),
+            }
+        # CANCELED / EXPIRED / REJECTED
+        return {"state": "DEAD", "ticket": ticket, "reason": f"binance {status}"}
 
     # ─── 辅助 ───
 

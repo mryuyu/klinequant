@@ -40,6 +40,9 @@ load_env()  # 凭证从 klinequant/.env 加载（已有环境变量不覆盖）
 
 from strategy.sdk.backend import BinanceBackend  # noqa: E402
 from strategy.sdk.live_runner import LiveRunner  # noqa: E402
+from strategy.sdk.order_journal import SqliteJournal  # noqa: E402
+from strategy.sdk.state_store import SqliteStateBackend  # noqa: E402
+from config.accounts import AccountConfigError, resolve_account  # noqa: E402
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -79,6 +82,15 @@ def main():
     parser.add_argument("--period", default="1m", help="驱动周期/币安 interval (default: 1m)")
     parser.add_argument("--strategy", default="fx_simple_test",
                         help="策略模块名 strategies.{name}.strategy (default: fx_simple_test)")
+    parser.add_argument("--account", default="",
+                        help="账户名（config/accounts.yaml，default: 空=回落 main/env）")
+    parser.add_argument("--no-journal", action="store_true",
+                        help="禁用订单意图 WAL（默认启用，data/journal/{account}.db）")
+    parser.add_argument("--no-state", action="store_true",
+                        help="禁用策略语义状态持久化（默认启用，data/state/{account}.db）")
+    parser.add_argument("--stale-guard", type=float, default=120.0,
+                        help="R5 断线闸门阈值秒，feed 心跳龄超此值拒新开仓/放平仓 "
+                             "(default: 120=2分钟, 0=禁用)")
     parser.add_argument("--tag", default="", help="策略标签 (default: =period)")
     parser.add_argument("--poll", type=float, default=0.5, help="兼容参数 (default: 0.5)")
     parser.add_argument("--bars", type=int, default=300, help="K线预热数量 (default: 300)")
@@ -95,12 +107,29 @@ def main():
     if not symbols:
         parser.error("--symbols 解析为空，请至少指定一个交易对")
 
-    # 币安 Futures Demo 配置（.env / 环境变量）
-    rest_base = os.getenv("BINANCE_FUTURES_REST_BASE", "https://demo-fapi.binance.com")
-    ws_base = os.getenv("BINANCE_FUTURES_WS_BASE", "wss://demo-fstream.binance.com/ws")
-    api_key = os.getenv("BINANCE_FUTURES_API_KEY", "")
-    api_secret = os.getenv("BINANCE_FUTURES_API_SECRET", "")
-    proxy = os.getenv("HTTP_PROXY", "http://127.0.0.1:7897") or None
+    # 解析账户（CLI --account > env KQ_ACCOUNT > crypto 的 main:true；无则 None=回落 env）
+    try:
+        account = resolve_account(args.account or None, market="crypto")
+    except AccountConfigError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+    # 币安 Futures Demo 配置：账户优先，否则 .env / 环境变量（零破坏）
+    if account is not None and account.binance is not None:
+        b = account.binance
+        rest_base = b.rest_base or os.getenv(
+            "BINANCE_FUTURES_REST_BASE", "https://demo-fapi.binance.com")
+        ws_base = b.ws_base or os.getenv(
+            "BINANCE_FUTURES_WS_BASE", "wss://demo-fstream.binance.com/ws")
+        api_key = b.api_key
+        api_secret = b.api_secret
+        proxy = b.proxy or None
+    else:
+        rest_base = os.getenv("BINANCE_FUTURES_REST_BASE", "https://demo-fapi.binance.com")
+        ws_base = os.getenv("BINANCE_FUTURES_WS_BASE", "wss://demo-fstream.binance.com/ws")
+        api_key = os.getenv("BINANCE_FUTURES_API_KEY", "")
+        api_secret = os.getenv("BINANCE_FUTURES_API_SECRET", "")
+        proxy = os.getenv("HTTP_PROXY", "http://127.0.0.1:7897") or None
 
     if not api_key or not api_secret:
         parser.error(
@@ -114,13 +143,24 @@ def main():
         f"{args.duration:.0f}s (auto-flatten at timeout)"
         if args.duration > 0 else "unlimited"
     )
+    stale_desc = (
+        f"{args.stale_guard:.0f}s (reject OPEN if feed degraded)"
+        if args.stale_guard > 0 else "disabled"
+    )
+    acct_desc = (
+        f"{account.name} (market={account.market}"
+        f"{', main' if account.main else ''}, role={account.role})"
+        if account else "<env default> (no account bound)"
+    )
     print("=" * 60)
     print("  KlineQuant Crypto Live Runner")
+    print(f"  Account: {acct_desc}")
     print(f"  Symbols: {','.join(symbols)}  Period: {args.period}")
     print(f"  Strategy: {args.strategy} (KqApi isomorphic, same as FX)")
     print(f"  Mode: Binance Futures Demo (real MARKET orders, One-way)")
     print(f"  REST: {rest_base}")
     print(f"  Leverage: x{args.leverage}   Duration: {dur_desc}")
+    print(f"  Stale guard: {stale_desc}")
     print("=" * 60)
     print()
     print("  Ctrl+C to stop gracefully (auto-flatten on exit)")
@@ -136,7 +176,19 @@ def main():
         leverage=args.leverage,
         poll_interval=args.poll,
         bar_count=args.bars,
+        account=account,
     )
+
+    # R2 订单意图 WAL（崩溃恢复账本级真相源，先写后发；--no-journal 关闭）
+    journal = None
+    if not args.no_journal:
+        acct_key = account.name if account else "default"
+        journal = SqliteJournal(ROOT / "data" / "journal" / f"{acct_key}.db")
+    # R4 策略语义状态持久化（崩溃恢复语义级快照，自动 load/save；--no-state 关闭）
+    state_backend = None
+    if not args.no_state:
+        acct_key = account.name if account else "default"
+        state_backend = SqliteStateBackend(ROOT / "data" / "state" / f"{acct_key}.db")
     runner = LiveRunner(
         backend,
         symbols=symbols,
@@ -146,6 +198,9 @@ def main():
         poll_interval=args.poll,
         bar_count=args.bars,
         duration=args.duration if args.duration > 0 else None,
+        journal=journal,
+        state_backend=state_backend,
+        stale_threshold=args.stale_guard if args.stale_guard > 0 else None,
     )
     runner.run()
 

@@ -17,14 +17,24 @@ import logging
 import threading
 import time
 from decimal import Decimal
-from typing import Dict, List, Optional, Protocol, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    runtime_checkable,
+)
 from urllib.parse import urlencode
+
+if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合 config 层
+    from config.accounts import AccountConfig
 
 from core.trade_engine.executors.mt5_executor import Mt5Executor
 from core.trade_engine.ledger import ExposureLedger
 from core.trade_engine.spec_loader import load_spec_from_mt5
 from gateway.market_sources.mt5_driver import Mt5Api
-from protocol.types import SymbolInfo
+from protocol.types import Offset, OrderSide, SymbolInfo
 from strategy.sdk.api import DataFeedProtocol, ExecutorProtocol
 from strategy.sdk.data_feed import Mt5DataFeed
 
@@ -34,31 +44,50 @@ logger = logging.getLogger(__name__)
 def _reconcile_net_positions(
     executor: ExecutorProtocol, ledger: ExposureLedger,
     symbols: List[str], tag: str, venue: str = "venue",
+    magic: Optional[int] = None,
 ) -> None:
-    """逐品种从 venue 对账恢复净持仓到 ledger（MT5 同形 dict）。
+    """逐品种从 venue 对账恢复净持仓 + 挂单在途到 ledger（MT5 同形 dict）。
 
     净敞口 = 该品种所有持仓带符号求和（type 0=BUY/多，1=SELL/空）。
-    Mt5Backend / BinanceBackend 共用（两者 query_positions 均返回 MT5 同形 dict）。
+    magic 非 None 时 query_positions/query_orders 按 magic 隔离（只恢复本策略）。
+    挂单 in_flight 恢复（缺口2）：venue 仍挂着的单凭 client_order_id 补回 in_flight，
+    已被 _recover() 跟踪的（journal 已知）据 is_order_tracked 跳过，避免双计。
+    Mt5Backend / BinanceBackend 共用（两者 query_* 均返回 MT5 同形 dict）。
     """
     any_pos = False
     for sym in symbols:
-        positions = executor.query_positions(sym)
-        if not positions:
-            continue
-        any_pos = True
-        total_volume = Decimal("0")
-        total_price = Decimal("0")
-        for p in positions:
-            vol = Decimal(str(p.get("volume", 0)))
-            ptype = int(p.get("type", 0))  # 0=BUY, 1=SELL
-            price = Decimal(str(p.get("price_open", 0)))
-            total_volume += vol if ptype == 0 else -vol
-            total_price = price
-        if total_volume != 0:
-            ledger.sync_from_venue(sym, tag, total_volume, total_price)
+        positions = executor.query_positions(sym, magic)
+        if positions:
+            any_pos = True
+            total_volume = Decimal("0")
+            total_price = Decimal("0")
+            for p in positions:
+                vol = Decimal(str(p.get("volume", 0)))
+                ptype = int(p.get("type", 0))  # 0=BUY, 1=SELL
+                price = Decimal(str(p.get("price_open", 0)))
+                total_volume += vol if ptype == 0 else -vol
+                total_price = price
+            if total_volume != 0:
+                ledger.sync_from_venue(sym, tag, total_volume, total_price)
+                logger.info(
+                    f"Reconciled {sym} from {venue}: volume={total_volume} "
+                    f"avg_price={total_price}"
+                )
+        # 缺口2：venue 挂单恢复 in_flight（凭 client_order_id 去重，跳过 _recover 已跟踪的）
+        for o in executor.query_orders(sym, magic):
+            coid = (
+                o.get("client_order_id") or o.get("comment") or str(o.get("ticket", ""))
+            )
+            if not coid or ledger.is_order_tracked(sym, tag, coid):
+                continue
+            vol = Decimal(str(o.get("volume_current", o.get("volume_initial", 0))))
+            if vol <= 0:
+                continue
+            side = OrderSide.BUY if int(o.get("type", 0)) % 2 == 0 else OrderSide.SELL
+            ledger.on_order_accepted(sym, tag, coid, side, Offset.OPEN, vol)
             logger.info(
-                f"Reconciled {sym} from {venue}: volume={total_volume} "
-                f"avg_price={total_price}"
+                f"Reconciled in-flight {sym} {coid} from {venue}: "
+                f"side={side.value} vol={vol} (gap-2 orphan pending)"
             )
     if not any_pos:
         logger.info(f"No existing {venue} positions, ledger starts clean")
@@ -93,9 +122,9 @@ class MarketBackend(Protocol):
 
     def reconcile_positions(
         self, executor: ExecutorProtocol, ledger: ExposureLedger,
-        symbols: List[str], tag: str,
+        symbols: List[str], tag: str, magic: Optional[int] = None,
     ) -> None:
-        """启动时从 venue 对账恢复持仓到 ledger。"""
+        """启动时从 venue 对账恢复持仓到 ledger（magic 非 None 时按 magic 隔离）。"""
         ...
 
     def shutdown(self) -> None:
@@ -113,19 +142,40 @@ class Mt5Backend:
     def __init__(
         self, *, magic: int = 202609, deviation: int = 20,
         mt5_kwargs: Optional[dict] = None,
+        account: Optional["AccountConfig"] = None,
     ):
         self._magic = magic
         self._deviation = deviation
         self._mt5_kwargs = mt5_kwargs
+        self._account = account
         self._driver: Optional[Mt5Api] = None
 
     @property
     def driver(self) -> Optional[Mt5Api]:
         return self._driver
 
+    @property
+    def account_name(self) -> str:
+        """绑定账户名（无账户配置 → 空串，LiveRunner 回落无身份路径）。"""
+        return self._account.name if self._account is not None else ""
+
+    @property
+    def account_magic(self) -> Optional[int]:
+        """账户级显式 magic 覆盖（None=按 (account, tag) 派生）。"""
+        return self._account.magic if self._account is not None else None
+
+    @property
+    def exchange(self) -> str:
+        """交易所标识（引擎 KlineKey / ind_key 用；与 gateway 市场源命名一致）。"""
+        return "mt5"
+
     def connect(self) -> None:
         self._driver = Mt5Api()
-        kwargs = self._mt5_kwargs or Mt5Api.init_kwargs()
+        # 账户配置优先（Phase 0）：account.mt5 生成连接参数；否则回落 mt5_kwargs / env（零破坏）
+        if self._account is not None and self._account.mt5 is not None:
+            kwargs = self._account.mt5.init_kwargs()
+        else:
+            kwargs = self._mt5_kwargs or Mt5Api.init_kwargs()
         if not self._driver.initialize(**kwargs):
             raise RuntimeError(
                 "MT5 initialize failed. 请确认：\n"
@@ -165,10 +215,10 @@ class Mt5Backend:
 
     def reconcile_positions(
         self, executor: ExecutorProtocol, ledger: ExposureLedger,
-        symbols: List[str], tag: str,
+        symbols: List[str], tag: str, magic: Optional[int] = None,
     ) -> None:
         """逐品种从 MT5 对账恢复持仓（净敞口 = 该品种所有持仓带符号求和）"""
-        _reconcile_net_positions(executor, ledger, symbols, tag, venue="MT5")
+        _reconcile_net_positions(executor, ledger, symbols, tag, venue="MT5", magic=magic)
 
     def shutdown(self) -> None:
         if self._driver:
@@ -199,9 +249,20 @@ class BinanceBackend:
         poll_interval: float = 0.5,
         bar_count: int = 300,
         timeout: float = 15.0,
+        account: Optional["AccountConfig"] = None,
     ):
         if isinstance(symbols, str):
             symbols = [symbols]
+        # 账户配置供给（Phase 0）：显式参数为空时由 account.binance 回填（account 为权威源）
+        if account is not None and account.binance is not None:
+            b = account.binance
+            api_key = api_key or b.api_key
+            api_secret = api_secret or b.api_secret
+            proxy = proxy or (b.proxy or None)
+            if b.rest_base:
+                rest_base = b.rest_base
+            if b.ws_base:
+                ws_base = b.ws_base
         self._symbols = [s.upper() for s in symbols]
         self._rest_base = rest_base
         self._ws_base = ws_base
@@ -213,12 +274,28 @@ class BinanceBackend:
         self._poll_interval = poll_interval
         self._bar_count = bar_count
         self._timeout = timeout
+        self._account = account
 
         # event loop 线程（connect 时懒创建，保持 __init__ 无副作用）
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._adapter = None            # BinanceFuturesAdapter
         self._client = None             # httpx.AsyncClient（下单/查询）
+
+    @property
+    def account_name(self) -> str:
+        """绑定账户名（无账户配置 → 空串，LiveRunner 回落无身份路径）。"""
+        return self._account.name if self._account is not None else ""
+
+    @property
+    def account_magic(self) -> Optional[int]:
+        """账户级显式 magic 覆盖（None=按 (account, tag) 派生）。"""
+        return self._account.magic if self._account is not None else None
+
+    @property
+    def exchange(self) -> str:
+        """交易所标识（引擎 KlineKey / ind_key 用；与 gateway 市场源命名一致）。"""
+        return "binance"
 
     # ─── event loop 线程 ───
 
@@ -353,10 +430,10 @@ class BinanceBackend:
 
     def reconcile_positions(
         self, executor: ExecutorProtocol, ledger: ExposureLedger,
-        symbols: List[str], tag: str,
+        symbols: List[str], tag: str, magic: Optional[int] = None,
     ) -> None:
-        """逐品种从币安对账恢复净持仓（One-way，同 MT5）"""
-        _reconcile_net_positions(executor, ledger, symbols, tag, venue="Binance")
+        """逐品种从币安对账恢复持仓（One-way，同 MT5）"""
+        _reconcile_net_positions(executor, ledger, symbols, tag, venue="Binance", magic=magic)
 
     def shutdown(self) -> None:
         if self._loop and self._loop.is_running():

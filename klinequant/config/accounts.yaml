@@ -1,0 +1,51 @@
+# KlineQuant 账户配置（Phase 0：多账户 / 本地 / 远程，一进程一账户）
+#
+# 约定：
+#   - 凭证一律以 ${ENV_VAR} 引用，真实值放 klinequant/.env，明文绝不落本文件。
+#   - 插值：${VAR} 严格（未设置即报错，不回退空串）；${VAR:-default} 允许缺省。
+#     MT5 连接参数全可选，用 ${VAR:-}（缺省=连本机已登录终端）；加密凭证用严格 ${VAR}
+#     （仅在实际 --account 选用该账户时才校验，故不影响 FX 主账户运行）。
+#   - 解析优先级：CLI --account > env KQ_ACCOUNT > main:true。
+#   - market: fx 用 mt5 段；market: crypto 用 binance 段。
+#   - role: standalone（默认）| lead | follower（后两者 Phase 3 信号分发用，本阶段仅预留）。
+#   - 远程外汇账户两种形态：①本机多终端各自登录远程平台（server 平台名 + host IP）属本配置层；
+#     ②终端在远程机器（VPS）须部署 OrderAgent，归 Phase 3。
+
+accounts:
+  # ─── 外汇主账户（MT5 Demo）───
+  - name: fx-demo-main
+    market: fx
+    main: true
+    role: standalone
+    mt5:
+      terminal_path: "${MT5_TERMINAL_PATH:-}"   # 空=连本机已运行终端；多账户=各自 portable 目录
+      login: "${MT5_LOGIN:-}"                    # 账户号（空=用终端已登录账户）
+      password: "${MT5_PASSWORD:-}"
+      server: "${MT5_SERVER:-}"                  # 平台名称（远程平台=登录参数指向远程服务器）
+      host: ""                                   # 可选 IP（终端在远程机器时归 Phase 3 OrderAgent）
+
+  # ─── 加密账户（币安 USDT-M Futures Demo，APIKEY 天然远程）───
+  - name: crypto-demo
+    market: crypto
+    role: standalone
+    binance:
+      api_key: "${BINANCE_FUTURES_API_KEY}"
+      api_secret: "${BINANCE_FUTURES_API_SECRET}"
+      testnet: true
+      proxy: "${HTTP_PROXY:-}"
+      rest_base: "${BINANCE_FUTURES_REST_BASE:-https://demo-fapi.binance.com}"
+      ws_base: "${BINANCE_FUTURES_WS_BASE:-wss://demo-fstream.binance.com/ws}"
+
+  # ─── follower 形态（Phase 3 实施时启用，示例）───
+  # - name: fx-follower-1
+  #   market: fx
+  #   role: follower
+  #   scale: 0.5                          # 余额比例 / 固定倍数
+  #   symbol_map: { EURUSD: EURUSD.m }    # 券商后缀差异
+  #   lead_endpoint: "tcp://127.0.0.1:5503"
+  #   token: "${KQ_LEAD_TOKEN}"
+  #   mt5:
+  #     terminal_path: "${MT5_TERMINAL_PATH_2:-}"
+  #     login: "${MT5_LOGIN_2:-}"
+  #     password: "${MT5_PASSWORD_2:-}"
+  #     server: "${MT5_SERVER_2:-}"

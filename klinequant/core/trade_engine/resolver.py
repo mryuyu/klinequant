@@ -11,13 +11,14 @@
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from protocol.types import (
     Offset,
@@ -28,6 +29,17 @@ from protocol.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def derive_magic(account: str, tag: str) -> int:
+    """按 (account, tag) 稳定派生 MT5 magic number（R1 身份化）。
+
+    同一 (account, tag) 恒定映射到同一 magic（跨进程/重启稳定），不同组合以
+    sha256 散列降低碰撞。取值区间 [1, 2^31-1]（MT5 magic 为 int32，0 保留为
+    "无 magic" 语义，故规避）。account 为空时调用方应回落实例级 magic，不调本函数。
+    """
+    digest = hashlib.sha256(f"{account}|{tag}".encode("utf-8")).digest()
+    return (int.from_bytes(digest[:4], "big") & 0x7FFFFFFF) or 1
 
 
 # ─────────────────────────────────────────────
@@ -47,6 +59,8 @@ class OrderRequest:
     stop_price: Optional[Decimal] = None
     tif: Optional[Tif] = None     # None = 用市场默认
     client_order_id: str = ""
+    account: str = ""             # R1：账户名（magic 派生 + client_order_id 结构化用）
+    magic: Optional[int] = None   # R1：显式 magic 覆盖（None=按 (account, tag) 派生）
 
 
 @dataclass
@@ -188,8 +202,11 @@ class UnifiedResolver:
       3. 构造 legs（OPEN 直接构造，CLOSE 委托 ClosePolicy）
     """
 
-    def __init__(self, rounding=ROUND_HALF_UP):
+    def __init__(self, rounding=ROUND_HALF_UP, order_id_gen: Optional[Callable] = None):
         self._rounding = rounding
+        # R1：注入式 client_order_id 生成器 Callable[[OrderRequest], str]；
+        # None 时回落旧的随机 uuid 形态（零破坏）。
+        self._order_id_gen = order_id_gen
 
     def resolve(
         self,
@@ -226,9 +243,12 @@ class UnifiedResolver:
         if rej:
             return Resolution(rejection=rej)
 
-        # ④ 生成 client_order_id
+        # ④ 生成 client_order_id（注入式生成器优先；否则回落随机 uuid）
         if not req.client_order_id:
-            req.client_order_id = f"KQ-{uuid.uuid4().hex[:16]}"
+            if self._order_id_gen is not None:
+                req.client_order_id = self._order_id_gen(req)
+            else:
+                req.client_order_id = f"KQ-{uuid.uuid4().hex[:16]}"
 
         # ⑤ 构造 legs
         if req.offset == Offset.CLOSE:
@@ -251,6 +271,14 @@ class UnifiedResolver:
                 client_order_id=req.client_order_id,
                 tag=req.tag,
             )]
+
+        # ⑥ magic 身份化（R1）：显式覆盖 > 按 (account, tag) 派生 > 保持 leg 默认
+        magic = req.magic
+        if magic is None and req.account:
+            magic = derive_magic(req.account, req.tag)
+        if magic is not None:
+            for leg in legs:
+                leg.magic = magic
 
         return Resolution(specs=legs)
 

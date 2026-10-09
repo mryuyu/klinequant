@@ -64,6 +64,10 @@ class Mt5DataFeed:
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
+        # R5 断线闸门心跳：上次「驱动响应」的单调时刻（连上就每轮刷新，与行情是否变动无关）。
+        #   初值=构造时刻，使刚建好的 feed 不会立即被判 stale。
+        self._last_data_mono: float = time.monotonic()
+
     # ─── 生命周期 ───
 
     def start(self) -> None:
@@ -141,12 +145,18 @@ class Mt5DataFeed:
         """当前时间戳（Unix ms）"""
         return int(time.time() * 1000)
 
+    def seconds_since_update(self) -> float:
+        """R5：距上次驱动成功响应的秒数（心跳龄）。断线时持续增长，超阈即 degraded。"""
+        return time.monotonic() - self._last_data_mono
+
     # ─── 内部轮询 ───
 
     def _poll_loop(self) -> None:
         """后台轮询主循环"""
         # 初始加载 bars
         self._load_initial_bars()
+        # 初始加载（冷门品种可能耗时数十秒）完成后重置心跳，避免冷启动下载时长预先老化心跳
+        self._last_data_mono = time.monotonic()
 
         while self._running:
             try:
@@ -196,6 +206,8 @@ class Mt5DataFeed:
         raw = self._driver.symbol_info_tick(symbol)
         if raw is None:
             return False
+        # 驱动响应即视为连接存活（即使价格未变）→ 刷新 R5 心跳，与「休市/清淡」区分
+        self._last_data_mono = time.monotonic()
 
         bid = Decimal(str(raw.get("bid", 0)))
         ask = Decimal(str(raw.get("ask", 0)))
@@ -240,6 +252,7 @@ class Mt5DataFeed:
         rows = self._driver.copy_rates_from_pos(symbol, tf_const, 0, 2)
         if not rows:
             return False
+        self._last_data_mono = time.monotonic()  # 驱动响应→刷新 R5 心跳
 
         key = f"{symbol}/{period}"
         latest_row = rows[-1]
@@ -255,6 +268,14 @@ class Mt5DataFeed:
             last_bar = bars[-1]
             # 新 bar（time 不同）或 close 变化
             if new_bar["timestamp"] != last_bar["timestamp"]:
+                # M2：新 bar 出现时，rows[0] 是刚收盘那根的终端终值，而本地
+                # bars[-1] 只是最后一次轮询（最多一个 poll_interval 前）的快照，
+                # 缺失收盘前最后 ≤poll_interval 的 H/L 极值。先用 rows[0] 回填
+                # bars[-1]（数据已取到，零额外 IPC），再 append 新 bar。
+                if len(rows) >= 2:
+                    closed_bar = self._row_to_bar(rows[0], symbol, period)
+                    if closed_bar["timestamp"] == last_bar["timestamp"]:
+                        bars[-1] = closed_bar
                 bars.append(new_bar)
                 # 保持长度限制
                 if len(bars) > self._bar_count:

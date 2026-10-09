@@ -54,7 +54,7 @@ def _run_mt5_runner(symbols, positions):
         mock_spec.side_effect = lambda drv, sym: _fx_spec(sym)
 
         executor = MockExec.return_value
-        executor.query_positions.side_effect = lambda sym="": [
+        executor.query_positions.side_effect = lambda sym="", magic=None: [
             p for p in positions if p.get("symbol") == sym
         ]
         executor.query_orders.return_value = []
@@ -204,10 +204,13 @@ def test_binance_reconcile_net_position():
     ledger = ExposureLedger()
 
     class _StubExec:
-        def query_positions(self, symbol=""):
+        def query_positions(self, symbol="", magic=None):
             if symbol != "BTCUSDT":
                 return []
             return [{"type": 0, "volume": 0.5, "price_open": 50000.0}]
+
+        def query_orders(self, symbol="", magic=None):
+            return []
 
     backend.reconcile_positions(_StubExec(), ledger, ["BTCUSDT"], "1m")
     assert ledger.net_position("BTCUSDT") == Decimal("0.5")

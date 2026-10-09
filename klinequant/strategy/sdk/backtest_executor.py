@@ -137,12 +137,12 @@ class BacktestExecutor:
             comment=f"backtest fill @{fill_price}",
         )
 
-    def cancel(self, order_ticket: int, symbol: str) -> bool:
-        """回测 v1 无挂单，撤单恒 False"""
+    def cancel(self, order_ticket: int, symbol: str, magic: Optional[int] = None) -> bool:
+        """回测 v1 无挂单，撤单恒 False（magic 仅为对齐 ExecutorProtocol）"""
         return False
 
-    def query_positions(self, symbol: str = "") -> List[Dict]:
-        """模拟持仓（MT5 形状 dict，供 KqApi.flatten / 对账消费）"""
+    def query_positions(self, symbol: str = "", magic: Optional[int] = None) -> List[Dict]:
+        """模拟持仓（MT5 形状 dict，供 KqApi.flatten / 对账消费）。magic 回测忽略。"""
         out: List[Dict] = []
         for sym, pos in self._pos.items():
             if symbol and sym != symbol.upper():
@@ -184,9 +184,13 @@ class BacktestExecutor:
             "currency": "ACCOUNT",
         }
 
-    def query_orders(self, symbol: str = "") -> List[Dict]:
+    def query_orders(self, symbol: str = "", magic: Optional[int] = None) -> List[Dict]:
         """回测 v1 无挂单"""
         return []
+
+    def query_order_outcome(self, client_order_id: str, symbol: str = "") -> Optional[Dict]:
+        """回测无崩溃恢复（journal 恒为 None），恒返 None。"""
+        return None
 
     # ─── 绩效采样 ───
 

@@ -13,10 +13,16 @@ from __future__ import annotations
 import logging
 import time
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
 
 from core.trade_engine.ledger import ExposureLedger
-from core.trade_engine.resolver import OrderRequest, Resolution, UnifiedResolver, VenueOrderSpec
+from core.trade_engine.resolver import (
+    OrderRequest,
+    Resolution,
+    UnifiedResolver,
+    VenueOrderSpec,
+    derive_magic,
+)
 from protocol.types import (
     Account,
     Offset,
@@ -29,6 +35,12 @@ from protocol.types import (
     Tick,
     Tif,
 )
+from strategy.sdk.state_store import StateStore
+
+if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合 order_journal / indicator_engine
+    from core.indicator_engine.engine import IndicatorEngine
+    from strategy.sdk.indic import IndicApi
+    from strategy.sdk.order_journal import Journal
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +53,36 @@ class DataFeedProtocol(Protocol):
     def wait_update(self, deadline: Optional[float] = None) -> bool: ...
     def is_changing(self, obj: Any, field: Optional[str] = None) -> bool: ...
     def now_ms(self) -> int: ...
+    def seconds_since_update(self) -> float:
+        """R5 断线闸门：距上次从 venue 收到数据的秒数（心跳年龄）。
+
+        实盘 feed 以「驱动响应」为心跳（连上就每轮刷新，与行情是否变动无关），
+        故能区分「断线」与「休市/清淡」；回测 feed 恒返 0.0（永不 stale）。
+        """
+        ...
 
 
 class ExecutorProtocol(Protocol):
-    """执行器协议（MT5 / Simulator 各实现一套）"""
+    """执行器协议（MT5 / Binance / Simulator 各实现一套）"""
 
     def submit(self, spec: VenueOrderSpec) -> Any: ...
-    def cancel(self, order_ticket: int, symbol: str) -> bool: ...
-    def query_positions(self, symbol: str = "") -> list: ...
+    def cancel(self, order_ticket: int, symbol: str, magic: Optional[int] = None) -> bool: ...
+    def query_positions(self, symbol: str = "", magic: Optional[int] = None) -> list: ...
     def query_account(self) -> Optional[dict]: ...
-    def query_orders(self, symbol: str = "") -> list: ...
+    def query_orders(self, symbol: str = "", magic: Optional[int] = None) -> list: ...
+    def query_order_outcome(self, client_order_id: str, symbol: str = "") -> Optional[dict]:
+        """R3 恢复：凭 client_order_id 向 venue 反查单笔订单真实结局。
+
+        Returns:
+            None                                  → 查无此单（调用方标 DEAD 释放）
+            {"state": "OPEN",   "ticket": int}    → 挂单仍在（补 in_flight + ticket）
+            {"state": "FILLED", "ticket": int,
+             "filled_qty": Decimal, "filled_price": Decimal}  → 已成交（补 ledger 持仓）
+            {"state": "DEAD",   "ticket": int, "reason": str} → 已终结（标 DEAD）
+        Raises:
+            连接异常向上抛（调用方据此判定 venue 不可达 → 重试+告警，不进策略循环）。
+        """
+        ...
 
 
 class KqApi:
@@ -65,6 +97,15 @@ class KqApi:
         resolver: 订单解析器
         executor: 交易执行器
         feed: 数据源
+        account_name: 绑定账户名（R1 身份化：magic 派生 + client_order_id 结构化）
+        magic: 账户级显式 magic 覆盖（None=按 (account_name, tag) 派生）
+        journal: 订单意图 WAL（R2，None=不落盘，回测/单测默认）
+        state: 策略语义状态存储（R4，策略级共享一份；None=本实例独占内存态，回测/单测默认）
+        stale_threshold: R5 断线闸门阈值（秒）；feed 心跳龄超此值时拒 OPEN、放 CLOSE；
+                         None=不启用（回测/单测默认）
+        engine: Phase 1 进程内 IndicatorEngine（runner 注入；None=api.INDIC() 不可用）
+        exchange: 指标引擎 KlineKey 的 exchange 维度（默认 mt5；runner 按 backend 注入）
+        engine_lock: 多品种线程共享同一 engine 时的串行化锁（拓扑 Z；None=本实例独占）
     """
 
     def __init__(
@@ -77,6 +118,14 @@ class KqApi:
         resolver: UnifiedResolver,
         executor: ExecutorProtocol,
         feed: DataFeedProtocol,
+        account_name: str = "",
+        magic: Optional[int] = None,
+        journal: Optional["Journal"] = None,
+        state: Optional[StateStore] = None,
+        stale_threshold: Optional[float] = None,
+        engine: Optional["IndicatorEngine"] = None,
+        exchange: str = "mt5",
+        engine_lock: Optional[Any] = None,
     ):
         self._symbol = symbol
         self._period = period
@@ -86,7 +135,25 @@ class KqApi:
         self._resolver = resolver
         self._executor = executor
         self._feed = feed
-        self._state: Dict[str, Any] = {}
+        # R1 身份化 magic：显式覆盖 > 按 (account, tag) 派生 > None（回落执行器实例级）
+        self._account_name = account_name
+        if magic is not None:
+            self._magic: Optional[int] = magic
+        elif account_name:
+            self._magic = derive_magic(account_name, tag)
+        else:
+            self._magic = None
+        # R2 订单意图 WAL（None=不落盘）
+        self._journal = journal
+        # R4 策略语义状态（None=本实例独占内存态；LiveRunner 注入策略级共享 StateStore）
+        self._state: StateStore = state if state is not None else StateStore()
+        # R5 断线闸门阈值（秒；None=不启用）
+        self._stale_threshold = stale_threshold
+        # Phase 1 声明式指标：进程内 IndicatorEngine（runner 注入；None=api.INDIC() 不可用）
+        self._engine = engine
+        self._exchange = exchange
+        self._engine_lock = engine_lock
+        self._indic: Optional["IndicApi"] = None
         # 订单 ticket 跟踪（cancel 用）
         self._order_tickets: Dict[str, int] = {}  # client_order_id → MT5 ticket
         # 运行截止时间（Unix 秒）：到点后 wait_update 返回 False，策略优雅退出
@@ -113,6 +180,7 @@ class KqApi:
                 timeout = deadline
 
             if self._feed.wait_update(timeout):
+                self._advance_indicators()
                 return True
 
             # 本轮无数据：有时限则继续等到点（休市/静默不误退出），无时限返回 False
@@ -124,8 +192,41 @@ class KqApi:
         self._run_until = unix_ts
 
     def is_changing(self, obj, field: str = None) -> bool:
-        """检查某对象自上次 wait_update 后是否有变化。"""
+        """检查某对象自上次 wait_update 后是否有变化。
+
+        obj 可为 tick / bars / 字符串 key，或 Phase 1 的 IndicatorView/FieldView
+        （后者经 ``_kq_bar_key`` 映射到底层 bar 版本 key：bar 变即指标可能变）。
+        """
+        bar_key = getattr(obj, "_kq_bar_key", None)
+        if bar_key is not None:
+            return self._feed.is_changing(bar_key, field)
         return self._feed.is_changing(obj, field)
+
+    # ═══════════ 声明式指标（Phase 1） ═══════════
+
+    def INDIC(self) -> "IndicApi":  # noqa: N802  (规格定名：大写 api.INDIC())
+        """声明式指标接口（计算全部下沉进程内 IndicatorEngine，四端同源同参）。
+
+        返回的 IndicApi 惰性构造并缓存；``indic.macd(fast, slow, m)`` 等声明指标，
+        返回 IndicatorView 活视图（``view.dif[-1]`` 标量比较、可迭代为序列、
+        ``is_changing(view)`` 可用）。runner 未注入 engine 时调用抛 RuntimeError。
+        """
+        if self._indic is None:
+            if self._engine is None:
+                raise RuntimeError(
+                    "api.INDIC() 需要 runner 注入 IndicatorEngine（当前未注入）"
+                )
+            from strategy.sdk.indic import IndicApi
+            self._indic = IndicApi(
+                self._engine, self._feed, self._symbol, self._exchange,
+                self._period, lock=self._engine_lock,
+            )
+        return self._indic
+
+    def _advance_indicators(self) -> None:
+        """wait_update 桥接：本轮数据到达后推进已声明指标的引擎增量（Live/Backtest 同构）。"""
+        if self._indic is not None:
+            self._indic.advance()
 
     # ═══════════ 行情数据 ═══════════
 
@@ -224,6 +325,18 @@ class KqApi:
         """
         sym = symbol or self._symbol
 
+        # R5 断线闸门：feed 心跳龄超阈（degraded）→ 拒新开仓、放行平仓。
+        #   只减风险不加风险：断线时基于陈旧行情开新仓不可控，但平仓（flatten/CLOSE）永远放行。
+        if self._stale_threshold is not None and offset == Offset.OPEN:
+            age = self._feed.seconds_since_update()
+            if age > self._stale_threshold:
+                reason = (
+                    f"stale guard: no market data for {age:.0f}s "
+                    f"(> {self._stale_threshold:.0f}s threshold), OPEN rejected (feed degraded)"
+                )
+                logger.warning(f"[STALE-GUARD] {reason} [{sym}]")
+                return OrderResult(ok=False, reason=reason)
+
         # ① 构造 OrderRequest
         req = OrderRequest(
             symbol=sym,
@@ -235,6 +348,8 @@ class KqApi:
             price=price,
             stop_price=stop_price,
             tif=tif,
+            account=self._account_name,
+            magic=self._magic,
         )
 
         # ② Resolver 验证 + 量化
@@ -256,15 +371,43 @@ class KqApi:
         # ③ 执行每个 leg（一期只有一个 leg）
         last_result = None
         for venue_spec in resolution.specs:
+            coid = venue_spec.client_order_id
             # 记账：accepted
             self._ledger.on_order_accepted(
-                sym, self._tag, venue_spec.client_order_id,
+                sym, self._tag, coid,
                 venue_spec.side, venue_spec.offset, venue_spec.qty,
             )
 
-            # 提交到 venue
-            submit_res = self._executor.submit(venue_spec)
+            # WAL：先写后发（submit 之前落盘意图，崩溃后 R3 凭 client_order_id 反查）
+            if self._journal is not None:
+                self._journal.begin(
+                    client_order_id=coid, account=self._account_name, tag=self._tag,
+                    symbol=sym, side=venue_spec.side.value, offset=venue_spec.offset.value,
+                    qty=venue_spec.qty, price=venue_spec.price,
+                )
+
+            # 提交到 venue（异常 → 结局未知，写 UNKNOWN，绝不静默；保守保持在途不释放）
+            try:
+                submit_res = self._executor.submit(venue_spec)
+            except Exception as e:
+                logger.error(f"submit exception for {coid}: {e}", exc_info=True)
+                if self._journal is not None:
+                    self._journal.finish(coid, "UNKNOWN", reason=f"submit exception: {e}")
+                return OrderResult(ok=False, reason=f"submit exception: {e}")
             last_result = submit_res
+
+            # WAL：落终态/在途态
+            if self._journal is not None:
+                self._journal.finish(
+                    coid, submit_res.status,
+                    ticket=submit_res.order_ticket or None,
+                    filled_qty=submit_res.filled_qty,
+                    filled_price=submit_res.filled_price,
+                    reason=(
+                        "" if submit_res.status in ("FILLED", "IN_FLIGHT")
+                        else f"[{submit_res.retcode}] {submit_res.comment}"
+                    ),
+                )
 
             # ④ 按结果更新 ledger
             if submit_res.status == "FILLED":
@@ -320,7 +463,7 @@ class KqApi:
             except (ValueError, TypeError):
                 logger.warning(f"cancel: unknown order_id {order_id}")
                 return False
-        return self._executor.cancel(ticket, self._symbol)
+        return self._executor.cancel(ticket, self._symbol, magic=self._magic)
 
     def cancel_all(self, symbol: str = None) -> int:
         """撤销本策略该品种所有挂单。"""
@@ -329,7 +472,7 @@ class KqApi:
         count = 0
         for o in orders:
             ticket = int(o.get("ticket", 0))
-            if ticket and self._executor.cancel(ticket, sym):
+            if ticket and self._executor.cancel(ticket, sym, magic=self._magic):
                 count += 1
         return count
 
@@ -391,7 +534,20 @@ class KqApi:
         """当前时间戳（Unix ms）。"""
         return self._feed.now_ms()
 
+    def is_resumed(self) -> bool:
+        """本次运行是否从上一轮持久化状态恢复（R4，True=崩溃/重启恢复）。
+
+        策略据此决定恢复后是继续持有还是先 ``flatten()``（避免盲目加仓）。
+        冷启动 / 回测 / 无状态后端时恒 False。
+        """
+        return self._state.is_resumed()
+
     @property
-    def state(self) -> dict:
-        """策略全局共享状态（跨周期通信用）。"""
+    def state(self) -> StateStore:
+        """策略语义状态（跨周期/跨重启共享；dict 子类，变更自动 debounce 落盘）。
+
+        红线：只存**不可从 venue 重算**的语义量（加仓计数、上次信号 bar 时间、
+        跨周期趋势结论等）；禁止存持仓/在途/订单号（那些走 R1~R3 venue 对账）。
+        runner 自动 load/save（安全网），亦可显式 ``api.state.save()`` 强制落盘。
+        """
         return self._state

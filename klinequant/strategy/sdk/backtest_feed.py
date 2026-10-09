@@ -144,6 +144,10 @@ class BacktestDataFeed:
             return 0
         return int(bars[self._clamp_index()]["timestamp"])
 
+    def seconds_since_update(self) -> float:
+        """R5：回测无真实断线（数据由回放器同步逐根推进），恒返 0.0（永不 stale）。"""
+        return 0.0
+
     # ─── 执行器取价接口 ───
 
     def open_price(self, symbol: str) -> Optional[float]:

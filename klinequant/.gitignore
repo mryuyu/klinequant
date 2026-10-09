@@ -35,6 +35,7 @@ data/*.duckdb
 data/*.duckdb.wal
 data/backtest/
 data/exports/
+data/journal/
 
 # Logs
 logs/

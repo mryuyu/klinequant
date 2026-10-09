@@ -1,5 +1,11 @@
 # KlineQuant 系统配置
 # 支持本地开发和远程部署
+#
+# 注：本文件曾存在三段重复拼接的历史事故（同一批顶层键被重复定义三遍，
+# PyYAML 后定义覆盖前定义）。现已合并为单份权威配置。config/settings.py
+# 的 Settings 模型仅加载 system/gateway/zmq/database/logging/*_config 各节，
+# 其余节（market/indicator/trade/risk/strategy/security/alert）为文档性配置，
+# 合并前后语义不变。
 
 system:
   name: "KlineQuant"
@@ -52,212 +58,12 @@ database:
     port: 6379
     db: 0
     password: null
-    key_prefix: "kq:"
-
-# ─── 日志 ───
-logging:
-  level: "INFO"
-  log_dir: "logs"
-  rotation: "10 MB"
-  retention: "7 days"
-  console: true
-  file_enabled: true
-
-# ─── 行情引擎 ───
-market:
-  default_timeframes:
-    - "1m"
-    - "5m"
-    - "15m"
-    - "1h"
-    - "4h"
-    - "1d"
-  reconnect_interval: 5        # WS 重连间隔（秒）
-  reconnect_max_retries: 10
-  kline_rest_limit: 1000       # REST 历史 K 线单次请求上限
-
-# ─── 指标引擎 ───
-indicator:
-  engine: "polars"
-  cache_ttl: 300
-  default_indicators:
-    - "MA"
-    - "EMA"
-    - "RSI"
-    - "MACD"
-    - "BOLL"
-    - "ATR"
-    - "KDJ"
-    - "VWAP"
-
-# ─── 交易引擎 ───
-trade:
-  max_concurrent_orders: 50
-  order_timeout: 300
-  slippage_tolerance: 0.001
-
-# ─── 风控引擎 ───
-risk:
-  enabled: true
-  rules:
-    max_position_pct: 0.1
-    max_daily_loss_pct: 0.05
-    max_drawdown_pct: 0.1
-    max_order_frequency: 60
-
-# ─── 策略沙箱 ───
-strategy:
-  sandbox_timeout: 30
-  max_memory_mb: 256
-  max_strategies: 10
-
-# ─── 安全 ───
-security:
-  jwt_secret: "${KQ_JWT_SECRET}"
-  jwt_algorithm: "HS256"
-  jwt_expire_minutes: 60
-  password_min_length: 8
-
-# ─── 告警 ───
-alert:
-  enabled: false
-  webhook_url: ""
-  email:
-    smtp_host: ""
-    smtp_port: 587
-    username: ""
-    password: ""
-    to: []
-
-# ─── 交易所连接 ───
-exchanges_config: "config/exchanges.yaml"
-# KlineQuant 系统配置
-# Windows 环境适配
-
-system:
-  name: "KlineQuant"
-  version: "1.0.0"
-  environment: "development"  # development / production / backtest
-  timezone: "UTC"
-  locale: "zh_CN"
-
-# ─── 网络与通信 ───
-gateway:
-  host: "127.0.0.1"
-  api_port: 8000
-  ws_port: 8001
-  cors_origins:
-    - "http://localhost:5173"
-    - "http://127.0.0.1:5173"
-
-# ─── ZMQ 端口规划 ───
-zmq:
-  bind_host: "127.0.0.1"
-  market_pub: 5501
-  indicator_pub: 5502
-  signal_pub: 5503
-  trade_pub: 5504
-  risk_rep: 5510
-  trade_rep: 5511
-  strategy_port_base: 5520
-  strategy_port_max: 5530
-
-# ─── 数据库 ───
-database:
-  # DuckDB（Phase 1 统一存储）
-  duckdb:
-    path: "data/klinequant.duckdb"
-    batch_size: 500
-    flush_interval: 5.0
-
-  # ClickHouse（远期迁移预留）
-  clickhouse:
-    enabled: false
-    host: "127.0.0.1"
-    port: 8123
-    database: "klinequant"
-    user: "default"
-    password: ""
-
-  # Redis
-  redis:
-    host: "127.0.0.1"
-    port: 6379
-    db: 0
-    password: null
-    key_prefix: "kq:"
-
-# ─── 日志 ───
-logging:
-  level: "INFO"
-  log_dir: "logs"
-  rotation: "10 MB"
-  retention: "7 days"
-  console: true
-  file_enabled: true
-
-# ─── 交易所连接 ───
-exchanges_config: "config/exchanges.yaml"
-# KlineQuant 系统配置
-# Windows 环境适配
-
-system:
-  name: "KlineQuant"
-  version: "1.0.0"
-  environment: "development"  # development / production / backtest
-  timezone: "UTC"
-  locale: "zh_CN"
-
-# ─── 网络与通信 ───
-gateway:
-  host: "127.0.0.1"
-  api_port: 8000
-  ws_port: 8001
-  cors_origins:
-    - "http://localhost:5173"
-    - "http://127.0.0.1:5173"
-
-# ─── ZMQ 端口规划 ───
-zmq:
-  bind_host: "127.0.0.1"
-  market_pub: 5501
-  indicator_pub: 5502
-  signal_pub: 5503
-  trade_pub: 5504
-  risk_rep: 5510
-  trade_rep: 5511
-  strategy_port_base: 5520
-  strategy_port_max: 5530
-
-# ─── 数据库 ───
-database:
-  # DuckDB（Phase 1 统一存储）
-  duckdb:
-    path: "data/klinequant.duckdb"
-    batch_size: 500
-    flush_interval: 5.0
-
-  # ClickHouse（远期迁移预留）
-  clickhouse:
-    enabled: false
-    host: "127.0.0.1"
-    port: 8123
-    database: "klinequant"
-    user: "default"
-    password: ""
-
-  # Redis 缓存
-  redis:
-    host: "127.0.0.1"
-    port: 6379
-    db: 0
-    password: ""
     key_prefix: "kq:"
 
 # ─── 日志 ───
 logging:
   level: "INFO"           # DEBUG / INFO / WARNING / ERROR
-  dir: "logs"
+  log_dir: "logs"
   rotation: "10 MB"
   retention: "7 days"
   console: true
@@ -313,7 +119,7 @@ strategy:
 
 # ─── 安全 ───
 security:
-  jwt_secret: "CHANGE_ME_IN_PRODUCTION"
+  jwt_secret: "${KQ_JWT_SECRET}"
   jwt_algorithm: "HS256"
   jwt_expire_minutes: 60
   password_min_length: 8
@@ -328,3 +134,9 @@ alert:
     username: ""
     password: ""
     to: []
+
+# ─── 交易所连接 ───
+exchanges_config: "config/exchanges.yaml"
+
+# ─── 账户配置（Phase 0：多账户/本地/远程，一进程一账户）───
+accounts_config: "config/accounts.yaml"
