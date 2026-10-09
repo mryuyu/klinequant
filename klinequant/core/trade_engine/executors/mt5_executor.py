@@ -417,6 +417,13 @@ class Mt5Executor:
         if spec.kind == OrderKind.STOP_LIMIT and spec.stop_price:
             request["stoplimit"] = float(spec.stop_price)
 
+        # M5 灾难保险丝：开仓附带 sl/tp（MT5 position 属性，随持仓生存亡，本地
+        #   平仓后自动失效、无需撤单）。仅 OPEN/挂单路径经此方法（CLOSE 走 _submit_close）。
+        if spec.sl:
+            request["sl"] = float(spec.sl)
+        if spec.tp:
+            request["tp"] = float(spec.tp)
+
         # 注：市价平仓不走本方法（submit 已路由到 _submit_close，按 position ticket
         # 精确平仓，兼容 Netting/Hedging）。本方法仅处理 OPEN 与挂单类请求。
 

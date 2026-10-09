@@ -37,9 +37,11 @@ class _StaleFeed:
     def __init__(self, age=0.0):
         self.age = age
         self.ssu_called = False
+        self.ssu_symbol = None
 
-    def seconds_since_update(self):
+    def seconds_since_update(self, symbol=None):
         self.ssu_called = True
+        self.ssu_symbol = symbol       # M6：记录品种级看门狗传入的 symbol
         return self.age
 
     def now_ms(self):
@@ -206,7 +208,7 @@ class _FakeMt5Driver:
     def symbol_info_tick(self, symbol):
         return self._tick
 
-    def copy_rates_from_pos(self, symbol, tf, start, count):
+    def copy_rates_from_pos(self, symbol, tf, start, count, timeout=None):
         return self._rows
 
 
@@ -278,3 +280,50 @@ def test_binance_feed_heartbeat_ignores_push_when_stopped():
     feed._last_data_mono = time.monotonic() - 999.0
     asyncio.run(feed._on_kline(_btc_kline()))
     assert feed.seconds_since_update() > 900.0
+
+
+# ════════════════════════════════════════
+# M6 品种级看门狗：一个品种停摆只冻结自己
+# ════════════════════════════════════════
+
+def test_stale_guard_consults_symbol_level_heartbeat():
+    """M6：send_order 的 stale 闸门按品种查心跳（seconds_since_update 收到本品种 symbol）。"""
+    feed = _StaleFeed(age=999.0)
+    ex = _ResultExecutor(result=_filled())
+    api = _make_api(feed, ex, stale_threshold=60.0)
+    api.send_order(OrderSide.BUY, Offset.OPEN, Decimal("0.10"))
+    assert feed.ssu_called is True
+    assert feed.ssu_symbol == "EURUSD"      # 品种级（非全局无参）
+
+
+class _PartialDriver:
+    """MT5 驱动桩：EURUSD 有响应、GBPUSD 返回 None（模拟单品种驱动停摆）。"""
+
+    def symbol_select(self, symbol, flag):
+        return True
+
+    def symbol_info_tick(self, symbol):
+        if symbol == "EURUSD":
+            return {"bid": 1.1, "ask": 1.1001, "last": 0, "time": 1_700_000_000}
+        return None
+
+    def copy_rates_from_pos(self, symbol, tf, start, count, timeout=None):
+        return []
+
+
+def test_mt5_per_symbol_heartbeat_isolates_stale_symbol():
+    """M6：一个品种驱动停摆只老化自己的心跳，其余品种与全局仍新鲜。"""
+    feed = Mt5DataFeed(
+        driver=_PartialDriver(), symbols=["EURUSD", "GBPUSD"], periods=["1m"]
+    )
+    old = time.monotonic() - 999.0            # 人为老化两品种 + 全局
+    feed._last_data_mono = old
+    feed._last_symbol_mono["EURUSD"] = old
+    feed._last_symbol_mono["GBPUSD"] = old
+    feed._poll_tick("EURUSD")                 # 仅 EURUSD 驱动响应
+    feed._poll_tick("GBPUSD")                 # GBPUSD 返 None → 不刷新
+    assert feed.seconds_since_update("EURUSD") < 1.0     # 本品种新鲜
+    assert feed.seconds_since_update("GBPUSD") > 900.0   # 停摆品种老化 → 只冻结它
+    assert feed.seconds_since_update() < 1.0             # 全局仍新鲜（EURUSD 刷新了全局）
+    # 未知品种回落全局心跳龄
+    assert feed.seconds_since_update("UNKNOWN") < 1.0

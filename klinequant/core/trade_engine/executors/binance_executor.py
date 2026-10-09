@@ -173,6 +173,11 @@ class BinanceExecutor:
         executed = Decimal(str(data.get("executedQty", "0") or "0"))
         avg_price = Decimal(str(data.get("avgPrice", "0") or "0"))
 
+        # M5 灾难保险丝：OPEN 成功后挂 STOP_MARKET/TAKE_PROFIT_MARKET + reduceOnly
+        #   （本地平仓后 reduceOnly 保证孤儿单不反向开仓，仍需 cancel_all 收尾）
+        if spec.offset == Offset.OPEN and status in ("FILLED", "NEW", "PARTIALLY_FILLED"):
+            await self._place_fuse_async(spec)
+
         if status == "FILLED":
             return SubmitResult(
                 success=True, status="FILLED",
@@ -196,6 +201,48 @@ class BinanceExecutor:
             order_ticket=order_id,
             comment=f"binance {status}",
         )
+
+    async def _place_fuse_async(self, spec: VenueOrderSpec) -> None:
+        """M5：为已开仓位挂灾难保险丝（SL=STOP_MARKET / TP=TAKE_PROFIT_MARKET，均 reduceOnly）。
+
+        方向与开仓相反（多头用 SELL 平、空头用 BUY 平）；best-effort——失败仅告警，
+        不影响主开仓结果（仓位已开，保险丝是进程死亡期间的兜底保护）。
+        币安无 MT5 position 属性，故用独立 reduceOnly 触发单表达（平仓后成孤儿单，
+        不反向开仓，由 cancel_all 收尾）。
+        """
+        close_side = "SELL" if spec.side == OrderSide.BUY else "BUY"
+        if spec.sl:
+            await self._post_fuse_order(spec, "STOP_MARKET", close_side, spec.sl)
+        if spec.tp:
+            await self._post_fuse_order(spec, "TAKE_PROFIT_MARKET", close_side, spec.tp)
+
+    async def _post_fuse_order(
+        self, spec: VenueOrderSpec, order_type: str, side: str, stop_price: Decimal,
+    ) -> None:
+        """发一笔 reduceOnly 触发单（保险丝）；失败仅告警不抛（best-effort）。"""
+        params: dict[str, Any] = {
+            "symbol": spec.symbol.upper(),
+            "side": side,
+            "type": order_type,
+            "quantity": self._num(spec.qty),
+            "stopPrice": self._num(stop_price),
+            "positionSide": "BOTH",
+            "reduceOnly": "true",
+        }
+        signed = self._sign_params(params)
+        resp = await self._client.post(
+            "/fapi/v1/order", params=signed, headers=self._headers()
+        )
+        if resp.status_code != 200:
+            logger.warning(
+                f"Binance fuse {order_type} rejected: {self._error_msg(resp)} "
+                f"[{spec.symbol} {side} @ {stop_price}]"
+            )
+        else:
+            logger.info(
+                f"Binance fuse placed: {spec.symbol} {order_type} {side} "
+                f"qty={spec.qty} @ {stop_price} (reduceOnly)"
+            )
 
     async def _cancel_async(self, order_ticket: int, symbol: str) -> bool:
         params = self._sign_params({

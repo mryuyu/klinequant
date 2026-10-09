@@ -228,14 +228,22 @@ class Mt5Api:
 
     # ─── 调用入口 ───
 
-    def _call(self, fn_name: str, *args):
-        """位置参数调用"""
+    def _call(self, fn_name: str, *args, timeout: float | None = None):
+        """位置参数调用
+
+        timeout: 本次调用 poll 超时（秒）。None → 默认 _CALL_TIMEOUT(8s)。
+            M7 超时降级：历史加载（冷门品种首次 copy_rates_from_pos）可能 >8s，
+            传入更长的 patient timeout 避免误判超时强杀 worker + 8s 冷却连锁。
+            管道协议下不能安全放弃一个调用（late response 会使管道 desync），故
+            只能延长 timeout；真超时仍走 kill+重建（下方逻辑不变）。
+        """
+        deadline = self._CALL_TIMEOUT if timeout is None else timeout
         with self._lock:
             if not _HAS_MT5 or not self._ensure_worker_locked():
                 return None
             try:
                 self._conn.send(("call", (fn_name, args)))
-                if self._conn.poll(self._CALL_TIMEOUT):
+                if self._conn.poll(deadline):
                     kind, val = self._conn.recv()
                     if kind == "ok":
                         return val
@@ -246,7 +254,7 @@ class Mt5Api:
             except Exception:
                 logger.warning("MT5 call %s error", fn_name, exc_info=True)
                 return None
-            logger.warning("MT5 call %s timeout >%.0fs, killing worker", fn_name, self._CALL_TIMEOUT)
+            logger.warning("MT5 call %s timeout >%.0fs, killing worker", fn_name, deadline)
             self._kill_locked()
             self._ensure_worker_locked()
             return None
@@ -326,8 +334,14 @@ class Mt5Api:
             return None
         return self._call("symbols_get")
 
-    def copy_rates_from_pos(self, symbol: str, timeframe: int, start_pos: int, count: int):
-        rows = self._call("copy_rates_from_pos", symbol, timeframe, start_pos, count)
+    def copy_rates_from_pos(
+        self, symbol: str, timeframe: int, start_pos: int, count: int,
+        timeout: float | None = None,
+    ):
+        # M7：timeout 透传 _call，历史预热用 patient timeout（见 data_feed._warm_symbol）
+        rows = self._call(
+            "copy_rates_from_pos", symbol, timeframe, start_pos, count, timeout=timeout
+        )
         return self._to_rows(rows) if rows is not None else None
 
     def copy_rates_range(self, symbol: str, timeframe: int, date_from, date_to):

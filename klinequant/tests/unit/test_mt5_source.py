@@ -46,7 +46,7 @@ class _FakeMt5:
     def symbols_get(self):
         return self.catalog
 
-    def copy_rates_from_pos(self, symbol, timeframe, start_pos, count):
+    def copy_rates_from_pos(self, symbol, timeframe, start_pos, count, timeout=None):
         if self.rates_none:
             return None
         return self.rows[-count:]

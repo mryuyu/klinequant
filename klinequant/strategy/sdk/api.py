@@ -51,13 +51,32 @@ class DataFeedProtocol(Protocol):
     def latest_tick(self, symbol: str) -> Optional[Tick]: ...
     def latest_bars(self, symbol: str, period: str, count: int) -> list: ...
     def wait_update(self, deadline: Optional[float] = None) -> bool: ...
+    def wait_and_snapshot(
+        self, deadline: float | None = None, symbol: str | None = None,
+    ) -> tuple[bool, dict[str, int]]:
+        """等待新数据并返回 (是否有更新, 等待起始的版本快照)。
+
+        M3：clear→snapshot→wait 顺序避免吞掉并发 set。M4-a：快照返回调用方（每个
+        KqApi 独立持有），消除多线程 wait_update 互相覆盖基线。M4-b：symbol 指定
+        时等待品种级事件（只被自己品种唤醒）；None=全局事件。
+        """
+        ...
+    def resolve_key(self, obj: Any, field: str | None = None) -> str | None:
+        """对象 → 版本 key（含 M1 field 语义；None=无法解析）。"""
+        ...
+    def current_version(self, key: str) -> int:
+        """某版本 key 的当前版本号（KqApi.is_changing 与 per-api 快照比对）。"""
+        ...
     def is_changing(self, obj: Any, field: Optional[str] = None) -> bool: ...
     def now_ms(self) -> int: ...
-    def seconds_since_update(self) -> float:
+    def seconds_since_update(self, symbol: str | None = None) -> float:
         """R5 断线闸门：距上次从 venue 收到数据的秒数（心跳年龄）。
 
         实盘 feed 以「驱动响应」为心跳（连上就每轮刷新，与行情是否变动无关），
         故能区分「断线」与「休市/清淡」；回测 feed 恒返 0.0（永不 stale）。
+
+        M6：symbol 给定时返回**该品种**的心跳龄（品种级看门狗，一个品种停摆只冻结
+        自己）；None 或未知品种回落全局心跳龄（后向兼容）。
         """
         ...
 
@@ -126,17 +145,25 @@ class KqApi:
         engine: Optional["IndicatorEngine"] = None,
         exchange: str = "mt5",
         engine_lock: Optional[Any] = None,
+        periods: list[str] | None = None,
     ):
         self._symbol = symbol
         self._period = period
+        # M4 多周期：本 KqApi（绑定一个 symbol）可访问该 symbol 的多个 period；
+        #   self._period 为主/默认周期（period=None 时的回落）。
+        self._periods: list[str] = list(periods) if periods else [period]
         self._tag = tag
         self._specs = specs
         self._ledger = ledger
         self._resolver = resolver
         self._executor = executor
         self._feed = feed
-        # R1 身份化 magic：显式覆盖 > 按 (account, tag) 派生 > None（回落执行器实例级）
         self._account_name = account_name
+        # R1 身份化 magic：显式覆盖 > 按 (account, tag) 派生 > None（回落执行器实例级）。
+        #   M4：多周期同账户必然多 magic（tag 含 period）——显式 period 时按
+        #   (account, `{tag}:{period}`) 派生（见 _magic_for）；self._magic 为默认(period=None)
+        #   口径，保留作 cancel 等的实例级回落。
+        self._magic_override: int | None = magic
         if magic is not None:
             self._magic: Optional[int] = magic
         elif account_name:
@@ -153,11 +180,39 @@ class KqApi:
         self._engine = engine
         self._exchange = exchange
         self._engine_lock = engine_lock
-        self._indic: Optional["IndicApi"] = None
+        # M4 多周期：每 period 一个 IndicApi（惰性构造缓存）；advance 时全部推进
+        self._indics: dict[str, IndicApi] = {}
         # 订单 ticket 跟踪（cancel 用）
         self._order_tickets: Dict[str, int] = {}  # client_order_id → MT5 ticket
         # 运行截止时间（Unix 秒）：到点后 wait_update 返回 False，策略优雅退出
         self._run_until: Optional[float] = None
+        # M4-a：is_changing 基线快照 per-api 独立持有（拓扑 Z 多线程各自 wait_update
+        #   互不覆盖；旧版存 feed 级单一字段会在多品种实盘互相污染基线）
+        self._snapshot: dict[str, int] = {}
+
+    # ═════════ M4 多周期记账：tag / magic 派生 ═════════
+
+    def _tag_for(self, period: str | None = None) -> str:
+        """记账 tag（订单系统 v2 §9.2：各 (symbol,period) 独立开平、互不干扰）。
+
+        M4：显式 period → ``{base}:{period}``（多周期各自独立 tag/magic）；
+        period=None → base tag（后向兼容单周期与既有口径）。
+        """
+        return f"{self._tag}:{period}" if period is not None else self._tag
+
+    def _magic_for(self, period: str | None = None) -> int | None:
+        """按 period 派生 magic（R1）。
+
+        period=None → self._magic（默认口径，实例级回落）；显式 period →
+        显式覆盖优先，否则按 (account, `{tag}:{period}`) 派生（account 空则 None）。
+        """
+        if period is None:
+            return self._magic
+        if self._magic_override is not None:
+            return self._magic_override
+        if self._account_name:
+            return derive_magic(self._account_name, self._tag_for(period))
+        return None
 
     # ═══════════ 流程控制 ═══════════
 
@@ -167,6 +222,15 @@ class KqApi:
         设置了运行截止时间（set_run_until）时：中途无数据的超时会自动重试
         （周末休市/盘中静默不会误退出），直到有数据返回 True，或到点返回 False。
         未设截止时间时，超时返回 False（旧语义）。
+
+        拓扑 Z 循环纪律（M6 队头阻塞缓解，策略作者硬约束）：
+          ① 本循环体内**禁阻塞调用与重计算**（同步 IO/sleep/全市场扫描）——每品种
+             一工作线程 OS 级并行，违反后果收窄为「只坑本品种」（不再拖垮全策略），
+             但仍会延迟本品种 S/L 及时反应，故必守；
+          ② 指标计算全部下沉 IndicatorEngine 后台增量推进（api.INDIC()），策略只读结果；
+          ③ 全市场扫描类重计算在框架侧批处理，策略只消费；
+          ④ 看门狗已回到品种级：send_order 的 stale 闸门按本品种心跳判定
+             （seconds_since_update(symbol)），一个品种停摆只冻结自己（禁 OPEN、放 CLOSE）。
 
         Returns: True=有更新, False=到达运行截止时间（或无时限模式下超时）
         """
@@ -179,7 +243,9 @@ class KqApi:
             else:
                 timeout = deadline
 
-            if self._feed.wait_update(timeout):
+            got, snap = self._feed.wait_and_snapshot(timeout, self._symbol)
+            self._snapshot = snap          # M4-a：per-api 基线（is_changing 比对）
+            if got:
                 self._advance_indicators()
                 return True
 
@@ -197,36 +263,42 @@ class KqApi:
         obj 可为 tick / bars / 字符串 key，或 Phase 1 的 IndicatorView/FieldView
         （后者经 ``_kq_bar_key`` 映射到底层 bar 版本 key：bar 变即指标可能变）。
         """
-        bar_key = getattr(obj, "_kq_bar_key", None)
-        if bar_key is not None:
-            return self._feed.is_changing(bar_key, field)
-        return self._feed.is_changing(obj, field)
+        target = getattr(obj, "_kq_bar_key", None) or obj
+        key = self._feed.resolve_key(target, field)
+        if key is None:
+            return False
+        # M4-a：与 per-api 快照比对（不再依赖 feed 级共享 snapshot_versions）
+        return self._feed.current_version(key) != self._snapshot.get(key, 0)
 
     # ═══════════ 声明式指标（Phase 1） ═══════════
 
-    def INDIC(self) -> "IndicApi":  # noqa: N802  (规格定名：大写 api.INDIC())
+    def INDIC(self, period: str = None) -> "IndicApi":  # noqa: N802  (规格定名：大写 api.INDIC())
         """声明式指标接口（计算全部下沉进程内 IndicatorEngine，四端同源同参）。
 
-        返回的 IndicApi 惰性构造并缓存；``indic.macd(fast, slow, m)`` 等声明指标，
-        返回 IndicatorView 活视图（``view.dif[-1]`` 标量比较、可迭代为序列、
+        返回的 IndicApi 惰性构造并**按 period 缓存**（M4 多周期：``api.INDIC("1h")``
+        与 ``api.INDIC("15m")`` 各一个实例，默认 period=主周期）；``indic.macd(...)``
+        等声明指标返回 IndicatorView 活视图（``view.dif[-1]`` 标量比较、可迭代为序列、
         ``is_changing(view)`` 可用）。runner 未注入 engine 时调用抛 RuntimeError。
         """
-        if self._indic is None:
+        per = period or self._period
+        indic = self._indics.get(per)
+        if indic is None:
             if self._engine is None:
                 raise RuntimeError(
                     "api.INDIC() 需要 runner 注入 IndicatorEngine（当前未注入）"
                 )
             from strategy.sdk.indic import IndicApi
-            self._indic = IndicApi(
+            indic = IndicApi(
                 self._engine, self._feed, self._symbol, self._exchange,
-                self._period, lock=self._engine_lock,
+                per, lock=self._engine_lock,
             )
-        return self._indic
+            self._indics[per] = indic
+        return indic
 
     def _advance_indicators(self) -> None:
-        """wait_update 桥接：本轮数据到达后推进已声明指标的引擎增量（Live/Backtest 同构）。"""
-        if self._indic is not None:
-            self._indic.advance()
+        """wait_update 桥接：本轮数据到达后推进各周期已声明指标的引擎增量（Live/Backtest 同构）。"""
+        for indic in self._indics.values():
+            indic.advance()
 
     # ═══════════ 行情数据 ═══════════
 
@@ -261,10 +333,14 @@ class KqApi:
         """品种规格（默认主品种）。"""
         return self._spec_for(symbol or self._symbol)
 
-    def position(self, symbol: str = None) -> Position:
-        """本策略的持仓视图 = 已成交 + 在途。"""
+    def position(self, symbol: str = None, period: str = None) -> Position:
+        """本策略的持仓视图 = 已成交 + 在途。
+
+        M4：period 指定 → 只返回该周期 tag(``{base}:{period}``) 的仓（各周期独立记账）；
+        period=None → base tag（后向兼容）。交易所净持仓见 net_position（各 tag 之和）。
+        """
         sym = symbol or self._symbol
-        return self._ledger.position(sym, self._tag)
+        return self._ledger.position(sym, self._tag_for(period))
 
     def net_position(self, symbol: str = None) -> Decimal:
         """交易所净持仓（所有策略/所有 tag 之和）。"""
@@ -316,19 +392,32 @@ class KqApi:
         kind: OrderKind = OrderKind.MARKET,
         price: Decimal = None,
         stop_price: Decimal = None,
+        sl: Decimal = None,
+        tp: Decimal = None,
         tif: Tif = None,
         symbol: str = None,
+        period: str = None,
     ) -> OrderResult:
         """下单。唯一交易入口。
 
         流程：构造 OrderRequest → Resolver 验证/量化 → Ledger 记账 → Executor 执行 → 更新 Ledger
+
+        M4：period 指定 → 按 (symbol,period) 独立 tag(``{base}:{period}``) + 派生 magic
+        记账/下单（各周期各自开平、venue 侧按 magic 隔离）；period=None → base 口径（兼容）。
+
+        M5：sl/tp 为策略给定的灾难保险丝价位（仅 OPEN 生效，开仓时设一次不改）：
+        MT5 走 position 属性（随持仓生存亡、本地平仓后自动失效）；币安走
+        STOP_MARKET/TAKE_PROFIT_MARKET + reduceOnly。正常行情下策略本地 trailing SL
+        先触发，保险丝只在进程死亡期间兜底。None=不设保险丝。
         """
         sym = symbol or self._symbol
+        tag = self._tag_for(period)        # M4：per-(symbol,period) 记账 tag
+        magic = self._magic_for(period)    # M4：per-period magic（venue 侧按 magic 隔离）
 
         # R5 断线闸门：feed 心跳龄超阈（degraded）→ 拒新开仓、放行平仓。
         #   只减风险不加风险：断线时基于陈旧行情开新仓不可控，但平仓（flatten/CLOSE）永远放行。
         if self._stale_threshold is not None and offset == Offset.OPEN:
-            age = self._feed.seconds_since_update()
+            age = self._feed.seconds_since_update(sym)   # M6：品种级心跳（只冻结本品种）
             if age > self._stale_threshold:
                 reason = (
                     f"stale guard: no market data for {age:.0f}s "
@@ -340,21 +429,23 @@ class KqApi:
         # ① 构造 OrderRequest
         req = OrderRequest(
             symbol=sym,
-            tag=self._tag,
+            tag=tag,
             side=side,
             offset=offset,
             qty=qty,
             kind=kind,
             price=price,
             stop_price=stop_price,
+            sl=sl,
+            tp=tp,
             tif=tif,
             account=self._account_name,
-            magic=self._magic,
+            magic=magic,
         )
 
         # ② Resolver 验证 + 量化
-        pos = self._ledger.position(sym, self._tag)
-        has_dup = self._ledger.has_in_flight_open(sym, self._tag, side)
+        pos = self._ledger.position(sym, tag)
+        has_dup = self._ledger.has_in_flight_open(sym, tag, side)
         resolution = self._resolver.resolve(
             req, self._spec_for(sym),
             position_volume=pos.volume,
@@ -374,14 +465,14 @@ class KqApi:
             coid = venue_spec.client_order_id
             # 记账：accepted
             self._ledger.on_order_accepted(
-                sym, self._tag, coid,
+                sym, tag, coid,
                 venue_spec.side, venue_spec.offset, venue_spec.qty,
             )
 
             # WAL：先写后发（submit 之前落盘意图，崩溃后 R3 凭 client_order_id 反查）
             if self._journal is not None:
                 self._journal.begin(
-                    client_order_id=coid, account=self._account_name, tag=self._tag,
+                    client_order_id=coid, account=self._account_name, tag=tag,
                     symbol=sym, side=venue_spec.side.value, offset=venue_spec.offset.value,
                     qty=venue_spec.qty, price=venue_spec.price,
                 )
@@ -412,7 +503,7 @@ class KqApi:
             # ④ 按结果更新 ledger
             if submit_res.status == "FILLED":
                 self._ledger.on_order_filled(
-                    sym, self._tag, venue_spec.client_order_id,
+                    sym, tag, venue_spec.client_order_id,
                     venue_spec.side, venue_spec.offset, venue_spec.qty,
                     fill_price=submit_res.filled_price,
                     fill_qty=submit_res.filled_qty,
@@ -427,7 +518,7 @@ class KqApi:
             else:
                 # DEAD：释放敞口
                 self._ledger.on_order_dead(
-                    sym, self._tag, venue_spec.client_order_id,
+                    sym, tag, venue_spec.client_order_id,
                     venue_spec.side, venue_spec.offset, venue_spec.qty,
                 )
 
@@ -465,35 +556,46 @@ class KqApi:
                 return False
         return self._executor.cancel(ticket, self._symbol, magic=self._magic)
 
-    def cancel_all(self, symbol: str = None) -> int:
-        """撤销本策略该品种所有挂单。"""
+    def cancel_all(self, symbol: str = None, period: str = None) -> int:
+        """撤销本策略该品种挂单。
+
+        M4：period=None → 撤本品种全部挂单（孤儿清理安全网，query 不按 magic 过滤、
+        cancel 用实例级 self._magic，沿用旧口径）；period 指定 → 只撤该周期 magic 的挂单。
+        """
         sym = symbol or self._symbol
-        orders = self._executor.query_orders(sym)
+        qmagic = None if period is None else self._magic_for(period)
+        cmagic = self._magic_for(period)
+        orders = self._executor.query_orders(sym, qmagic)
         count = 0
         for o in orders:
             ticket = int(o.get("ticket", 0))
-            if ticket and self._executor.cancel(ticket, sym, magic=self._magic):
+            if ticket and self._executor.cancel(ticket, sym, magic=cmagic):
                 count += 1
         return count
 
-    def flatten(self, symbol: str = None) -> dict:
+    def flatten(self, symbol: str = None, period: str = None) -> dict:
         """一键清仓：撤销所有未成交挂单 + 平掉净持仓（市价）。
 
         运行到时/退出收尾用。以 venue 真实持仓为准（不依赖本地账本），
         确保孤儿仓被平掉。
 
+        M4：period=None → 平掉本品种全部 venue 净持仓（query 不按 magic 过滤，孤儿清理
+        安全网，多周期退出时一次平净，沿用旧口径）；period 指定 → 只平该周期 magic 的仓。
+
         Returns:
             {"canceled": int, "net_vol": Decimal, "close": OrderResult|None}
         """
         sym = symbol or self._symbol
+        tag = self._tag_for(period)
+        pmagic = None if period is None else self._magic_for(period)
         result = {"canceled": 0, "net_vol": Decimal("0"), "close": None}
 
         # ① 撤销所有未成交挂单，并释放账本在途
-        result["canceled"] = self.cancel_all(sym)
-        self._ledger.clear_in_flight(sym, self._tag)
+        result["canceled"] = self.cancel_all(sym, period)
+        self._ledger.clear_in_flight(sym, tag)
 
         # ② 以 venue 真实持仓为准计算净敞口
-        positions = self._executor.query_positions(sym)
+        positions = self._executor.query_positions(sym, pmagic)
         net_vol = Decimal("0")
         ref_price = Decimal("0")
         for p in positions:
@@ -508,15 +610,15 @@ class KqApi:
             return result
 
         # ③ 对齐本地账本到 venue（避免 volume 不一致导致 CLOSE 被拒）
-        self._ledger.sync_from_venue(sym, self._tag, net_vol, ref_price)
+        self._ledger.sync_from_venue(sym, tag, net_vol, ref_price)
 
         # ④ 发反向市价单平掉
         if net_vol > 0:
             r = self.send_order(OrderSide.SELL, Offset.CLOSE, net_vol,
-                                kind=OrderKind.MARKET, symbol=sym)
+                                kind=OrderKind.MARKET, symbol=sym, period=period)
         else:
             r = self.send_order(OrderSide.BUY, Offset.CLOSE, abs(net_vol),
-                                kind=OrderKind.MARKET, symbol=sym)
+                                kind=OrderKind.MARKET, symbol=sym, period=period)
         result["close"] = r
         logger.info(
             f"[FLATTEN] {sym}: closed net_vol={net_vol} ok={r.ok} "

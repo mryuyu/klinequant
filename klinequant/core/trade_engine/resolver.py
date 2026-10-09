@@ -57,6 +57,8 @@ class OrderRequest:
     kind: OrderKind = OrderKind.MARKET
     price: Optional[Decimal] = None
     stop_price: Optional[Decimal] = None
+    sl: Decimal | None = None      # M5：策略给定的灾难止损价（None=不设保险丝）
+    tp: Decimal | None = None      # M5：策略给定的灾难止盈价
     tif: Optional[Tif] = None     # None = 用市场默认
     client_order_id: str = ""
     account: str = ""             # R1：账户名（magic 派生 + client_order_id 结构化用）
@@ -73,6 +75,8 @@ class VenueOrderSpec:
     kind: OrderKind
     price: Optional[Decimal] = None
     stop_price: Optional[Decimal] = None
+    sl: Decimal | None = None      # M5 灾难止损保险丝（开仓附带，随持仓生存亡）
+    tp: Decimal | None = None      # M5 灾难止盈保险丝
     tif: Tif = Tif.GTC
     client_order_id: str = ""
     tag: str = ""
@@ -237,6 +241,9 @@ class UnifiedResolver:
         qty = self._quantize(req.qty, spec.qty_step)
         price = self._quantize(req.price, spec.tick_size) if req.price else None
         stop_price = self._quantize(req.stop_price, spec.tick_size) if req.stop_price else None
+        # M5 灾难保险丝价位（仅 OPEN 附带；量化到 tick_size，None=不设）
+        sl = self._quantize(req.sl, spec.tick_size) if req.sl else None
+        tp = self._quantize(req.tp, spec.tick_size) if req.tp else None
 
         # ③ 量化后二次校验
         rej = self._post_validate(qty, price, spec, req)
@@ -267,6 +274,8 @@ class UnifiedResolver:
                 kind=req.kind,
                 price=price,
                 stop_price=stop_price,
+                sl=sl,
+                tp=tp,
                 tif=req.tif or Tif.GTC,
                 client_order_id=req.client_order_id,
                 tag=req.tag,

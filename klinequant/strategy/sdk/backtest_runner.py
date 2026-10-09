@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from core.backtest_engine.performance import (
     PerformanceAnalyzer,
@@ -95,6 +95,7 @@ class BacktestRunner:
         period: str,
         strategy_fn: Callable[[KqApi], None],
         *,
+        periods: Optional[List[str]] = None,
         tag: str = "",
         history_bars: int = 2000,
         initial_capital: Decimal = Decimal("10000"),
@@ -104,14 +105,16 @@ class BacktestRunner:
         fee_params: Optional[dict] = None,
         magic: int = 202609,
         account_currency: str = "USD",
-        bars_by_symbol: Optional[Dict[str, List[dict]]] = None,
+        bars_by_symbol: Optional[Dict[str, Any]] = None,
         specs: Optional[Dict[str, SymbolInfo]] = None,
         mt5_kwargs: Optional[dict] = None,
     ):
         """
         Args:
             symbols: 品种，str 或 list（逐个独立回测）
-            period: 驱动周期（如 "1m"）
+            period: 主/驱动周期（如 "1m"）；多周期时为策略主交易周期
+            periods: 多周期回放列表（如 ["15m","1h"]）。给定时按统一时间轴派发多周期
+                bar 收盘事件（同一时刻大周期先于小周期，1h 先于 15m）；None=单周期 [period]。
             strategy_fn: 策略函数 (api: KqApi) -> None，与实盘同一份
             history_bars: 从 MT5 拉取的历史 bar 数（bars_by_symbol 提供时忽略）
             initial_capital: 每品种初始资金（计价货币）
@@ -119,7 +122,8 @@ class BacktestRunner:
             fee_model/fee_params: 手续费模型（默认 fixed，每笔 0）
             magic: 魔术号
             account_currency: 账户币（交叉盘换算目标，默认 USD）
-            bars_by_symbol: 直接注入历史 bar（单测/离线数据用，跳过 MT5）
+            bars_by_symbol: 直接注入历史 bar（单测/离线数据用，跳过 MT5）。单周期为
+                {symbol: [bars]}；多周期为 {symbol: {period: [bars]}}。
             specs: 直接注入品种规格（配合 bars_by_symbol 用）
             mt5_kwargs: MT5 初始化参数
         """
@@ -129,6 +133,8 @@ class BacktestRunner:
         if not self._symbols:
             raise ValueError("BacktestRunner requires at least one symbol")
         self._period = period
+        # 多周期同构：periods 给定则多周期回放（主周期=period，用于报表/年化/tag）
+        self._periods: List[str] = list(periods) if periods else [period]
         self._strategy_fn = strategy_fn
         self._tag = tag or period
         self._history_bars = history_bars
@@ -141,7 +147,7 @@ class BacktestRunner:
         self._account_currency = account_currency
         self._mt5_kwargs = mt5_kwargs
 
-        self._bars: Dict[str, List[dict]] = bars_by_symbol or {}
+        self._bars: Dict[str, Any] = bars_by_symbol or {}   # 单周期扁平 / 多周期嵌套
         self._specs: Dict[str, SymbolInfo] = specs or {}
         self._conv_rates: Dict[str, Decimal] = {}
 
@@ -169,7 +175,7 @@ class BacktestRunner:
             if not bars or spec is None:
                 logger.error(f"[{sym}] missing bars/spec, skipped")
                 continue
-            result = self._run_symbol(sym, spec, bars, analyzer)
+            result = self._run_symbol(sym, spec, self._as_nested(bars), analyzer)
             report.results[sym] = result
             logger.info(
                 f"[{sym}] done: bars={result.n_bars} trades={result.report.total_trades} "
@@ -179,11 +185,11 @@ class BacktestRunner:
         return report
 
     def _run_symbol(
-        self, sym: str, spec: SymbolInfo, bars: List[dict],
+        self, sym: str, spec: SymbolInfo, bars_by_period: Dict[str, List[dict]],
         analyzer: PerformanceAnalyzer,
     ) -> SymbolBacktestResult:
         """单品种独立回放：新建 feed/executor/ledger/api，跑同一策略函数"""
-        feed = BacktestDataFeed({sym: bars}, self._period)
+        feed = BacktestDataFeed({sym: bars_by_period}, periods=self._periods)
         executor = BacktestExecutor(
             feed=feed,
             specs={sym: spec},
@@ -206,6 +212,7 @@ class BacktestRunner:
         api = KqApi(
             symbol=sym,
             period=self._period,
+            periods=self._periods,
             tag=self._tag,
             specs={sym: spec},
             ledger=ledger,
@@ -216,7 +223,11 @@ class BacktestRunner:
             exchange="mt5",
         )
 
-        logger.info(f"[{sym}] strategy starting ({len(bars)} bars)")
+        main_bars = bars_by_period.get(self._period, [])
+        logger.info(
+            f"[{sym}] strategy starting "
+            f"({len(main_bars)} {self._period} bars, periods={self._periods})"
+        )
         try:
             self._strategy_fn(api)
         except Exception as e:
@@ -237,45 +248,64 @@ class BacktestRunner:
             report=perf,
             trades=list(executor.trades),
             equity_curve=list(executor.equity_curve),
-            n_bars=len(bars),
+            n_bars=len(main_bars),
         )
+
+    def _as_nested(self, val: Any) -> Dict[str, List[dict]]:
+        """单品种 bars 归一化为 {period: [bars]}。
+
+        兼容两种注入形态：多周期已是 {period: [bars]} 直接返回；单周期扁平
+        [bars]（旧接口/单测）包装为 {self._period: [bars]}。
+        """
+        if isinstance(val, dict):
+            return val
+        return {self._period: val}
 
     # ─── 数据加载 ───
 
     def _load_from_mt5(self) -> None:
-        """从 MT5 终端拉取历史 K 线 + 品种规格"""
+        """从 MT5 终端拉取历史 K 线 + 品种规格（逐周期，多周期嵌套存储）"""
         driver = Mt5Api()
         kwargs = self._mt5_kwargs or Mt5Api.init_kwargs()
         if not driver.initialize(**kwargs):
             raise RuntimeError(
                 "MT5 initialize failed（回测取历史数据）。请确认 MT5 终端已启动并登录。"
             )
-        tf = TIMEFRAME_MAP.get(self._period)
-        if not tf:
+        tfs = {per: TIMEFRAME_MAP.get(per) for per in self._periods}
+        missing = [per for per, tf in tfs.items() if not tf]
+        if missing:
             driver.shutdown()
-            raise ValueError(f"Unknown period: {self._period}")
+            raise ValueError(f"Unknown period(s): {','.join(missing)}")
         try:
             for sym in self._symbols:
                 driver.symbol_select(sym, True)
                 spec = load_spec_from_mt5(driver, sym)
                 if spec is None:
                     raise RuntimeError(f"Failed to load SymbolInfo for {sym}")
-                # 多取 1 根并丢弃最后一根（仍在形成的当前 bar）
-                rows = driver.copy_rates_from_pos(sym, tf, 0, self._history_bars + 1)
-                if not rows or len(rows) < 2:
-                    raise RuntimeError(
-                        f"Insufficient history for {sym}: got {len(rows) if rows else 0} bars"
+                per_bars: Dict[str, List[dict]] = {}
+                for per in self._periods:
+                    # 多取 1 根并丢弃最后一根（仍在形成的当前 bar）
+                    rows = driver.copy_rates_from_pos(
+                        sym, tfs[per], 0, self._history_bars + 1
                     )
-                completed = rows[:-1]
-                self._bars[sym] = [self._row_to_bar(r, sym) for r in completed]
+                    if not rows or len(rows) < 2:
+                        raise RuntimeError(
+                            f"Insufficient history for {sym}/{per}: "
+                            f"got {len(rows) if rows else 0} bars"
+                        )
+                    per_bars[per] = [
+                        self._row_to_bar(r, sym, per) for r in rows[:-1]
+                    ]
+                self._bars[sym] = per_bars
                 self._specs[sym] = spec
                 rate = self._load_conv_rate(driver, sym, spec)
                 if rate is not None:
                     self._conv_rates[sym] = rate
                     logger.info(f"[{sym}] cross-rate →{self._account_currency} = {rate}")
                 logger.info(
-                    f"[{sym}] loaded {len(self._bars[sym])} historical bars "
-                    f"(pip={spec.pip_size} mult={spec.contract_multiplier})"
+                    f"[{sym}] loaded "
+                    + ", ".join(f"{len(per_bars[p])} {p}" for p in self._periods)
+                    + f" bars (pip={spec.pip_size} mult={spec.contract_multiplier})"
                 )
         finally:
             driver.shutdown()
@@ -305,12 +335,12 @@ class BacktestRunner:
             return None
         return Decimal(str(profit)) / Decimal(str(mult))
 
-    def _row_to_bar(self, row: dict, symbol: str) -> dict:
+    def _row_to_bar(self, row: dict, symbol: str, period: str) -> dict:
         """MT5 rate row → 标准 bar dict（与 Mt5DataFeed 同形）"""
         vol = row.get("real_volume") or row.get("tick_volume") or 0
         return {
             "symbol": symbol,
-            "period": self._period,
+            "period": period,
             "timestamp": int(row["time"]) * 1000,
             "open": float(row["open"]),
             "high": float(row["high"]),
@@ -320,6 +350,10 @@ class BacktestRunner:
         }
 
     def _bars_per_year(self) -> int:
-        """年化换算（365 天约定，与现有回测路由一致）"""
-        sec = TF_SECONDS.get(self._period, 60)
+        """年化换算（365 天约定，与现有回测路由一致）。
+
+        多周期取**最细周期**（bar 最密）作年化基准，与逐事件回放的采样密度对齐。
+        """
+        per = min(self._periods, key=lambda p: TF_SECONDS.get(p, 60))
+        sec = TF_SECONDS.get(per, 60)
         return max(1, int(365 * 86400 / sec))

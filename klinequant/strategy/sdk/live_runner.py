@@ -50,7 +50,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from core.indicator_engine.engine import IndicatorEngine
 from core.trade_engine.ledger import ExposureLedger
-from core.trade_engine.resolver import UnifiedResolver
+from core.trade_engine.resolver import UnifiedResolver, derive_magic
 from protocol.types import Offset, OrderSide, SymbolInfo
 from strategy.sdk.api import DataFeedProtocol, ExecutorProtocol, KqApi
 from strategy.sdk.backend import MarketBackend
@@ -75,6 +75,7 @@ class LiveRunner:
         strategy_fn: Callable[[KqApi], None],
         *,
         tag: str = "",
+        periods: list[str] | None = None,
         poll_interval: float = 0.5,
         bar_count: int = 300,
         duration: Optional[float] = None,
@@ -120,6 +121,16 @@ class LiveRunner:
         self._period = period
         self._strategy_fn = strategy_fn
         self._tag = tag or period
+        # M4 多周期订阅：periods 给出全部订阅周期（含主 period）；单周期时=[period]。
+        #   拓扑 Z：每 KqApi 仍绑定一个 symbol（每品种一工作线程），但可访问该 symbol
+        #   的多 period（线程内单循环）；记账/magic 按 (symbol, `{tag}:{period}`) 分离。
+        if periods:
+            self._periods: list[str] = list(periods)
+            if period not in self._periods:
+                self._periods.insert(0, period)
+        else:
+            self._periods = [period]
+        self._multi_period = len(self._periods) > 1
         self._poll_interval = poll_interval
         self._bar_count = bar_count
         self._duration = duration
@@ -209,7 +220,7 @@ class LiveRunner:
         #    避免轮询线程与恢复期 venue 查询争用共享 driver 锁）
         self._feed = self._backend.make_feed(
             symbols=self._symbols,
-            periods=[self._period],
+            periods=self._periods,
             poll_interval=self._poll_interval,
             bar_count=self._bar_count,
         )
@@ -253,16 +264,19 @@ class LiveRunner:
                 engine=self._engine,
                 exchange=self._exchange,
                 engine_lock=self._engine_lock,
+                periods=self._periods,
             )
 
         # 9. R3 启动恢复（journal 驱动，reconcile 之前）：凭 client_order_id 逐条向 venue
         #    收敛在途意图，补 ledger/ticket + 落 journal 终态；venue 不可达则抛（不进策略循环）
         self._recover()
 
-        # 10. 对账：逐品种从 venue 恢复净持仓 + 挂单在途（按 magic 隔离，只恢复本策略）
-        self._backend.reconcile_positions(
-            self._executor, self._ledger, self._symbols, self._tag, self._magic
-        )
+        # 10. 对账：逐 (tag, magic) 从 venue 恢复净持仓 + 挂单在途（按 magic 隔离，只恢复本策略）
+        #     M4 多周期：逐 period-tag 对账（各周期独立 magic，互不干扰）
+        for rtag, rmagic in self._reconcile_targets():
+            self._backend.reconcile_positions(
+                self._executor, self._ledger, self._symbols, rtag, rmagic
+            )
 
         # 11. 恢复/对账完成后才启动行情轮询（此后才进策略循环接受新意图）
         self._feed.start()
@@ -278,10 +292,31 @@ class LiveRunner:
     def _state_key(self) -> str:
         """R4 状态存储 key（策略级一份：``{account}:{tag}``，同一 runner 内全品种共享）。
 
-        注：Phase M 多周期落地后，key 将收敛为 ``{account}:{strategy}``（不含 period），
+        注：Phase M 多周期已收敛为 ``{account}:{strategy}``（tag=base，不含 period），
         使同一策略各周期共享一份快照、崩溃时整体恢复（避免「1h 恢复了、4h 没恢复」半死态）。
         """
         return f"{self._account_name or 'default'}:{self._tag}"
+
+    def _reconcile_targets(self) -> list[tuple[str, int | None]]:
+        """M4：返回需对账/恢复的 (tag, magic) 目标列表。
+
+        单周期 → ``[(self._tag, self._magic)]``（完全等价旧口径，后向兼容）；
+        多周期 → 逐 period 返回 ``(``{tag}:{period}``, 派生 magic)``（各周期独立
+        magic，互不干扰；显式 magic 覆盖时沿用覆盖值，account 空则 magic=None）。
+        """
+        if not self._multi_period:
+            return [(self._tag, self._magic)]
+        out: list[tuple[str, int | None]] = []
+        for p in self._periods:
+            tag = f"{self._tag}:{p}"
+            if self._magic is not None:
+                magic = self._magic
+            elif self._account_name:
+                magic = derive_magic(self._account_name, tag)
+            else:
+                magic = None
+            out.append((tag, magic))
+        return out
 
     def _recover(self) -> None:
         """R3 启动恢复：journal.pending() 逐条凭 client_order_id 向 venue 收敛。
@@ -296,9 +331,14 @@ class LiveRunner:
         """
         if self._journal is None:
             return
-        rows = self._journal.pending(
-            account=self._account_name or None, tag=self._tag
-        )
+        # M4 多周期：逐 (tag, magic) 目标汇总待恢复意图（单周期仅 base tag，行为不变）
+        rows = []
+        for rtag, _rmagic in self._reconcile_targets():
+            rows.extend(
+                self._journal.pending(
+                    account=self._account_name or None, tag=rtag
+                )
+            )
         if not rows:
             logger.info("[RECOVER] no pending order intents, clean start")
             return
@@ -314,6 +354,8 @@ class LiveRunner:
         for row in rows:
             coid = row.client_order_id
             sym = row.symbol
+            # M4：意图归属的周期 tag（单周期 row.tag==self._tag，行为不变）
+            tag = row.tag
             side = OrderSide.SELL if row.side.lower().startswith("s") else OrderSide.BUY
             offset = Offset.CLOSE if row.offset.lower().startswith("c") else Offset.OPEN
             try:
@@ -336,7 +378,7 @@ class LiveRunner:
             elif state == "OPEN":
                 ticket = int(outcome.get("ticket", 0) or 0)
                 # 补回在途（重启后 ledger 本空）+ 记录 ticket（cancel 用）
-                self._ledger.on_order_accepted(sym, self._tag, coid, side, offset, row.qty)
+                self._ledger.on_order_accepted(sym, tag, coid, side, offset, row.qty)
                 if api is not None and ticket:
                     api._order_tickets[coid] = ticket
                 self._journal.finish(coid, STATE_IN_FLIGHT, ticket=ticket or None)
@@ -346,9 +388,9 @@ class LiveRunner:
                 fq = outcome.get("filled_qty") or row.qty
                 fp = outcome.get("filled_price") or Decimal("0")
                 # accepted→filled：无 pending 记录时先建再销，净 in_flight→0、volume+=signed
-                self._ledger.on_order_accepted(sym, self._tag, coid, side, offset, row.qty)
+                self._ledger.on_order_accepted(sym, tag, coid, side, offset, row.qty)
                 self._ledger.on_order_filled(
-                    sym, self._tag, coid, side, offset, row.qty,
+                    sym, tag, coid, side, offset, row.qty,
                     fill_price=fp, fill_qty=fq,
                 )
                 if api is not None and ticket:
