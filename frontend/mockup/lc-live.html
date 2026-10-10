@@ -889,47 +889,54 @@ function applyIndPush(msg) {
   if (!initialLoaded || !indReady) return;   // 历史序列批量渲染就绪前忽略增量，防切品种/周期只显示最新一根
   const parts = msg.topic.split('.');
   if (parts[1] !== curExchange || parts[2] !== curSymbol || parts[3] !== curTf) return;
+  lastIndPushAt = Date.now();   // v9.87 自愈看门狗：指标推送活跃时间（当前契约任意消息）
   for (const item of msg.data || []) {
     const t = Math.floor(item.timestamp / 1000), v = item.values;
     for (const inst of indInstances) {
       const si = backendSubs(inst).findIndex(sub =>
         sub.indicator === item.indicator && JSON.stringify(sub.params) === JSON.stringify(item.params));
       if (si < 0) continue;
-      if (inst.type === 'ma') {
-        if (v.MA == null) continue;
-        inst.series[si].update({ time: t, value: v.MA });
-        (inst.lastVals ||= [])[si] = v.MA;
-      } else if (inst.type === 'macd') {
-        const d = inst.series[0].data();
-        const last = d[d.length - 1];
-        /* 同 bar 更新对比前一根已收盘柱，新 bar 对比当前末点 */
-        const prev = last && last.time === t ? d[d.length - 2]?.value : last?.value;
-        inst.series[0].update({ time: t, value: v.HIST, color: macdHistColor(v.HIST, prev ?? null, instHistColors(inst)) });
-        inst.series[1].update({ time: t, value: v.DIF });
-        inst.series[2].update({ time: t, value: v.DEA });
-        Object.assign(inst.lastVals ||= [], [v.HIST, v.DIF, v.DEA]);
-      } else if (inst.type === 'custom') {
-        /* IND-110：def 式指标逐字段更新末点，缓存供图例末值显示；柱字段同内置 MACD 语义逐点四色 */
-        inst.fields.forEach((f, i) => {
-          if (v[f] == null) return;
-          if (isHistField(inst, i)) {
-            const d = inst.series[i].data();
-            const last = d[d.length - 1];
-            /* 同 bar 更新对比前一根已收盘柱，新 bar 对比当前末点 */
-            const prev = last && last.time === t ? d[d.length - 2]?.value : last?.value;
-            inst.series[i].update({ time: t, value: v[f], color: histColor(v[f], prev ?? null, fieldHistColors(inst, i)) });
-          } else {
-            inst.series[i].update({ time: t, value: v[f] });
+      try {
+        if (inst.type === 'ma') {
+          if (v.MA == null) continue;
+          inst.series[si].update({ time: t, value: v.MA });
+          (inst.lastVals ||= [])[si] = v.MA;
+        } else if (inst.type === 'macd') {
+          const d = inst.series[0].data();
+          const last = d[d.length - 1];
+          /* 同 bar 更新对比前一根已收盘柱，新 bar 对比当前末点 */
+          const prev = last && last.time === t ? d[d.length - 2]?.value : last?.value;
+          inst.series[0].update({ time: t, value: v.HIST, color: macdHistColor(v.HIST, prev ?? null, instHistColors(inst)) });
+          inst.series[1].update({ time: t, value: v.DIF });
+          inst.series[2].update({ time: t, value: v.DEA });
+          Object.assign(inst.lastVals ||= [], [v.HIST, v.DIF, v.DEA]);
+        } else if (inst.type === 'custom') {
+          /* IND-110：def 式指标逐字段更新末点，缓存供图例末值显示；柱字段同内置 MACD 语义逐点四色 */
+          inst.fields.forEach((f, i) => {
+            if (v[f] == null) return;
+            if (isHistField(inst, i)) {
+              const d = inst.series[i].data();
+              const last = d[d.length - 1];
+              /* 同 bar 更新对比前一根已收盘柱，新 bar 对比当前末点 */
+              const prev = last && last.time === t ? d[d.length - 2]?.value : last?.value;
+              inst.series[i].update({ time: t, value: v[f], color: histColor(v[f], prev ?? null, fieldHistColors(inst, i)) });
+            } else {
+              inst.series[i].update({ time: t, value: v[f] });
+            }
+            (inst.lastVals ||= [])[i] = v[f];
+          });
+        } else {
+          /* boll/kd/rsi：后端 values 键 → series 下标固定映射 */
+          for (const [k, i] of Object.entries(IND_FIELD_TO_SERIES[inst.type])) {
+            if (v[k] == null) continue;
+            inst.series[i].update({ time: t, value: v[k] });
+            (inst.lastVals ||= [])[i] = v[k];
           }
-          (inst.lastVals ||= [])[i] = v[f];
-        });
-      } else {
-        /* boll/kd/rsi：后端 values 键 → series 下标固定映射 */
-        for (const [k, i] of Object.entries(IND_FIELD_TO_SERIES[inst.type])) {
-          if (v[k] == null) continue;
-          inst.series[i].update({ time: t, value: v[k] });
-          (inst.lastVals ||= [])[i] = v[k];
         }
+        inst.lastIndTs = Math.max(inst.lastIndTs || 0, t);   // v9.87 自愈看门狗：逐实例记录末点时间
+      } catch (e) {
+        /* v9.87：逐实例隔离应用异常——单实例抛错（如 lwc update 时序异常）不得阻断同消息后续实例更新 */
+        if (!inst._pushErrLogged) { inst._pushErrLogged = true; console.error('applyIndPush error:', inst.type, inst.name, e); }
       }
     }
   }
@@ -1079,15 +1086,29 @@ class StepLinePrimitive {
       ctx.lineWidth = Math.max(1, Math.floor(this._opts.lineWidth * hpr));
       ctx.setLineDash(stepDash(this._opts.lineStyle, hpr));
       ctx.beginPath();
-      let px = null, py = null;
+      let pR = null;   // 上一点走平段右边界坐标（null=首点/断点后，兼作连续性标志）
       for (let i = i0; i <= i1; i++) {
         const pt = data[i];
         const x = ts.timeToCoordinate(pt.time);
         const y = pt.value == null ? null : s.priceToCoordinate(pt.value);
-        if (x == null || y == null) { px = null; continue; }
-        const xr = Math.round(x * hpr) + half, yr = Math.round(y * vpr) + half;
-        if (px != null) { ctx.moveTo(px, py); ctx.lineTo(xr, py); ctx.lineTo(xr, yr); }   // 水平保持到下一 bar → 垂直跳变
-        px = xr; py = yr;
+        if (x == null || y == null) { pR = null; continue; }
+        const yr = Math.round(y * vpr) + half;
+        /* 边界对齐：垂直跳变落在两 bar 中心中点（=bar 边界，lwc 索引制时间轴等距），
+           走平段覆盖整根 bar [左边界, 右边界]——每根 K 线对应自己值的水平段（Pine stepline 观感）；
+           首/末点无相邻 bar 时按相邻间距外推半格（末点=forming bar 水平段延伸到最后蜡烛右侧） */
+        const pv = i > 0 ? ts.timeToCoordinate(data[i - 1].time) : null;
+        const nx = i < data.length - 1 ? ts.timeToCoordinate(data[i + 1].time) : null;
+        const gapL = pv != null ? Math.abs(x - pv) : (nx != null ? Math.abs(nx - x) : 0);
+        const gapR = nx != null ? Math.abs(nx - x) : (pv != null ? Math.abs(x - pv) : 0);
+        const curL = Math.round((pv != null ? (x + pv) / 2 : x - gapL / 2) * hpr) + half;
+        const curR = Math.round((nx != null ? (x + nx) / 2 : x + gapR / 2) * hpr) + half;
+        if (pR != null) {
+          ctx.lineTo(pR, yr);                        // 垂直跳变落在 bar 边界（前值走平已由上轮 lineTo(curR) 画到边界）
+        } else {
+          ctx.moveTo(curL, yr);                      // 首点（或断点后）：走平段自左边界起绘
+        }
+        ctx.lineTo(curR, yr);                        // 走平覆盖整根 bar
+        pR = curR;
       }
       ctx.stroke();
       ctx.restore();
@@ -1801,6 +1822,7 @@ function renderInstance(inst, reset = false) {
     return () => {
       datas.forEach((s, i) => inst.series[i].setData(s));
       inst.lastVals = datas.map(s => s.length ? s[s.length - 1].value : null);
+      inst.lastIndTs = datas.reduce((m, s) => s.length ? Math.max(m, s[s.length - 1].time) : m, 0);   // v9.87 自愈看门狗：历史序列末点时间
     };
   }).catch(() => null);   // 后端未连时保持占位（已清空）
 }
@@ -1815,6 +1837,46 @@ function renderIndData(reset = false) {
   indReady = false;   // 历史拉取期间暂存 WS 增量，待全部 setData 完成后一次放行
   Promise.all(applies).then(fns => { fns.forEach(fn => fn && fn()); indReady = true; });
 }
+/* ═══ v9.87 指标序列自愈：WS 重连 resync + 推送中断看门狗 ═══
+   背景：指标注册在后端内存（仅 REST 历史请求驱动），后端进程重启 / WS 静默断线后 indicators.*
+   推送流中断，而 K 线不依赖注册继续前进——长开页面的指标线冻在旧快照，表现为「K 线继续走、
+   最后 N 根指标值不计算」（BTC 15m 2026-10-10 实证：后端 20:06 重启，长开页面冻到深夜）。
+   对策：① WS 重连主动 resync 一次历史；② 每 30s 看门狗：K 线推送正常但指标推送 120s 静默 ⇒
+   推送中断；或某实例末点滞后最后一根 K 线超过整 bar ⇒ 单实例漏更新；均触发防抖历史重拉
+   （renderIndData 不先清空，无闪烁；拉取期间 indReady 暂存增量，完成后一次收敛）。 */
+let lastBarPushAt = 0;        // 最近一次 applyBar 收到 K 线推送的时刻
+let lastIndPushAt = 0;        // 最近一次 applyIndPush 收到当前契约指标推送的时刻
+let indResyncPending = false;
+function scheduleIndResync(reason) {
+  if (indResyncPending || !initialLoaded || !klines.length || !indInstances.length) return;
+  indResyncPending = true;
+  setTimeout(() => {
+    indResyncPending = false;
+    if (initialLoaded && klines.length && indInstances.length) {
+      console.info('[ind-resync] refetch indicator history:', reason);
+      renderIndData(false);
+    }
+  }, 800);
+}
+setInterval(() => {
+  if (!initialLoaded || !indReady || !klines.length) return;
+  const now = Date.now();
+  /* 推送中断判定：K 线仍在到达而指标推送静默超 120s（注册丢失/订阅丢失/后端重启） */
+  if (lastBarPushAt && lastIndPushAt && now - lastBarPushAt < 120000 && now - lastIndPushAt > 120000) {
+    scheduleIndResync('no indicator push for 120s while klines live');
+    return;
+  }
+  /* 单实例漏更新判定：末点滞后最后一根 K 线超过整 bar（跨 bar 瞬时滞后恰一整 bar、秒级自愈，不触发） */
+  const lastBar = klines[klines.length - 1].time;
+  const lagSec = tfDurSec(curTf);
+  for (const inst of indInstances) {
+    if (inst.off || !inst.lastIndTs) continue;
+    if (lastBar - inst.lastIndTs > lagSec) {
+      scheduleIndResync(`indicator lag ${lastBar - inst.lastIndTs}s > ${lagSec}s @${inst.type === 'custom' ? inst.name : inst.type}`);
+      break;
+    }
+  }
+}, 30000);
 function renderChart(reset = false) {
   candleSeries.setData(klines.map(k => ({ time: k.time, open: k.open, high: k.high, low: k.low, close: k.close })));
   volumeSeries.setData(klines.map(k => ({ time: k.time, value: k.volume, color: volColor(k.close, k.open) })));
@@ -2148,13 +2210,21 @@ document.querySelectorAll('.gear-btn').forEach(b => b.innerHTML = GEAR_SVG);
 const indModal = document.getElementById('ind-modal');
 let curIndEdit = null;   // 实例 id
 function instById(id) { return indInstances.find(i => i.id === id); }
-/* 参数弹窗 meta：内置走 IND_META；custom 由后端 default_params 动态生成（IND-110） */
+/* 参数弹窗 meta：内置走 IND_META；custom 由后端 default_params 动态生成（IND-110）；
+   默认值非整数的参数（如 MR_Y_MAIN 的 mult_1=1.7/mult_2=2.7）按浮点参数处理：step 0.1、下限 0.1、
+   decimals 2（手动输入支持两位小数，▲▼步进仍按 0.1），
+   否则输入框 step=1 且确认时被 Math.round 强取整，浮点参数永远只能是整数 */
 function indModalMeta(inst) {
   if (inst.type !== 'custom') return IND_META[inst.type];
   const bp = BACKEND_META[inst.name];
   return {
     title: `${inst.name} 参数`,
-    fields: Object.keys(bp?.default_params || {}).map(k => ({ key: k, label: k, min: 1, max: 'kline' })),
+    fields: Object.keys(bp?.default_params || {}).map(k => {
+      const isFloat = !Number.isInteger(bp.default_params[k]);
+      return isFloat
+        ? { key: k, label: k, min: 0.1, max: 'kline', step: 0.1, decimals: 2 }
+        : { key: k, label: k, min: 1, max: 'kline' };
+    }),
   };
 }
 /* 弹窗页签切换：参数 / 样式；两个页签 DOM 同时存在（确认时跨页签采集） */
@@ -2175,7 +2245,7 @@ function openIndModal(id) {
     <div class="field">
       <div class="field-label"><span>${f.label}</span><span class="muted">${f.min} ~ ${fieldMax(f)}</span></div>
       <div class="input-box">
-        <input id="ind-f-${f.key}" type="number" min="${f.min}" max="${fieldMax(f)}" step="${f.step || 1}" value="${inst.params[f.key]}">
+        <input id="ind-f-${f.key}" type="number" min="${f.min}" max="${fieldMax(f)}" step="${f.step || 1}" data-decimals="${f.decimals ?? (f.step && f.step < 1 ? 1 : 0)}" value="${inst.params[f.key]}">
         <span class="step-col">
           <button type="button" class="step-btn" data-dir="1" data-target="ind-f-${f.key}" tabindex="-1" title="增加">▲</button>
           <button type="button" class="step-btn" data-dir="-1" data-target="ind-f-${f.key}" tabindex="-1" title="减少">▼</button>
@@ -2189,7 +2259,7 @@ function openIndModal(id) {
   document.querySelector('#ind-fields input[type=number]')?.focus();   // 跳过显隐勾选框，聚焦首个参数输入框
 }
 /* 参数 ± 步进：点击按 step 增减对应输入框值，自动钳位到 min~max（免每次手输）；
-   格式化与确认采集一致（step<1 保留 1 位小数，否则取整） */
+   格式化与确认采集一致（小数位按 data-decimals：缺省 step<1 保 1 位、浮点参数声明 2 位，否则取整） */
 document.getElementById('ind-fields').addEventListener('click', e => {
   const btn = e.target.closest('.step-btn');
   if (!btn) return;
@@ -2201,7 +2271,8 @@ document.getElementById('ind-fields').addEventListener('click', e => {
   let v = parseFloat(inp.value);
   if (!isFinite(v)) v = dir > 0 ? min - step : max + step;   // 空值：从边界起步
   v = Math.min(max, Math.max(min, v + dir * step));
-  inp.value = step < 1 ? v.toFixed(1) : String(Math.round(v));
+  const dec = +inp.dataset.decimals || 0;
+  inp.value = dec > 0 ? v.toFixed(dec) : String(Math.round(v));
   inp.dispatchEvent(new Event('input', { bubbles: true }));
 });
 function refreshIndLabels() {
@@ -2246,7 +2317,8 @@ document.getElementById('ind-ok').addEventListener('click', () => {
     let v = parseFloat(el.value);
     if (!isFinite(v)) { el.focus(); return; }
     v = Math.min(fieldMax(f), Math.max(f.min, v));
-    next[f.key] = f.step && f.step < 1 ? +v.toFixed(1) : Math.round(v);
+    const dec = f.decimals ?? (f.step && f.step < 1 ? 1 : 0);
+    next[f.key] = dec > 0 ? +v.toFixed(dec) : Math.round(v);
   }
   if (inst.type === 'macd' && next.fast >= next.slow) {
     document.getElementById('ind-f-fast').focus();
@@ -2477,6 +2549,7 @@ function connectWS() {
     ws.onopen = () => {
       wsLastMsgAt = Date.now();
       setWs(true); subscribeWS();
+      scheduleIndResync('ws-reconnect');   // v9.87 自愈：重连后指标推送可能已中断（后端重启丢注册等），resync 历史
       posPriceTopics.forEach(t => ws.send(JSON.stringify({ action: 'subscribe', topic: t })));
       listPriceTopics.clear(); resyncListTopics();   // 重连后服务端订阅已丢，全量重建
     };
@@ -2587,6 +2660,7 @@ setInterval(updatePriceTag, 1000); updatePriceTag();
 /* 收到实时 bar：增量更新图表与指标 */
 function applyBar(b) {
   if (!initialLoaded || !klines.length) return;   // 首屏未就绪：忽略 WS 推送，防空图竞态
+  lastBarPushAt = Date.now();   // v9.87 自愈看门狗：K 线推送活跃时间
   const t = Math.floor(b.timestamp / 1000);
   const bar = { time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume };
   const last = klines[klines.length - 1];
