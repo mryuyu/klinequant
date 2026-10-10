@@ -58,7 +58,8 @@ from strategy.sdk.order_id import OrderIdFactory
 from strategy.sdk.order_journal import STATE_DEAD, STATE_FILLED, STATE_IN_FLIGHT
 from strategy.sdk.state_store import StateBackend, StateStore
 
-if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合 order_journal
+if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合 order_journal / broadcaster
+    from strategy.sdk.broadcaster import SignalBroadcaster
     from strategy.sdk.order_journal import Journal
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,7 @@ class LiveRunner:
         state_backend: Optional[StateBackend] = None,
         state_debounce: float = 1.0,
         stale_threshold: Optional[float] = None,
+        broadcaster: Optional["SignalBroadcaster"] = None,
     ):
         """
         Args:
@@ -146,6 +148,9 @@ class LiveRunner:
         self._state_store: Optional[StateStore] = None
         # R5 断线闸门阈值（秒；None=不启用）——透传给每个 KqApi，feed degraded 时拒 OPEN
         self._stale_threshold = stale_threshold
+        # Phase 3 信号分发：lead 侧广播器（None=不分发）——透传给每个 KqApi，
+        #   run() 时 start()（起心跳）、_shutdown() 清仓后 stop()。
+        self._broadcaster = broadcaster
 
         # 组件（run 时初始化）
         self._specs: Dict[str, SymbolInfo] = {}
@@ -170,6 +175,12 @@ class LiveRunner:
 
         try:
             self._initialize()
+            # Phase 3：初始化完成后启动信号分发（起心跳 + 绑定 intent/report 通道）。
+            if self._broadcaster is not None:
+                try:
+                    self._broadcaster.start()
+                except Exception as e:  # 分发启动失败不阻断 lead 本地运行
+                    logger.error(f"[DIST] broadcaster start failed: {e}", exc_info=True)
             # 设置运行时限：到点后 api.wait_update 返回 False，各品种策略优雅退出 → 触发清仓
             if self._duration and self._duration > 0:
                 end_ts = time.time() + self._duration
@@ -265,6 +276,7 @@ class LiveRunner:
                 exchange=self._exchange,
                 engine_lock=self._engine_lock,
                 periods=self._periods,
+                broadcaster=self._broadcaster,
             )
 
         # 9. R3 启动恢复（journal 驱动，reconcile 之前）：凭 client_order_id 逐条向 venue
@@ -524,6 +536,14 @@ class LiveRunner:
                 logger.error(f"State save failed: {e}", exc_info=True)
         if self._state_backend is not None:
             self._state_backend.close()
+
+        # ④b Phase 3：清仓后、关 journal 前停信号分发（best-effort，异常不阻断退出）。
+        #   此时 flatten 的 FLATTEN intent 已提交，followers 同步清仓后才断心跳。
+        if self._broadcaster is not None:
+            try:
+                self._broadcaster.stop()
+            except Exception as e:
+                logger.warning(f"[DIST] broadcaster stop failed: {e}")
 
         # ⑤ 关闭订单意图 WAL（在清仓写单之后，确保收尾意图落盘）
         if self._journal is not None:

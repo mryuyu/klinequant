@@ -65,6 +65,7 @@ class BinanceFuturesExecutor(Executor):
         self._rest_base = self._config.get("rest_base", self._DEFAULT_REST_BASE)
         self._proxy = self._config.get("proxy")
         self._http: Optional[httpx.AsyncClient] = None
+        self._time_offset_ms = 0        # 币安服务器时间校准偏移（connect 时同步）
 
     async def connect(self) -> None:
         transport = None
@@ -75,7 +76,25 @@ class BinanceFuturesExecutor(Executor):
             timeout=15.0,
             transport=transport,
         )
+        await self._sync_server_time()
         logger.info(f"BinanceFuturesExecutor connected: {self._rest_base}")
+
+    async def _sync_server_time(self) -> None:
+        """GET /fapi/v1/time 校准本机时钟偏移（签名 timestamp 补偿，防 -1021）。"""
+        try:
+            t0 = int(time.time() * 1000)
+            resp = await self._http.get("/fapi/v1/time")
+            resp.raise_for_status()
+            server_time = int(resp.json().get("serverTime", 0))
+            t1 = int(time.time() * 1000)
+            self._time_offset_ms = server_time - (t0 + t1) // 2
+            logger.info(
+                f"Binance server time synced: offset={self._time_offset_ms}ms"
+            )
+        except Exception as e:
+            logger.warning(
+                f"sync server time failed (fall back to local clock): {e}"
+            )
 
     async def disconnect(self) -> None:
         if self._http:
@@ -85,7 +104,7 @@ class BinanceFuturesExecutor(Executor):
     # ─── 签名 ───
 
     def _sign_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        params["timestamp"] = int(time.time() * 1000)
+        params["timestamp"] = int(time.time() * 1000) + self._time_offset_ms
         params["recvWindow"] = 5000
         query = urlencode(params)
         sig = hmac.new(

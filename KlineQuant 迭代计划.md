@@ -1,8 +1,8 @@
 # KlineQuant 迭代计划文档
 
-> **版本**：v2.20  
+> **版本**：v2.21  
 > **创建日期**：2026-07-30  
-> **最后更新**：2026-10-10（v2.20 新增：SDK Phase M 完成——多周期自由式执行模型（拓扑 Z）M1~M7 + 回测多周期同构落地，全量 923 passed，10 品种×3 周期全量派发轮实测 15.62ms < 50ms）  
+> **最后更新**：2026-10-10（v2.21 新增：SDK Phase 3 信号分发完成——lead SignalBroadcaster / follower OrderAgent / dist_protocol 白名单信任边界（策略代码永不外流），全量 973 passed；状态流对账另立 ACC-SYNC 入 BACKLOG）  
 > **当前基线**：v1.9.1-mockup（轻量版行情终端，lc-live.html 唯一迭代基线，commit a45ffe2 已推送）  
 > **仓库**：https://github.com/mryuyu/klinequant  
 > **版本命名规范**：`主版本.次版本.修订号-后缀`，后缀 `-paper` = 模拟盘可用，`-live` = 实盘已验证，无后缀 = 正式版
@@ -286,6 +286,8 @@ v2.1.0-live  实盘验证（INT-003）：真实资金全链路验证，最后开
 | WEBGUI-L2 | 研究 GUI 叠加运行中策略信号（Level 2） | 提前落地（延后必做） | ⬜ 规划中（用户定案：必做非当下，详见六·六） |
 | WEBGUI-L3 | 研究 GUI 策略图形标注叠加（复用 DrawingPrimitive） | 提前落地（随 L2） | ⬜ 规划中（用户 2026-10-08 定案：复用手工画线渲染层，详见六·六） |
 | SDK-TOPO-Z | SDK 执行模型拓扑 Z（symbol 粒度线程隔离 + 线程内多周期单循环）/ Phase M（M4 feed 多线程隔离 snapshot per-api+per-symbol event / M6 品种级看门狗 / M7 冷启动预热优化） | 提前落地 | ⬜ 规划中（2026-10-09 定案：取代原拓扑 B 单循环；数据供给层压测裁定稳态无需优化，详见 SDK 阶段实施规划 Phase M） |
+| SDK-DIST | SDK Phase 3 信号分发（lead SignalBroadcaster / follower OrderAgent / dist_protocol 白名单信任边界 + token 鉴权；策略代码永不外流，仅广播 order/cancel/flatten/heartbeat 指令；幂等去重/缩放/品种映射/回报扇入聚合/心跳丢失 hold） | 提前落地 | ✅ 已实现（2026-10-10：dist_protocol/broadcaster/order_agent/run_order_agent 新增 + api/live_runner/accounts.yaml/zmq_transport 接线；新增 50 单测全绿，全量 973 passed 零回归，8 新文件 ruff 全绿；币安 Futures Demo + FX 双 MT5 真机联调待开市，FX 顺延周一） |
+| ACC-SYNC | 状态流对账跟单（目标仓位同步 / 断线收敛 / 失联自动 flatten；在 Phase 3 信号流之上补状态流，follower 与 lead 目标仓位周期对账收敛） | 待排期 | ⬜ BACKLOG（2026-10-10 定案：信号流先行、状态流对账延后另立专项；当前心跳丢失 follower 默认 hold（不再开新仓、放行平仓），自动 flatten/断线收敛留待本项） |
 
 ---
 

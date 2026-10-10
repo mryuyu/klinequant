@@ -103,10 +103,16 @@ class PortRegistry:
 # ZMQ PUB/SUB 广播器
 # ─────────────────────────────────────────────
 class ZmqPublisher:
-    """ZMQ PUB 端：绑定端口，广播消息给所有订阅者。"""
+    """ZMQ PUB 端：广播消息给所有订阅者。
 
-    def __init__(self, bind_host: str = "127.0.0.1", port: int = 5501):
-        self._bind_addr = f"tcp://{bind_host}:{port}"
+    ``bind=True``（默认）绑定端口（一对多扇出的常规形态）；``bind=False`` 时改为
+    connect（用于**反向扇入**：如 Phase 3 报告回流，lead 侧 SUB 绑定、多个 follower
+    侧 PUB 连接同一 lead 端点）。
+    """
+
+    def __init__(self, bind_host: str = "127.0.0.1", port: int = 5501, *, bind: bool = True):
+        self._addr = f"tcp://{bind_host}:{port}"
+        self._bind = bind
         self._context: Optional[zmq.asyncio.Context] = None
         self._socket: Optional[zmq.asyncio.Socket] = None
         self._port = port
@@ -119,15 +125,19 @@ class ZmqPublisher:
         self._context = zmq.asyncio.Context()
         self._socket = self._context.socket(zmq.PUB)
         self._socket.setsockopt(zmq.LINGER, 1000)
-        self._socket.bind(self._bind_addr)
-        logger.info(f"ZMQ PUB bound to {self._bind_addr}")
+        if self._bind:
+            self._socket.bind(self._addr)
+            logger.info(f"ZMQ PUB bound to {self._addr}")
+        else:
+            self._socket.connect(self._addr)
+            logger.info(f"ZMQ PUB connected to {self._addr}")
 
     async def stop(self) -> None:
         if self._socket:
             self._socket.close(linger=500)
         if self._context:
             self._context.term()
-        logger.info(f"ZMQ PUB stopped ({self._bind_addr})")
+        logger.info(f"ZMQ PUB stopped ({self._addr})")
 
     async def publish(self, topic: str, message: Message) -> None:
         """发布消息，topic 作为 ZMQ multipart 的第一帧。"""
@@ -141,8 +151,9 @@ class ZmqPublisher:
 class ZmqSubscriber:
     """ZMQ SUB 端：连接 PUB，接收广播消息。"""
 
-    def __init__(self, connect_host: str = "127.0.0.1", port: int = 5501):
-        self._connect_addr = f"tcp://{connect_host}:{port}"
+    def __init__(self, connect_host: str = "127.0.0.1", port: int = 5501, *, bind: bool = False):
+        self._addr = f"tcp://{connect_host}:{port}"
+        self._bind = bind
         self._context: Optional[zmq.asyncio.Context] = None
         self._socket: Optional[zmq.asyncio.Socket] = None
         self._handlers: Dict[str, MessageHandler] = {}
@@ -158,8 +169,13 @@ class ZmqSubscriber:
         self._context = zmq.asyncio.Context()
         self._socket = self._context.socket(zmq.SUB)
         self._socket.setsockopt(zmq.LINGER, 1000)
-        self._socket.connect(self._connect_addr)
-        logger.info(f"ZMQ SUB connected to {self._connect_addr}")
+        # bind=True 用于反向扇入（Phase 3 报告回流：lead SUB 绑定，多 follower PUB 连接）
+        if self._bind:
+            self._socket.bind(self._addr)
+            logger.info(f"ZMQ SUB bound to {self._addr}")
+        else:
+            self._socket.connect(self._addr)
+            logger.info(f"ZMQ SUB connected to {self._addr}")
 
     async def stop(self) -> None:
         self._running = False
@@ -173,7 +189,7 @@ class ZmqSubscriber:
             self._socket.close(linger=500)
         if self._context:
             self._context.term()
-        logger.info(f"ZMQ SUB stopped ({self._connect_addr})")
+        logger.info(f"ZMQ SUB stopped ({self._addr})")
 
     def subscribe(self, topic: str, handler: MessageHandler) -> None:
         """订阅指定主题"""
@@ -396,6 +412,9 @@ class ZmqTransport(Transport):
         sub_port: Optional[int] = None,
         rep_port: Optional[int] = None,
         service_name: str = "",
+        *,
+        pub_bind: bool = True,
+        sub_bind: bool = False,
     ):
         self._role = role
         self._bind_host = bind_host
@@ -407,12 +426,12 @@ class ZmqTransport(Transport):
         if role == "publisher":
             if pub_port is None:
                 raise ValueError("pub_port required for publisher role")
-            self._publisher = ZmqPublisher(bind_host, pub_port)
+            self._publisher = ZmqPublisher(bind_host, pub_port, bind=pub_bind)
 
         elif role == "subscriber":
             if sub_port is None:
                 raise ValueError("sub_port required for subscriber role")
-            self._subscriber = ZmqSubscriber(bind_host, sub_port)
+            self._subscriber = ZmqSubscriber(bind_host, sub_port, bind=sub_bind)
 
         elif role == "server":
             if rep_port is None:

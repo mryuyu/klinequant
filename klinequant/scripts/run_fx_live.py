@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from strategy.sdk.backend import Mt5Backend  # noqa: E402
+from strategy.sdk.broadcaster import build_broadcaster_from_account  # noqa: E402
 from strategy.sdk.live_runner import LiveRunner  # noqa: E402
 from strategy.sdk.order_journal import SqliteJournal  # noqa: E402
 from strategy.sdk.state_store import SqliteStateBackend  # noqa: E402
@@ -143,6 +144,11 @@ def main():
         acct_key = account.name if account else "default"
         state_backend = SqliteStateBackend(ROOT / "data" / "state" / f"{acct_key}.db")
 
+    # Phase 3：role==lead → 构造 SignalBroadcaster（standalone/follower → None，行为零变化）
+    broadcaster = build_broadcaster_from_account(account)
+    if broadcaster is not None:
+        print("  Distribution: LEAD (broadcast intents to followers, token-authenticated)")
+
     runner = LiveRunner(
         backend,
         symbols=symbols,
@@ -155,6 +161,7 @@ def main():
         journal=journal,
         state_backend=state_backend,
         stale_threshold=args.stale_guard if args.stale_guard > 0 else None,
+        broadcaster=broadcaster,
     )
     runner.run()
 

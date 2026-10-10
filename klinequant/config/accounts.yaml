@@ -7,7 +7,7 @@
 #     （仅在实际 --account 选用该账户时才校验，故不影响 FX 主账户运行）。
 #   - 解析优先级：CLI --account > env KQ_ACCOUNT > main:true。
 #   - market: fx 用 mt5 段；market: crypto 用 binance 段。
-#   - role: standalone（默认）| lead | follower（后两者 Phase 3 信号分发用，本阶段仅预留）。
+#   - role: standalone（默认）| lead | follower（Phase 3 信号分发：lead 广播白名单指令、follower 跟单）。
 #   - 远程外汇账户两种形态：①本机多终端各自登录远程平台（server 平台名 + host IP）属本配置层；
 #     ②终端在远程机器（VPS）须部署 OrderAgent，归 Phase 3。
 
@@ -36,13 +36,63 @@ accounts:
       rest_base: "${BINANCE_FUTURES_REST_BASE:-https://demo-fapi.binance.com}"
       ws_base: "${BINANCE_FUTURES_WS_BASE:-wss://demo-fstream.binance.com/ws}"
 
-  # ─── follower 形态（Phase 3 实施时启用，示例）───
+  # ─── Phase 3 信号分发样例（取消注释即用；token 明文只放 .env）───
+  #
+  # 约定字段（落 AccountConfig.extra，由 scripts 消费）：
+  #   lead     ：intent_endpoint（PUB bind）/ report_endpoint（SUB bind）/ token
+  #              / heartbeat_interval（可选，默认 2s）
+  #   follower ：scale / scale_mode(fixed|balance) / symbol_map / lead_intent_endpoint
+  #              （SUB connect 到 lead 的 intent_endpoint）/ report_endpoint（PUB connect
+  #              到 lead 的 report_endpoint）/ token / lead_timeout（可选，默认 10s）
+  #   token 一律 ${KQ_LEAD_TOKEN}（lead/follower 必须一致；.env 里设一次）。
+  #   默认端点 intent=tcp://127.0.0.1:5560、report=tcp://127.0.0.1:5561（跨机时把
+  #   127.0.0.1 换成 lead 主机 IP，或走 SSH 隧道 / frp）。
+
+  # ── lead（加密）：跑 run_crypto_live.py --account crypto-lead ──
+  # 复用已验证的 BINANCE_API_KEY/SECRET（USDT-M Futures 测试网，余额 5000 USDT）
+  - name: crypto-lead
+    market: crypto
+    role: lead
+    intent_endpoint: "tcp://127.0.0.1:5560"   # 广播下单/撤单/清仓/心跳（PUB bind）
+    report_endpoint: "tcp://127.0.0.1:5561"   # 聚合 follower 回报（SUB bind，反向扇入）
+    token: "${KQ_LEAD_TOKEN}"
+    binance:
+      api_key: "${BINANCE_API_KEY}"
+      api_secret: "${BINANCE_API_SECRET}"
+      testnet: true
+      proxy: "${HTTP_PROXY:-}"
+      rest_base: "${BINANCE_FAPI_REST_BASE:-https://demo-fapi.binance.com}"
+      ws_base: "${BINANCE_FAPI_WS_BASE:-wss://demo-fstream.binance.com/ws}"
+
+  # ── follower（加密）：跑 run_order_agent.py --account crypto-follower-1 --market crypto ──
+  # 第二套币安 demo 子账户凭证，需先在 .env 填 BINANCE_FOLLOWER1_API_KEY/SECRET
+  - name: crypto-follower-1
+    market: crypto
+    role: follower
+    scale: 0.5                                 # fixed 模式：qty×0.5
+    scale_mode: fixed                          # fixed | balance（balance 按余额比缩放）
+    symbol_map: { BTCUSDT: BTCUSDT }           # lead 品种 → follower 品种（空=恒等）
+    lead_intent_endpoint: "tcp://127.0.0.1:5560"  # connect 到 lead intent_endpoint
+    report_endpoint: "tcp://127.0.0.1:5561"       # connect 到 lead report_endpoint
+    token: "${KQ_LEAD_TOKEN}"
+    lead_timeout: 10                           # 心跳龄超此值 → hold 新开仓
+    binance:
+      api_key: "${BINANCE_FOLLOWER1_API_KEY}"     # follower 独立子账户凭证
+      api_secret: "${BINANCE_FOLLOWER1_API_SECRET}"
+      testnet: true
+      proxy: "${HTTP_PROXY:-}"
+      rest_base: "${BINANCE_FAPI_REST_BASE:-https://demo-fapi.binance.com}"
+      ws_base: "${BINANCE_FAPI_WS_BASE:-wss://demo-fstream.binance.com/ws}"
+
+  # ── follower 样例（外汇，终端在远程机器 / 本机多终端）：run_order_agent.py --account fx-follower-1 --market fx ──
   # - name: fx-follower-1
   #   market: fx
   #   role: follower
-  #   scale: 0.5                          # 余额比例 / 固定倍数
+  #   scale: 0.5                          # 固定倍数（scale_mode: fixed）
+  #   scale_mode: fixed
   #   symbol_map: { EURUSD: EURUSD.m }    # 券商后缀差异
-  #   lead_endpoint: "tcp://127.0.0.1:5503"
+  #   lead_intent_endpoint: "tcp://127.0.0.1:5560"
+  #   report_endpoint: "tcp://127.0.0.1:5561"
   #   token: "${KQ_LEAD_TOKEN}"
   #   mt5:
   #     terminal_path: "${MT5_TERMINAL_PATH_2:-}"

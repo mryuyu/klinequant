@@ -281,6 +281,7 @@ class BinanceBackend:
         self._thread: Optional[threading.Thread] = None
         self._adapter = None            # BinanceFuturesAdapter
         self._client = None             # httpx.AsyncClient（下单/查询）
+        self._time_offset_ms = 0        # 币安服务器时间校准偏移（connect 时同步）
 
     @property
     def account_name(self) -> str:
@@ -320,7 +321,7 @@ class BinanceBackend:
     # ─── 签名（positionSide/dual 等私有调用）───
 
     def _sign_params(self, params: Dict[str, object]) -> Dict[str, object]:
-        params["timestamp"] = int(time.time() * 1000)
+        params["timestamp"] = int(time.time() * 1000) + self._time_offset_ms
         params["recvWindow"] = 5000
         query = urlencode(params)
         params["signature"] = hmac.new(
@@ -356,6 +357,9 @@ class BinanceBackend:
             base_url=self._rest_base, timeout=self._timeout, transport=transport
         )
 
+        # 时钟校准：本机时间 vs 币安服务器时间偏移（签名 timestamp 用，防 -1021）
+        await self._sync_server_time()
+
         # One-way 模式（positionSide=BOTH）；-4059 = 无需变更也算成功
         await self._set_one_way()
 
@@ -368,6 +372,28 @@ class BinanceBackend:
                 logger.warning(f"set_leverage {sym} failed (continue): {e}")
 
         logger.info(f"BinanceBackend connected: {self._rest_base}")
+
+    async def _sync_server_time(self) -> None:
+        """GET /fapi/v1/time 校准本机时钟与币安服务器时间偏移。
+
+        签名请求的 timestamp 必须落在 recvWindow(5s) 内，本机时钟漂移会触发
+        -1021 拒绝；用请求往返中点估算 offset，签名时补偿。失败仅告警回落本机时钟。
+        """
+        try:
+            t0 = int(time.time() * 1000)
+            resp = await self._client.get("/fapi/v1/time")
+            resp.raise_for_status()
+            server_time = int(resp.json().get("serverTime", 0))
+            t1 = int(time.time() * 1000)
+            self._time_offset_ms = server_time - (t0 + t1) // 2
+            logger.info(
+                f"Binance server time synced: offset={self._time_offset_ms}ms "
+                f"(rtt={t1 - t0}ms)"
+            )
+        except Exception as e:
+            logger.warning(
+                f"sync server time failed (fall back to local clock): {e}"
+            )
 
     async def _set_one_way(self) -> None:
         params = self._sign_params({"dualSidePosition": "false"})
@@ -415,6 +441,7 @@ class BinanceBackend:
             loop=self._loop, client=self._client,
             api_key=self._api_key, api_secret=self._api_secret,
             magic=self._magic, timeout=self._timeout,
+            time_offset_ms=self._time_offset_ms,
         )
 
     def make_feed(

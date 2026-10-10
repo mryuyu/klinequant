@@ -39,6 +39,7 @@ from strategy.sdk.state_store import StateStore
 
 if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合 order_journal / indicator_engine
     from core.indicator_engine.engine import IndicatorEngine
+    from strategy.sdk.broadcaster import SignalBroadcaster
     from strategy.sdk.indic import IndicApi
     from strategy.sdk.order_journal import Journal
 
@@ -146,6 +147,7 @@ class KqApi:
         exchange: str = "mt5",
         engine_lock: Optional[Any] = None,
         periods: list[str] | None = None,
+        broadcaster: Optional["SignalBroadcaster"] = None,
     ):
         self._symbol = symbol
         self._period = period
@@ -189,6 +191,11 @@ class KqApi:
         # M4-a：is_changing 基线快照 per-api 独立持有（拓扑 Z 多线程各自 wait_update
         #   互不覆盖；旧版存 feed 级单一字段会在多品种实盘互相污染基线）
         self._snapshot: dict[str, int] = {}
+        # Phase 3 信号分发：lead 侧广播器（None=不分发，standalone/follower 默认）。
+        #   send_order/cancel_all 逐条广播白名单 intent；flatten 广播单条 FLATTEN 并
+        #   抑制内部 per-leg 广播（_suppress_broadcast>0 时 send_order/cancel_all 不再单独发）。
+        self._broadcaster = broadcaster
+        self._suppress_broadcast = 0
 
     # ═════════ M4 多周期记账：tag / magic 派生 ═════════
 
@@ -477,6 +484,27 @@ class KqApi:
                     qty=venue_spec.qty, price=venue_spec.price,
                 )
 
+            # Phase 3：向 followers 广播白名单下单意图（fire-and-forget，绝不阻断本地成交）。
+            #   flatten 内部调用的 CLOSE leg 由外层单条 FLATTEN 覆盖，故此处抑制。
+            if self._broadcaster is not None and self._suppress_broadcast == 0:
+                try:
+                    self._broadcaster.broadcast_order(
+                        client_order_id=coid,
+                        tag=venue_spec.tag or tag,
+                        symbol=sym,
+                        side=venue_spec.side.value,
+                        offset=venue_spec.offset.value,
+                        qty=venue_spec.qty,
+                        kind=venue_spec.kind.value,
+                        price=venue_spec.price,
+                        stop_price=venue_spec.stop_price,
+                        sl=venue_spec.sl,
+                        tp=venue_spec.tp,
+                        tif=venue_spec.tif.value,
+                    )
+                except Exception as e:  # 分发失败仅告警，不影响 lead 本地下单
+                    logger.warning(f"[DIST] broadcast_order failed for {coid}: {e}")
+
             # 提交到 venue（异常 → 结局未知，写 UNKNOWN，绝不静默；保守保持在途不释放）
             try:
                 submit_res = self._executor.submit(venue_spec)
@@ -565,6 +593,15 @@ class KqApi:
         sym = symbol or self._symbol
         qmagic = None if period is None else self._magic_for(period)
         cmagic = self._magic_for(period)
+        # Phase 3：广播撤挂单意图（flatten 内部调用时由外层 FLATTEN 覆盖，故抑制）。
+        if self._broadcaster is not None and self._suppress_broadcast == 0:
+            try:
+                self._broadcaster.broadcast_cancel(
+                    client_order_id=f"cancel-{sym}-{int(time.time() * 1000)}",
+                    tag=self._tag_for(period), symbol=sym,
+                )
+            except Exception as e:  # 分发失败仅告警
+                logger.warning(f"[DIST] broadcast_cancel failed for {sym}: {e}")
         orders = self._executor.query_orders(sym, qmagic)
         count = 0
         for o in orders:
@@ -590,41 +627,56 @@ class KqApi:
         pmagic = None if period is None else self._magic_for(period)
         result = {"canceled": 0, "net_vol": Decimal("0"), "close": None}
 
-        # ① 撤销所有未成交挂单，并释放账本在途
-        result["canceled"] = self.cancel_all(sym, period)
-        self._ledger.clear_in_flight(sym, tag)
+        # Phase 3：广播单条 FLATTEN 意图（follower 收到后独立平自己的净持仓，
+        #   而非复制 lead 的具体 CLOSE 量，因 follower 仓位已按 scale 缩放）；同时
+        #   抑制内部 cancel_all/send_order 的 per-leg 广播，避免与 FLATTEN 语义冲突。
+        if self._broadcaster is not None:
+            try:
+                self._broadcaster.broadcast_flatten(
+                    client_order_id=f"flatten-{sym}-{int(time.time() * 1000)}",
+                    tag=tag, symbol=sym,
+                )
+            except Exception as e:  # 分发失败仅告警
+                logger.warning(f"[DIST] broadcast_flatten failed for {sym}: {e}")
+        self._suppress_broadcast += 1
+        try:
+            # ① 撤销所有未成交挂单，并释放账本在途
+            result["canceled"] = self.cancel_all(sym, period)
+            self._ledger.clear_in_flight(sym, tag)
 
-        # ② 以 venue 真实持仓为准计算净敞口
-        positions = self._executor.query_positions(sym, pmagic)
-        net_vol = Decimal("0")
-        ref_price = Decimal("0")
-        for p in positions:
-            vol = Decimal(str(p.get("volume", 0)))
-            ptype = int(p.get("type", 0))  # 0=BUY, 1=SELL
-            net_vol += vol if ptype == 0 else -vol
-            ref_price = Decimal(str(p.get("price_open", 0))) or ref_price
-        result["net_vol"] = net_vol
+            # ② 以 venue 真实持仓为准计算净敞口
+            positions = self._executor.query_positions(sym, pmagic)
+            net_vol = Decimal("0")
+            ref_price = Decimal("0")
+            for p in positions:
+                vol = Decimal(str(p.get("volume", 0)))
+                ptype = int(p.get("type", 0))  # 0=BUY, 1=SELL
+                net_vol += vol if ptype == 0 else -vol
+                ref_price = Decimal(str(p.get("price_open", 0))) or ref_price
+            result["net_vol"] = net_vol
 
-        if net_vol == 0:
-            logger.info(f"[FLATTEN] {sym}: no net position, nothing to close")
+            if net_vol == 0:
+                logger.info(f"[FLATTEN] {sym}: no net position, nothing to close")
+                return result
+
+            # ③ 对齐本地账本到 venue（避免 volume 不一致导致 CLOSE 被拒）
+            self._ledger.sync_from_venue(sym, tag, net_vol, ref_price)
+
+            # ④ 发反向市价单平掉
+            if net_vol > 0:
+                r = self.send_order(OrderSide.SELL, Offset.CLOSE, net_vol,
+                                    kind=OrderKind.MARKET, symbol=sym, period=period)
+            else:
+                r = self.send_order(OrderSide.BUY, Offset.CLOSE, abs(net_vol),
+                                    kind=OrderKind.MARKET, symbol=sym, period=period)
+            result["close"] = r
+            logger.info(
+                f"[FLATTEN] {sym}: closed net_vol={net_vol} ok={r.ok} "
+                f"filled={r.filled_qty}@{r.filled_price} reason={r.reason}"
+            )
             return result
-
-        # ③ 对齐本地账本到 venue（避免 volume 不一致导致 CLOSE 被拒）
-        self._ledger.sync_from_venue(sym, tag, net_vol, ref_price)
-
-        # ④ 发反向市价单平掉
-        if net_vol > 0:
-            r = self.send_order(OrderSide.SELL, Offset.CLOSE, net_vol,
-                                kind=OrderKind.MARKET, symbol=sym, period=period)
-        else:
-            r = self.send_order(OrderSide.BUY, Offset.CLOSE, abs(net_vol),
-                                kind=OrderKind.MARKET, symbol=sym, period=period)
-        result["close"] = r
-        logger.info(
-            f"[FLATTEN] {sym}: closed net_vol={net_vol} ok={r.ok} "
-            f"filled={r.filled_qty}@{r.filled_price} reason={r.reason}"
-        )
-        return result
+        finally:
+            self._suppress_broadcast -= 1
 
     # ═══════════ 辅助 ═══════════
 

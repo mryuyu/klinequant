@@ -30,6 +30,10 @@ class _Resp:
     def json(self):
         return self._json
 
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}: {self.text}")
+
 
 @pytest.fixture
 def loop():
@@ -252,3 +256,62 @@ def test_query_orders_shape(loop):
     assert buy["price_open"] == 49000.0
     assert buy["time_setup"] == 1700000000
     assert orders[1]["type"] == 1
+
+
+# ─── 时间校准（防本机时钟漂移触发 -1021 recvWindow 拒绝）───
+
+def test_sign_params_applies_time_offset(loop):
+    import time as _time
+    client = mock.Mock()
+    ex = BinanceExecutor(
+        loop=loop, client=client, api_key="k", api_secret="s",
+        time_offset_ms=4000,
+    )
+    before = int(_time.time() * 1000)
+    params = ex._sign_params({"foo": "bar"})
+    after = int(_time.time() * 1000)
+    # timestamp = 本机时间 + offset（容差覆盖调用耗时）
+    assert before + 4000 <= params["timestamp"] <= after + 4000
+    assert params["recvWindow"] == 5000
+    assert "signature" in params
+
+
+def test_sign_params_default_offset_zero(loop):
+    import time as _time
+    client = mock.Mock()
+    ex = _executor(loop, client)
+    before = int(_time.time() * 1000)
+    params = ex._sign_params({})
+    after = int(_time.time() * 1000)
+    assert before <= params["timestamp"] <= after
+
+
+async def test_backend_sync_server_time_computes_offset():
+    import time as _time
+
+    from strategy.sdk.backend import BinanceBackend
+
+    backend = BinanceBackend(["BTCUSDT"], api_key="k", api_secret="s")
+    fake_server = int(_time.time() * 1000) + 5000
+    client = mock.Mock()
+    client.get = mock.AsyncMock(
+        return_value=_Resp(200, {"serverTime": fake_server}))
+    backend._client = client
+
+    await backend._sync_server_time()
+
+    # offset ≈ 5000（往返中点估算，容差覆盖 rtt）
+    assert 4000 <= backend._time_offset_ms <= 6000
+
+
+async def test_backend_sync_server_time_failure_falls_back():
+    from strategy.sdk.backend import BinanceBackend
+
+    backend = BinanceBackend(["BTCUSDT"], api_key="k", api_secret="s")
+    client = mock.Mock()
+    client.get = mock.AsyncMock(side_effect=RuntimeError("network down"))
+    backend._client = client
+
+    await backend._sync_server_time()  # 不应抛
+
+    assert backend._time_offset_ms == 0  # 回落本机时钟

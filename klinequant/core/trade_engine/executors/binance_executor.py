@@ -46,6 +46,8 @@ class BinanceExecutor:
         api_key / api_secret: 币安 API 凭证（demo）
         magic: 记账标记（写入 MT5 同形 dict 的 magic 字段，仅对齐形状）
         timeout: 同步桥接等待 async 结果的超时（秒）
+        time_offset_ms: 币安服务器时间校准偏移（由 BinanceBackend connect 时同步，
+            签名 timestamp 补偿本机时钟漂移，防 -1021 recvWindow 拒绝）
     """
 
     def __init__(
@@ -57,6 +59,7 @@ class BinanceExecutor:
         api_secret: str = "",
         magic: int = 202609,
         timeout: float = 15.0,
+        time_offset_ms: int = 0,
     ):
         self._loop = loop
         self._client = client
@@ -64,6 +67,7 @@ class BinanceExecutor:
         self._api_secret = api_secret
         self._magic = magic
         self._timeout = timeout
+        self._time_offset_ms = time_offset_ms
 
     # ─── async→sync 桥接 ───
 
@@ -75,7 +79,7 @@ class BinanceExecutor:
     # ─── 签名（与 binance_futures_executor 同算法：HMAC SHA256）───
 
     def _sign_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        params["timestamp"] = int(time.time() * 1000)
+        params["timestamp"] = int(time.time() * 1000) + self._time_offset_ms
         params["recvWindow"] = 5000
         query = urlencode(params)
         sig = hmac.new(
