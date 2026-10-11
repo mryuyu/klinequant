@@ -22,6 +22,7 @@ import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+from gateway.market_sources.mt5_driver import TF_SECONDS
 from protocol.types import Kline, Tick
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,9 @@ _BAR_CLOSE_FIELDS = frozenset({"timestamp", "time", "datetime"})
 
 class BinanceDataFeed:
     """币安 Futures 数据源（WS 推送 → DataFeedProtocol）"""
+
+    # G1：补洞失败（REST 瞬断）后的节流重试间隔（秒）；源返空（合法洞）不重试
+    _GAP_RETRY_SEC = 30.0
 
     def __init__(
         self,
@@ -88,6 +92,10 @@ class BinanceDataFeed:
         self._last_symbol_mono: dict[str, float] = {
             s: self._last_data_mono for s in self._symbols
         }
+        # G1 断线窗回填：同 (last_ts, new_ts) 洞每 key 只试一次（休市等合法洞防刷 REST）
+        self._gap_attempted: dict[str, tuple] = {}
+        # G1：补拉瞬断失败的挂起洞 (lo, hi, mono)，节流重试直至成功/源返空
+        self._gap_pending: dict[str, tuple] = {}
 
     # ─── 生命周期 ───
 
@@ -148,6 +156,8 @@ class BinanceDataFeed:
         period = kline.timeframe
         key = f"{symbol}/{period}"
         bar = self._kline_to_bar(kline)
+        # G1 断线窗回填：新 bar 时间戳跳变时先按 REST 范围补拉中段缺失再合并（见 _fill_gap）
+        await self._fill_gap(key, symbol, period, bar)
         updated = False
 
         with self._lock:
@@ -196,6 +206,63 @@ class BinanceDataFeed:
             # M4-b：只唤醒本品种线程（+ 全局事件供 feed 级 wait_update）
             self._event_for(symbol).set()
             self._event.set()
+
+    async def _fill_gap(self, key: str, symbol: str, period: str, bar: dict) -> None:
+        """G1 断线窗回填：新 bar 与本地末根跳变（>1 周期）⇒ 断线窗中段缺 bar。
+
+        按 REST 范围补拉开区间并合并：zigzag 等结构型指标依赖窗内 K 线根数与
+        极值点，缺 bar 是结构错误而非仅指标偏差。约束：
+          - 同一 (lo, hi) 洞源返空（休市合法洞）记 attempted 不重试；
+          - 补拉抛异常（REST 瞬断）记 pending，节流 _GAP_RETRY_SEC 后随后续推送重试；
+          - REST await 在锁外，不阻塞策略线程读缓存；
+          - 仅 bump 基础 key：数组消费方看到补回；不补发历史收盘事件（#bar），
+            防收盘驱动策略在恢复后对已收盘旧 bar 补发陈旧信号。
+        """
+        pms = TF_SECONDS.get(period, 60) * 1000
+        with self._lock:
+            bars = self._bars.get(key) or []
+            last_ts = bars[-1]["timestamp"] if bars else 0
+        lo = hi = 0
+        pend = self._gap_pending.get(key)
+        if pend is not None and time.monotonic() - pend[2] >= self._GAP_RETRY_SEC:
+            lo, hi, _ = self._gap_pending.pop(key)   # 上次补拉瞬断失败的洞：节流重试
+        elif last_ts and bar["timestamp"] > last_ts + pms:
+            if self._gap_attempted.get(key) == (last_ts, bar["timestamp"]):
+                return   # 同一洞已试过且源也缺：不刷 REST
+            self._gap_attempted[key] = (last_ts, bar["timestamp"])
+            lo, hi = last_ts, bar["timestamp"]
+        else:
+            return   # 连续或未收盘 bar 更新：无洞
+        try:
+            miss = await self._adapter.fetch_klines(
+                symbol, period, start_time=lo + pms, end_time=hi - pms,
+            )
+        except Exception as e:
+            logger.warning(f"G1 gap fill failed {key}: {e}")
+            self._gap_pending[key] = (lo, hi, time.monotonic())
+            return
+        missing = sorted(
+            (self._kline_to_bar(k) for k in (miss or [])),
+            key=lambda b: b["timestamp"],
+        )
+        missing = [b for b in missing if lo < b["timestamp"] < hi]
+        if not missing:
+            self._gap_attempted[key] = (lo, hi)   # 源也缺（休市等合法洞）：放弃重试
+            return
+        with self._lock:
+            bars = self._bars.get(key)
+            if not bars or bars[0]["timestamp"] > lo:
+                return   # 洞已滑出缓存窗口（裁剪）：无需合并
+            have = {b["timestamp"] for b in bars}
+            add = [b for b in missing if b["timestamp"] not in have]
+            if not add:
+                return
+            bars.extend(add)
+            bars.sort(key=lambda b: b["timestamp"])
+            if len(bars) > self._bar_count:
+                bars[:] = bars[-self._bar_count:]
+            self._bump_version(key)
+        logger.info(f"G1 gap filled {key}: +{len(add)} bars ({lo}~{hi})")
 
     # ─── DataFeedProtocol 实现 ───
 

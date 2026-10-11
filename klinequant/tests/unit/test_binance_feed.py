@@ -45,6 +45,77 @@ class _FakeAdapter:
         self.ws_started = True
 
 
+class _RangeAdapter(_FakeAdapter):
+    """G1：fetch_klines 支持 start/end 范围切片（模拟 REST 范围补拉）"""
+
+    def __init__(self, initial, full, fail_first_range=False):
+        super().__init__(initial)
+        self._full = full
+        self.range_calls = 0
+        self._fail_first_range = fail_first_range
+
+    async def fetch_klines(self, symbol, interval, start_time=None,
+                           end_time=None, limit=1000):
+        if start_time is None:
+            return list(self._history)
+        self.range_calls += 1
+        if self._fail_first_range and self.range_calls == 1:
+            raise RuntimeError("REST down")
+        return [k for k in self._full if start_time <= k.timestamp <= end_time]
+
+
+def test_ws_gap_backfills_disconnect_window(loop):
+    """G1：推送时间戳跳变⇒断线窗中段缺 bar，按 REST 范围补拉合并（zigzag 结构依赖）"""
+    full = [_kline(60_000 * i, 10 + i, 11 + i, 9 + i, 10.5 + i, i)
+            for i in range(1, 7)]
+    adapter = _RangeAdapter(full[:2], full)
+    feed = _feed(loop, adapter)
+    feed.start()
+    _fire(loop, adapter, full[5])   # 断线后首推 t=360s（洞 120→360）
+    ts = [b["timestamp"] for b in feed.latest_bars("BTCUSDT", "1m", 10)]
+    assert ts == [60_000 * i for i in range(1, 7)]
+    assert adapter.range_calls == 1
+
+
+def test_ws_gap_legit_hole_not_retried(loop):
+    """G1：源也缺（休市等合法洞）记 attempted 不重试，不捏造 bar"""
+    full = [_kline(60_000, 1, 1, 1, 1, 1), _kline(120_000, 2, 2, 2, 2, 2),
+            _kline(600_000, 3, 3, 3, 3, 3)]
+    adapter = _RangeAdapter(full[:2], full)   # 开区间切片为空⇒源缺
+    feed = _feed(loop, adapter)
+    feed.start()
+    _fire(loop, adapter, full[2])
+    _fire(loop, adapter, full[2])   # 同 bar 重推（update 分支）不再补拉
+    assert adapter.range_calls == 1
+    ts = [b["timestamp"] for b in feed.latest_bars("BTCUSDT", "1m", 10)]
+    assert ts == [60_000, 120_000, 600_000]
+    assert feed._gap_attempted["BTCUSDT/1m"] == (120_000, 600_000)
+
+
+def test_ws_gap_pending_retry_after_rest_failure(loop):
+    """G1：补拉瞬断失败记 pending，节流窗过后随后续推送重试直至补回"""
+    full = [_kline(60_000 * i, 10 + i, 11 + i, 9 + i, 10.5 + i, i)
+            for i in range(1, 8)]
+    adapter = _RangeAdapter(full[:2], full, fail_first_range=True)
+    feed = _feed(loop, adapter)
+    feed.start()
+    _fire(loop, adapter, full[5])   # 首次补拉抛异常→pending，live bar 仍 append
+    ts = [b["timestamp"] for b in feed.latest_bars("BTCUSDT", "1m", 10)]
+    assert ts == [60_000, 120_000, 360_000]
+    assert "BTCUSDT/1m" in feed._gap_pending
+    # 节流窗内不重试
+    _fire(loop, adapter, _kline(420_000, 1, 1, 1, 1, 1))
+    assert adapter.range_calls == 1
+    # 人为老化 pending 超节流窗→下一推送触发重试补回
+    lo, hi, _ = feed._gap_pending["BTCUSDT/1m"]
+    feed._gap_pending["BTCUSDT/1m"] = (lo, hi, time.monotonic() - 31)
+    _fire(loop, adapter, _kline(480_000, 1, 1, 1, 1, 1))
+    ts = [b["timestamp"] for b in feed.latest_bars("BTCUSDT", "1m", 10)]
+    assert ts == [60_000 * i for i in range(1, 9)]
+    assert "BTCUSDT/1m" not in feed._gap_pending
+
+
+
 @pytest.fixture
 def loop():
     lp = asyncio.new_event_loop()

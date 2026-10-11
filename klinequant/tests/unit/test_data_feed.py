@@ -111,6 +111,59 @@ def test_poll_bars_forming_update_no_backfill():
     assert bars[-1]["close"] == 1.05
 
 
+# ─── G1：断线窗中段缺 bar 回填 ───
+
+
+class _CountDriver(_FakeDriver):
+    """记录加深拉取（count>2）次数，验证限次"""
+
+    def __init__(self, rows):
+        super().__init__(rows)
+        self.deep_calls = 0
+
+    def copy_rates_from_pos(self, symbol, timeframe, start_pos, count, timeout=None):
+        if count > 2:
+            self.deep_calls += 1
+        return self._rows[-count:]
+
+
+def _bar(sec: int) -> dict:
+    return {"symbol": "EURUSD", "period": "1m", "timestamp": sec * 1000,
+            "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.0, "volume": 1.0}
+
+
+def test_poll_bars_gap_fill_backfills_disconnect_window():
+    """G1：时间戳跳变⇒加深一次 copy_rates 补回断线窗开区间（zigzag 结构依赖）"""
+    full = [_row(60 * i, high=1.0 + i, low=1.0, close=1.0 + 0.1 * i)
+            for i in range(1, 7)]
+    drv = _CountDriver(full)
+    feed = Mt5DataFeed(drv, symbols=["EURUSD"], periods=["1m"])
+    feed._bars["EURUSD/1m"] = [_bar(60), _bar(120)]
+
+    assert feed._poll_bars("EURUSD", "1m") is True
+
+    ts = [b["timestamp"] for b in feed._bars["EURUSD/1m"]]
+    assert ts == [60_000 * i for i in range(1, 7)]
+    assert drv.deep_calls == 1
+
+
+def test_poll_bars_gap_legit_hole_not_retried():
+    """G1：源也缺（周末跳变等合法洞）不捏造 bar，同洞不重复加深拉取"""
+    full = [_row(60, high=1.1, low=1.0, close=1.05),
+            _row(600, high=1.2, low=1.0, close=1.1)]
+    drv = _CountDriver(full)
+    feed = Mt5DataFeed(drv, symbols=["EURUSD"], periods=["1m"])
+    feed._bars["EURUSD/1m"] = [_bar(60)]
+
+    feed._poll_bars("EURUSD", "1m")
+    assert drv.deep_calls == 1
+    ts = [b["timestamp"] for b in feed._bars["EURUSD/1m"]]
+    assert ts == [60_000, 600_000]   # 源缺：保持断开，不捏造中间 bar
+
+    feed._poll_bars("EURUSD", "1m")   # 同洞第二轮：不再加深拉取
+    assert drv.deep_calls == 1
+
+
 # ─── M1：is_changing 的 field 语义（收盘 vs 盘中）───
 
 

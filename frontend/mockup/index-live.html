@@ -2085,6 +2085,7 @@ let lastBarPushAt = 0;        // 最近一次 applyBar 收到 K 线推送的时�
 let lastIndPushAt = 0;        // 最近一次 applyIndPush 收到当前契约指标推送的时刻
 let indResyncPending = false;
 let persistOneBarLagKey = null;   // 上一轮检查恰滞后整 bar 的实例键（连续两轮⇒增量丢失非瞬时）
+let klineHealState = {};   // viewKey -> {at, tries}：K 线中段小洞自愈限频限次状态
 function scheduleIndResync(reason) {
   if (indResyncPending || !initialLoaded || !klines.length || !indInstances.length) return;
   indResyncPending = true;
@@ -2097,8 +2098,30 @@ function scheduleIndResync(reason) {
   }, 800);
 }
 setInterval(() => {
-  if (!initialLoaded || !indReady || !klines.length) return;
+  if (!initialLoaded || !klines.length) return;   // indReady 不再门控整段：K 线空洞自愈需独立于指标就绪
   const now = Date.now();
+  /* K 线中段空洞自愈：页面在后端缓存带洞期间加载会焊住洞（reconcileTail 仅缓存命中路径跑，
+     网络首载不跑对账）；后端愈合后已开页面不回填。不限空洞根数——合并只添加后端实际返回的
+     bar，大洞若后端已有（前端陈旧）同样能填；源侧真缺/休市大洞后端也缺⇒changed=false 无副作用，
+     靠每视图 5min 限频、最多 3 次防刷屏，洞消失即恢复额度 */
+  {
+    const barSec = tfDurSec(curTf);
+    const from = Math.max(0, klines.length - firstScreenBars);
+    let missing = 0;
+    for (let i = from; i < klines.length - 1 && missing <= 64; i++) {
+      const dt = klines[i + 1].time - klines[i].time;
+      if (dt > barSec) missing += Math.round(dt / barSec) - 1;
+    }
+    const key = viewKey(curExchange, curSymbol, curTf);
+    const rec = klineHealState[key] || (klineHealState[key] = { at: 0, tries: 0 });
+    if (missing >= 1) {
+      if (rec.tries < 3 && now - rec.at > 300000) {
+        rec.at = now; rec.tries++;
+        console.info('[kline-heal] mid gap ' + missing + ' bars, reconcile tail');
+        reconcileTail(loadGen, key);   // 合并最新一屏填洞；后端仍缺则 changed=false 无副作用
+      }
+    } else rec.tries = 0;   // 洞已消失（自愈成功/切回连续段）：恢复额度
+  }
   /* 推送中断判定：K 线仍在到达而指标推送静默超 120s（注册丢失/订阅丢失/后端重启） */
   if (lastBarPushAt && lastIndPushAt && now - lastBarPushAt < 120000 && now - lastIndPushAt > 120000) {
     scheduleIndResync('no indicator push for 120s while klines live');

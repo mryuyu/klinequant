@@ -17,7 +17,7 @@ import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from gateway.market_sources.mt5_driver import Mt5Api, TIMEFRAME_MAP
+from gateway.market_sources.mt5_driver import TF_SECONDS, TIMEFRAME_MAP, Mt5Api
 from protocol.types import Tick
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,8 @@ class Mt5DataFeed:
         self._last_symbol_mono: dict[str, float] = {
             s: self._last_data_mono for s in self._symbols
         }
+        # G1 断线窗回填：同 (last_ts, new_ts) 洞每 key 只试一次（休市等合法洞防刷 IPC）
+        self._gap_attempted: dict[str, tuple] = {}
 
     # ─── 生命周期 ───
 
@@ -373,31 +375,89 @@ class Mt5DataFeed:
                 self._bars[key] = [new_bar]
                 self._bump_version(key)
                 return True
+            last_ts = bars[-1]["timestamp"]
 
-            last_bar = bars[-1]
-            # 新 bar（time 不同）或 close 变化
-            if new_bar["timestamp"] != last_bar["timestamp"]:
-                # M2：新 bar 出现时，rows[0] 是刚收盘那根的终端终值，而本地
-                # bars[-1] 只是最后一次轮询（最多一个 poll_interval 前）的快照，
-                # 缺失收盘前最后 ≤poll_interval 的 H/L 极值。先用 rows[0] 回填
-                # bars[-1]（数据已取到，零额外 IPC），再 append 新 bar。
-                if len(rows) >= 2:
-                    closed_bar = self._row_to_bar(rows[0], symbol, period)
-                    if closed_bar["timestamp"] == last_bar["timestamp"]:
-                        bars[-1] = closed_bar
+        if new_bar["timestamp"] != last_ts:
+            # M2：新 bar 出现时，rows[0] 是刚收盘那根的终端终值，而本地
+            # bars[-1] 只是最后一次轮询（最多一个 poll_interval 前）的快照，
+            # 缺失收盘前最后 ≤poll_interval 的 H/L 极值。先用 rows[0] 回填
+            # bars[-1]（数据已取到，零额外 IPC），再 append 新 bar。
+            closed_bar = None
+            if len(rows) >= 2:
+                cb = self._row_to_bar(rows[0], symbol, period)
+                if cb["timestamp"] == last_ts:
+                    closed_bar = cb
+            # G1 断线窗回填：时间戳跳变⇒断线窗中段缺 bar（zigzag 等结构型指标
+            #   依赖窗内 K 线根数与极值点）。加深一次 copy_rates 补开区间；
+            #   IPC 在锁外，不阻塞策略线程读缓存
+            missing = self._fetch_missing(key, symbol, period, last_ts, new_bar["timestamp"])
+            with self._lock:
+                bars = self._bars.get(key, [])
+                if not bars or bars[-1]["timestamp"] != last_ts:
+                    return False   # IPC 期间视图已变：放弃本轮（下轮轮询自纠）
+                if closed_bar is not None:
+                    bars[-1] = closed_bar
+                if missing:
+                    have = {b["timestamp"] for b in bars}
+                    bars.extend(b for b in missing if b["timestamp"] not in have)
+                    bars.sort(key=lambda b: b["timestamp"])
+                    self._bump_version(key)   # 仅基础 key：不补发历史收盘事件（#bar）
                 bars.append(new_bar)
                 # 保持长度限制
                 if len(bars) > self._bar_count:
                     bars[:] = bars[-self._bar_count:]
                 # M1：新 bar 出现 = 上一根收盘 → 基础 key 与 #bar 收盘 key 同时 bump
                 self._bump_bar_close(key)
-                return True
-            elif new_bar["close"] != last_bar["close"] or new_bar["high"] != last_bar["high"]:
+            return True
+
+        with self._lock:
+            bars = self._bars.get(key, [])
+            if not bars:
+                return False
+            last_bar = bars[-1]
+            if new_bar["close"] != last_bar["close"] or new_bar["high"] != last_bar["high"]:
                 bars[-1] = new_bar
                 self._bump_version(key)
                 return True
 
         return False
+
+    def _fetch_missing(
+        self, key: str, symbol: str, period: str, last_ts: int, new_ts: int,
+    ) -> list[dict]:
+        """G1 断线窗回填：加深一次 copy_rates 取 (last_ts, new_ts) 开区间缺失 bar。
+
+        同一 (last_ts, new_ts) 洞只试一次：休市合法洞（周末跳变）源无 bar、
+        IPC 失败等场景不每轮轮询重复拉取。仅返回缺失段，合并与 bump 由调用方在锁内完成。
+        """
+        pms = TF_SECONDS.get(period, 60) * 1000
+        if new_ts <= last_ts + pms:
+            return []   # 连续：无洞
+        if self._gap_attempted.get(key) == (last_ts, new_ts):
+            return []
+        self._gap_attempted[key] = (last_ts, new_ts)
+        tf_const = TIMEFRAME_MAP.get(period)
+        if not tf_const:
+            return []
+        count = min((new_ts - last_ts) // pms + 1, self._bar_count)
+        try:
+            rows = self._driver.copy_rates_from_pos(symbol, tf_const, 0, count)
+        except Exception as e:
+            logger.warning(f"G1 gap fill IPC failed {key}: {e}")
+            return []
+        if not rows:
+            return []
+        missing = sorted(
+            (self._row_to_bar(r, symbol, period) for r in rows),
+            key=lambda b: b["timestamp"],
+        )
+        missing = [b for b in missing if last_ts < b["timestamp"] < new_ts]
+        if missing:
+            logger.info(
+                f"G1 gap filled {key}: +{len(missing)} bars "
+                f"({missing[0]['timestamp']}~{missing[-1]['timestamp']})"
+            )
+        return missing
 
     # ─── 工具 ───
 
