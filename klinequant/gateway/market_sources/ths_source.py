@@ -25,14 +25,23 @@ from datetime import datetime, timedelta, timezone
 from gateway.market_sources.base import MarketSource
 from gateway.market_sources.manager import market_manager
 
+logger = logging.getLogger(__name__)
+
 try:
     from thsdk import THS as _THS  # type: ignore
     _HAS_THS = True
-except ImportError:  # pragma: no cover
+except ImportError as _ths_import_error:  # pragma: no cover
     _THS = None
     _HAS_THS = False
-
-logger = logging.getLogger(__name__)
+    # 静默失效是排查黑洞（曾致“品种搜索只剩 4 只默认股票”被误判为未开盘/会话掉线）：
+    # 明确告警点破——多为后端误用全局解释器启动（其同名 thsdk 0.0.x 无 THS 类），
+    # 正确做法是用项目 venv 解释器（.venv\Scripts\python.exe，内含 thsdk≥1.7）。
+    logger.warning(
+        "thsdk 导入失败（%s）：THS A股源不可用，品种目录/K线将回退内置默认。"
+        "请用项目 venv 解释器启动后端（.venv\\Scripts\\python.exe -m webstack），"
+        "该环境含 thsdk≥1.7（提供 THS 类）；全局 Python 的同名 thsdk 0.0.x 不兼容。",
+        _ths_import_error,
+    )
 
 _BJ = timezone(timedelta(hours=8))   # 不依赖 zoneinfo（A 股无夏令时，固定 +8）
 
@@ -159,6 +168,7 @@ class ThsApi:
         self.is_guest = False
         self._last_call = 0.0
         self._last_connect_at = 0.0
+        self._warned_no_sdk = False   # thsdk 缺失告警只记一次（防每次调用刷屏）
 
     # ─── 连接管理（锁内调用） ───
 
@@ -166,6 +176,12 @@ class ThsApi:
         if self.connected and self._ths is not None:
             return True
         if not _HAS_THS:
+            if not self._warned_no_sdk:
+                self._warned_no_sdk = True
+                logger.warning(
+                    "THS 源不可用：thsdk 未正确安装（需 venv 环境 thsdk≥1.7 提供 THS 类）；"
+                    "品种目录与 A 股 K 线将回退到内置默认（导入告警见模块加载日志）。"
+                )
             return False
         now = time.monotonic()
         if now - self._last_connect_at < RECONNECT_COOLDOWN:

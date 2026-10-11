@@ -49,20 +49,24 @@ import { ref, onMounted } from 'vue'
 interface RiskRule { name: string; label: string; enabled: boolean; params: Record<string, any> }
 interface RiskLog { timestamp: number; rule_name: string; reason: string; level: string }
 
-const rules = ref<RiskRule[]>([
-  { name: 'max_order_amount', label: '单笔最大金额', enabled: true, params: { max_amount: 10000 } },
-  { name: 'max_position_per_symbol', label: '单品种最大持仓', enabled: true, params: { max_quantity: 100 } },
-  { name: 'max_total_position', label: '总持仓上限', enabled: true, params: { max_total_notional: 100000 } },
-  { name: 'max_daily_loss', label: '单日最大亏损', enabled: true, params: { max_loss: 5000 } },
-  { name: 'max_strategy_loss', label: '单策略最大亏损', enabled: true, params: { max_loss: 2000 } },
-  { name: 'order_frequency', label: '下单频率限制', enabled: true, params: { max_orders: 60, window_seconds: 60 } },
-  { name: 'price_deviation', label: '价格偏离保护', enabled: true, params: { max_deviation: 0.05 } },
-  { name: 'min_order_quantity', label: '最小下单量', enabled: true, params: { min_qty: 0.001 } },
-  { name: 'available_balance', label: '可用资金检查', enabled: true, params: {} },
-  { name: 'consecutive_loss', label: '连续亏损限制', enabled: true, params: { max_consecutive: 5 } },
-  { name: 'night_trading', label: '夜间交易限制', enabled: false, params: { start_hour: 0, end_hour: 6 } },
-  { name: 'new_symbol', label: '新品种限制', enabled: false, params: {} },
-])
+// 规则显示名映射：后端 /api/risk/rules 只下发 name/enabled/params，不含中文 label，
+// 故 label 由前端按 name 映射，enabled/params 一律以后端为准（QH-003：废除硬编码规则表）
+const RULE_LABELS: Record<string, string> = {
+  max_order_amount: '单笔最大金额',
+  max_position_per_symbol: '单品种最大持仓',
+  max_total_position: '总持仓上限',
+  max_daily_loss: '单日最大亏损',
+  max_strategy_loss: '单策略最大亏损',
+  order_frequency: '下单频率限制',
+  price_deviation: '价格偏离保护',
+  min_order_quantity: '最小下单量',
+  available_balance: '可用资金检查',
+  consecutive_loss: '连续亏损限制',
+  night_trading: '夜间交易限制',
+  new_symbol: '新品种限制',
+}
+
+const rules = ref<RiskRule[]>([])
 
 const riskLogs = ref<RiskLog[]>([])
 const stats = ref({ total_checks: 0, total_rejects: 0, reject_rate: '0.0', running: true })
@@ -87,18 +91,49 @@ async function toggleRule(rule: RiskRule) {
 async function fetchLogs() {
   try {
     const resp = await fetch('http://localhost:8000/api/v1/risk/logs?limit=50')
-    if (resp.ok) riskLogs.value = await resp.json()
+    if (resp.ok) {
+      const data = await resp.json()
+      // 后端返回 { logs: [...], total }，此前直接把整个对象当数组赋值（QH-003）
+      riskLogs.value = Array.isArray(data) ? data : (data.logs ?? [])
+    }
+  } catch (e) { /* ignore */ }
+}
+
+async function fetchRules() {
+  try {
+    const resp = await fetch('http://localhost:8000/api/v1/risk/rules')
+    if (resp.ok) {
+      const data = await resp.json()
+      const list = Array.isArray(data) ? data : (data.rules ?? [])
+      rules.value = list.map((r: any) => ({
+        name: r.name,
+        label: RULE_LABELS[r.name] ?? r.name,
+        enabled: !!r.enabled,
+        params: r.params ?? {},
+      }))
+    }
   } catch (e) { /* ignore */ }
 }
 
 async function fetchStats() {
   try {
     const resp = await fetch('http://localhost:8000/api/v1/risk/stats')
-    if (resp.ok) stats.value = await resp.json()
+    if (resp.ok) {
+      const s = await resp.json()
+      // 后端字段为 total_rejected 且无 reject_rate，前端在此对齐并计算拒绝率（QH-003）
+      const checks = Number(s.total_checks ?? 0)
+      const rejects = Number(s.total_rejected ?? s.total_rejects ?? 0)
+      stats.value = {
+        total_checks: checks,
+        total_rejects: rejects,
+        reject_rate: checks > 0 ? ((rejects / checks) * 100).toFixed(1) : '0.0',
+        running: !!s.running,
+      }
+    }
   } catch (e) { /* ignore */ }
 }
 
-onMounted(() => { fetchLogs(); fetchStats() })
+onMounted(() => { fetchRules(); fetchLogs(); fetchStats() })
 </script>
 
 <style scoped>

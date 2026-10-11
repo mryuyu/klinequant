@@ -139,6 +139,13 @@ def create_app() -> FastAPI:
         if os.path.isdir(assets_dir):
             app.mount("/app/assets", StaticFiles(directory=assets_dir), name="app-assets")
 
+        # SPA 入口 index.html 强制 no-cache（与 /static 的 _NoCacheStaticFiles 同一约定）：
+        # Vite 构建后 assets 为内容 hash 文件名，但 index.html 本身文件名固定；若浏览器缓存旧
+        # index.html，会继续引用旧 hash 的 assets（旧全局 CSS 致布局异常，如"页面变窄/居中"），
+        # 造成"改了前端但页面没变"。no-cache 令每次开页用 ETag 校验，改版即刻生效；
+        # /app/assets 内容 hash 文件名可长缓存，不受影响。
+        _NO_CACHE = {"Cache-Control": "no-cache"}
+
         @app.get("/app", include_in_schema=False)
         @app.get("/app/{rest:path}", include_in_schema=False)
         async def serve_app(rest: str = ""):
@@ -147,7 +154,7 @@ def create_app() -> FastAPI:
                 # 目录穿越防护 + 命中真实文件（favicon.svg / icons.svg 等 public 产物）
                 if cand.startswith(DIST_DIR + os.sep) and os.path.isfile(cand):
                     return FileResponse(cand)
-            return FileResponse(dist_index)
+            return FileResponse(dist_index, headers=_NO_CACHE)
     else:
         logger.warning(f"Vue dist not found, /app disabled (run 'npm run build' in frontend/): {DIST_DIR}")
 

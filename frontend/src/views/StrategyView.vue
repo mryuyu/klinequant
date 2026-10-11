@@ -143,7 +143,7 @@ onMounted(() => {
 <style scoped>
 h2 { margin-bottom: 16px; }
 .create-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
-.create-bar select, .create-bar input { padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text); }
+.create-bar select, .create-bar input { padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary); }
 .actions { display: flex; gap: 4px; flex-wrap: wrap; }
 .btn-sm { padding: 2px 8px; font-size: 12px; }
 .btn-warning { background: #f59e0b; color: #000; }
@@ -158,5 +158,5 @@ h2 { margin-bottom: 16px; }
 .log-time { color: var(--text-secondary); margin-right: 8px; }
 .log-ERROR { color: var(--danger); }
 .log-WARN { color: #f59e0b; }
-.log-INFO { color: var(--text); }
+.log-INFO { color: var(--text-primary); }
 </style>

@@ -266,11 +266,8 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .tf-custom-pop input { width:112px; padding:5px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg-panel); color:var(--text); font-size:12px; font-family:var(--font-ui); outline:none; }
 .tf-custom-pop button { margin-left:6px; padding:5px 12px; border:none; border-radius:4px; background:var(--accent-dim); color:var(--accent); font-size:12px; cursor:pointer; font-family:var(--font-ui); }
 .tf-custom-hint { margin-top:6px; font-size:11px; color:var(--down); max-width:220px; line-height:1.5; }
-.sc-head { display:flex; align-items:center; justify-content:space-between; padding:12px 12px 8px; }
-.sc-title { font-weight:700; font-size:14px; }
-.sc-actions { display:flex; gap:4px; }
-.sc-btn { width:24px; height:24px; border-radius:5px; border:none; background:var(--bg-elevated); color:var(--text-sub); cursor:pointer; font-size:14px; line-height:1; display:flex; align-items:center; justify-content:center; }
-.sc-btn:hover { color:var(--accent); background:var(--border-light); }
+.sc-head { display:flex; align-items:center; justify-content:center; padding:12px 12px 8px; }
+.sc-title { font-weight:700; font-size:14px; text-align:center; }
 .sc-search { margin:0 12px 8px; }
 .sc-search input { width:100%; background:var(--bg-base); border:1px solid var(--border); border-radius:6px; padding:6px 10px; color:var(--text); font-size:12px; outline:none; }
 .sc-search input:focus { border-color:var(--accent); }
@@ -295,6 +292,8 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .wl-add-group:hover { color:var(--accent); }
 .wl-new-group-input { display:block; width:calc(100% - 24px); margin:6px 12px; padding:5px 8px; font-size:12px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:4px; color:var(--text); outline:none; }
 .wl-new-group-input:focus { border-color:var(--accent); }
+/* 分组重命名行内输入框（嵌在分组头 flex 内，占满剩余宽度） */
+.wl-rename-input { flex:1; min-width:0; padding:2px 6px; font-size:11px; background:var(--bg-elevated); border:1px solid var(--accent); border-radius:4px; color:var(--text); outline:none; }
 .wl-del:hover { color:var(--down); }
 /* 添加品种弹窗 */
 .modal-mask { position:fixed; inset:0; background:rgba(0,0,0,0.55); display:none; align-items:center; justify-content:center; z-index:100; }
@@ -531,9 +530,6 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
     <aside class="symbols-col">
       <div class="sc-head">
         <span class="sc-title">品种列表</span>
-        <div class="sc-actions">
-          <button class="sc-btn" id="add-sym" title="添加品种">＋</button>
-        </div>
       </div>
       <div class="sc-search"><input id="sym-filter" placeholder="搜索品种…"></div>
       <div class="sc-body" id="sym-list"></div>
@@ -630,6 +626,12 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
   <div class="ctx-row ctx-action" id="draw-ctx-lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg><span>锁定</span></div>
   <div class="ctx-sep"></div>
   <div class="ctx-row ctx-action" id="draw-ctx-del"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6M14 11v6"/></svg><span>删除</span></div>
+</div>
+
+<!-- 分组头右键菜单（卡片式：添加品种 / 重命名；复用 .ctx-menu 样式） -->
+<div class="ctx-menu" id="grp-ctx-menu">
+  <div class="ctx-row ctx-action" id="grp-ctx-add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg><span>添加品种</span></div>
+  <div class="ctx-row ctx-action" id="grp-ctx-rename"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h4L19 9a2.83 2.83 0 00-4-4L4 16v4z"/><path d="M14.5 5.5l4 4"/></svg><span>重命名</span></div>
 </div>
 
 <script src="lwc.js"></script>
@@ -2481,12 +2483,19 @@ sysBtn.addEventListener('click', e => {
   e.stopPropagation();
   sysPop.style.display = sysPop.style.display === 'none' ? 'grid' : 'none';
 });
-/* 卡片选中：切换 active 并收起弹层（模块路由为后续迭代，当前仅记录选中态） */
+/* 卡片点击：打开 Vue 正式版（gateway 托管于 /app）对应页面——新标签页打开，
+   保留行情终端的实时会话与图表状态。data-mod → Vue 路由（base=/app/，history 深链由 gateway 回退 index.html） */
+const SYS_MOD_ROUTE = {
+  '行情': '/', '交易': '/trade', '策略': '/strategy', '信号': '/signals',
+  '回测': '/backtest', '账户': '/account', '风控': '/risk', '告警': '/alerts',
+};
 sysPop.addEventListener('click', e => {
   const card = e.target.closest('.sys-card');
   if (!card) return;
   sysPop.querySelectorAll('.sys-card').forEach(x => x.classList.toggle('active', x === card));
   sysPop.style.display = 'none';
+  const path = SYS_MOD_ROUTE[card.dataset.mod];
+  if (path) window.open('/app' + path, '_blank');
 });
 /* 外部点击 / Esc 收起系统弹层 */
 document.addEventListener('pointerdown', e => {
@@ -3160,6 +3169,7 @@ function saveWl() {
 let symGroups = loadWl();
 let symFilter = '';
 let wlAddingGroup = false;   // 新建分组行内输入态（列表底部入口，非弹窗）
+let wlRenamingGroup = null;  // 正在重命名的分组索引（分组头名称变行内输入框），null=非重命名态
 
 async function switchExchange(ex, opts = {}) {
   let meta = sourcesMeta[ex];
@@ -3263,8 +3273,11 @@ function renderSymbols() {
   let html = '';
   symGroups.forEach((g, gi) => {
     const list = kw ? g.symbols.filter(s => (s.name.toLowerCase().includes(kw) || (s.desc || '').toLowerCase().includes(kw))) : g.symbols;
+    const nameCell = (wlRenamingGroup === gi && !kw)
+      ? `<input class="wl-rename-input" id="wl-rename-input" value="${(g.name || '').replace(/"/g, '&quot;')}" maxlength="20">`
+      : `<span>${g.name}</span>`;
     html += `<div class="wl-group-head ${g.collapsed && !kw ? 'collapsed' : ''}" data-g="${gi}">
-      <span class="caret">▼</span><span>${g.name}</span><span class="cnt">${list.length}</span></div>`;
+      <span class="caret">▼</span>${nameCell}<span class="cnt">${list.length}</span></div>`;
     if (g.collapsed && !kw) return;
     list.forEach(s => {
       const isUp = (s.chg || '').startsWith('+');
@@ -3303,6 +3316,17 @@ function renderSymbols() {
     inp.addEventListener('blur', () => commitNewGroup(inp.value));   // 失焦即确认（空名仅退出输入态）
     inp.focus();
   }
+  if (wlRenamingGroup !== null && !kw) {
+    const rin = document.getElementById('wl-rename-input');
+    if (rin) {
+      rin.addEventListener('keydown', e => {
+        if (e.key === 'Enter') commitRenameGroup(rin.value);
+        else if (e.key === 'Escape') { wlRenamingGroup = null; renderSymbols(); }
+      });
+      rin.addEventListener('blur', () => commitRenameGroup(rin.value));   // 失焦即确认（空名/重名静默忽略）
+      rin.focus(); rin.select();
+    }
+  }
 }
 /* 新建分组：空名/重名不创建（重名时静默忽略，避免两组同名导致右键添加歧义） */
 function commitNewGroup(name) {
@@ -3311,6 +3335,25 @@ function commitNewGroup(name) {
   name = (name || '').trim();
   if (name && !symGroups.some(g => g.name === name)) {
     symGroups.push({ name, collapsed: false, symbols: [] });
+    saveWl();
+  }
+  renderSymbols();
+}
+/* 重命名分组：进入行内输入态（分组头名称变输入框），Enter/失焦确认、Esc 取消；空名/重名静默忽略 */
+function startRenameGroup(gi) {
+  if (!symGroups[gi]) return;
+  symGroups[gi].collapsed = false;   // 展开分组，便于确认改名结果
+  wlRenamingGroup = gi;
+  renderSymbols();
+}
+function commitRenameGroup(name) {
+  if (wlRenamingGroup === null) return;
+  const gi = wlRenamingGroup;
+  wlRenamingGroup = null;
+  name = (name || '').trim();
+  const g = symGroups[gi];
+  if (g && name && name !== g.name && !symGroups.some((x, i) => i !== gi && x.name === name)) {
+    g.name = name;
     saveWl();
   }
   renderSymbols();
@@ -3332,6 +3375,7 @@ document.getElementById('sym-list').addEventListener('click', e => {
   }
   const head = e.target.closest('.wl-group-head');
   if (head) {
+    if (e.target.closest('.wl-rename-input')) return;   // 重命名输入态：点击输入框不触发折叠
     symGroups[+head.dataset.g].collapsed = !symGroups[+head.dataset.g].collapsed;
     saveWl();
     renderSymbols();
@@ -3353,11 +3397,7 @@ document.getElementById('sym-filter').addEventListener('input', e => {
   renderSymbols();
 });
 
-/* 右栏 ＋ -> 品种搜索弹窗（添加模式：加入首个分组；分组头右键可指定目标分组） */
-document.getElementById('add-sym').addEventListener('click', () => {
-  if (!symGroups.length) symGroups.push({ name: '自选', collapsed: false, symbols: [] });
-  openSymSearch('add', symGroups[0]);
-});
+/* 添加品种入口已并入分组头右键卡片菜单（顶部 ＋ 按钮已移除） */
 
 renderSymbols();
 
@@ -3482,13 +3522,34 @@ srModal.addEventListener('click', e => { if (e.target === srModal) closeSymSearc
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && srModal.classList.contains('show')) closeSymSearch(); });
 document.getElementById('symbol-picker').addEventListener('click', openSymSearch);
 
-/* 分组头右键 -> 添加品种到该分组（品种列表唯一添加入口，与图表品种切换完全解耦） */
+/* 分组头右键 -> 卡片式菜单（添加品种 / 重命名）；添加品种仍是品种列表唯一添加入口，与图表品种切换解耦 */
+const grpCtxMenu = document.getElementById('grp-ctx-menu');
+let grpCtxIndex = -1;
+function closeGroupMenu() { grpCtxMenu.classList.remove('show'); }
+function openGroupMenu(clientX, clientY, gi) {
+  grpCtxIndex = gi;
+  closeDrawCtxMenu();   // 收起可能同时打开的画线菜单
+  grpCtxMenu.style.left = Math.min(clientX, window.innerWidth - 220) + 'px';
+  grpCtxMenu.style.top = Math.min(clientY, window.innerHeight - 90) + 'px';
+  grpCtxMenu.classList.add('show');
+}
 document.getElementById('sym-list').addEventListener('contextmenu', e => {
   const head = e.target.closest('.wl-group-head');
   if (!head) return;
   e.preventDefault();
-  openSymSearch('add', symGroups[+head.dataset.g]);
+  openGroupMenu(e.clientX, e.clientY, +head.dataset.g);
 });
+document.getElementById('grp-ctx-add').addEventListener('click', e => {
+  e.stopPropagation(); closeGroupMenu();
+  const g = symGroups[grpCtxIndex];
+  if (g) openSymSearch('add', g);
+});
+document.getElementById('grp-ctx-rename').addEventListener('click', e => {
+  e.stopPropagation(); closeGroupMenu();
+  startRenameGroup(grpCtxIndex);
+});
+document.addEventListener('click', e => { if (!grpCtxMenu.contains(e.target)) closeGroupMenu(); });
+window.addEventListener('keydown', e => { if (e.key === 'Escape') closeGroupMenu(); });
 
 /* ═══ 拖拽调整栏宽/栏高（分隔条 resize） ═══ */
 const SPLIT_CONF = {
