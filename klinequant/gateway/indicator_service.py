@@ -53,18 +53,32 @@ async def ensure_warmed(
     name: str,
     params: Optional[Dict[str, Any]],
     need: int,
+    force: bool = False,
 ):
     """确保指标已注册并预热到显示需求深度，返回指标实例
 
     Args:
         need: 显示需求根数（前端 limit，随懒加载翻页增大）
+        force: 绕过深度短路强制重新预热重建序列。用于序列中段空洞自愈：
+            序列曾按带洞 K 线缓存重建后空洞焊死（深度已够短路永不重建），
+            前端检测到空洞且缺失 ts 已在 K 线中时带 refresh=1 请求重建。
     """
     engine = state.indicator_engine
     indicator = engine.ensure_indicator(name, params, symbol, exchange, timeframe)
     series_len = len(engine.get_series(name, params, symbol, exchange, timeframe))
-    if series_len >= need:
-        return indicator   # 有效序列已完整覆盖显示需求，免重算（切周期/品种热路径）
-    # series_len < need：左侧存在未覆盖的历史缺口，必须加深预热补齐。此前这里有一条
+
+    # 本次预热目标深度（受 _MAX_WARMUP_TOTAL 钳制）与由此可及的有效序列深度上限：
+    # 重放 target 根后，窗口型指标剔除预热段的有效值约 target - min_periods + 1 根。
+    # 未触顶时 target = need + min_periods → achievable = need + 1（>= need，短路判断与
+    # 旧版 series_len >= need 完全等价）；但当 need 逼近 _MAX_WARMUP_TOTAL（前端满深度
+    # 3 万根）时 target 被钳到上限，achievable 恒 < need，若仍按 series_len >= need 判断
+    # 则短路永不命中、每次历史请求都对满深度全量重放（深历史卡顿）。故按“本次预热可及
+    # 深度”封顶判断：序列已达可及深度即免重算（再拉同样深度，幂等无增益）。
+    target = min(_MAX_WARMUP_TOTAL, need + indicator.min_periods)
+    achievable = max(0, target - indicator.min_periods + 1)
+    if not force and series_len >= min(need, achievable):
+        return indicator   # 有效序列已覆盖显示需求（或已达预热上限可及深度），免重算
+    # series_len < 可及深度：左侧存在未覆盖的历史缺口，必须加深预热补齐。此前这里有一条
     # `is_warmed_up and need - series_len < _PAGE_FETCH_LIMIT(1000)` 的迟滞直接跳过，会把
     # 一次瞬时短拉（补页异常 break / 短页）留下的 <1000 根缺口永久锁死——阶梯线等
     # min_periods 较大的指标历史段再也不绘制（2026-09-23 实证：刷新后前端 klines=6000
@@ -78,7 +92,6 @@ async def ensure_warmed(
         logger.warning(f"Indicator warmup skipped: unknown market source {exchange}")
         return indicator
 
-    target = min(_MAX_WARMUP_TOTAL, need + indicator.min_periods)
     try:
         # 走进程级 K 线缓存：与 REST 行情共享存量，同品种同周期重复预热零拉取；
         # 缺口由缓存层自动向前补页（派生周期同样适用）

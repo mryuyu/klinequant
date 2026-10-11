@@ -913,7 +913,11 @@ function applyIndPush(msg) {
         } else if (inst.type === 'custom') {
           /* IND-110：def 式指标逐字段更新末点，缓存供图例末值显示；柱字段同内置 MACD 语义逐点四色 */
           inst.fields.forEach((f, i) => {
-            if (v[f] == null) return;
+            if (v[f] == null) {
+              /* 稀疏字段非激活段：推 whitespace 末点断开连线（柱字段跳过） */
+              if (!isHistField(inst, i)) inst.series[i].update({ time: t });
+              return;
+            }
             if (isHistField(inst, i)) {
               const d = inst.series[i].data();
               const last = d[d.length - 1];
@@ -1115,6 +1119,77 @@ class StepLinePrimitive {
     });
   }
 }
+/* ═══ 变色线渲染（Series Primitives API）：TDX PartLine 分段变色观感还原 ═══
+   lwc 无原生分段变色线，且本 lwc 构建会丢弃 whitespace 断点（data() 仅返回值点、跨空档直连），
+   故挂到承载连续值的透明 LineSeries 上：draw 时直读 series.data()，对相邻两点连线段，
+   按该段方向（后值 vs 前值）选 colors[0] 上升 / colors[1] 下降逐段描边；
+   同色连续段合为一条 path，变色处断开重起，天然无跨段斜穿。只绘可见区（二分定位）。 */
+class DirLinePrimitive {
+  constructor(opts) {
+    this._opts = { colors: ['#ff00ff', '#00ffff'], lineStyle: 0, lineWidth: 1, ...opts };
+    this._series = null; this._chart = null; this._invalidate = null; this._drawErrLogged = false;
+    this._visible = true;   // 同 StepLinePrimitive：primitive 自绘不受 series.visible 控制
+    this._renderer = {
+      draw: target => {
+        try { this._draw(target); }
+        catch (e) { if (!this._drawErrLogged) { this._drawErrLogged = true; console.error('DirLinePrimitive draw error:', e); } }
+      },
+    };
+    this._paneViews = [{ renderer: () => this._renderer }];
+  }
+  attached(param) { this._series = param.series; this._chart = param.chart; this._invalidate = param.requestUpdate; }
+  detached() { this._series = null; this._chart = null; this._invalidate = null; }
+  applyOptions(opts) { Object.assign(this._opts, opts); if (this._invalidate) this._invalidate(); }
+  setVisible(v) { this._visible = !!v; if (this._invalidate) this._invalidate(); }
+  paneViews() { return this._paneViews; }
+  _draw(target) {
+    const s = this._series;
+    if (!s || !this._chart) return;
+    if (!this._visible) return;
+    const data = s.data();
+    if (!data || data.length < 2) return;
+    const ts = this._chart.timeScale();
+    const range = ts.getVisibleRange();
+    if (!range) return;
+    /* 二分定位可见切片（左端多取一点：首段着色依赖前一点的值与坐标） */
+    let lo = 0, hi = data.length - 1, mid;
+    let i0 = data.length, i1 = -1;
+    while (lo <= hi) { mid = (lo + hi) >> 1; if (data[mid].time >= range.from) { i0 = mid; hi = mid - 1; } else lo = mid + 1; }
+    lo = 0; hi = data.length - 1;
+    while (lo <= hi) { mid = (lo + hi) >> 1; if (data[mid].time <= range.to) { i1 = mid; lo = mid + 1; } else hi = mid - 1; }
+    i0 = Math.max(0, i0 - 1); i1 = Math.min(data.length - 1, i1 + 1);
+    if (i1 <= i0) return;
+    target.useBitmapCoordinateSpace(scope => {
+      const ctx = scope.context, hpr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
+      const half = Math.max(1, Math.floor(hpr)) % 2 / 2;   // 奇数像素线宽半像素对齐
+      ctx.save();
+      ctx.lineWidth = Math.max(1, Math.floor(this._opts.lineWidth * hpr));
+      ctx.setLineDash(stepDash(this._opts.lineStyle, hpr));
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      let curColor = null;   // 当前 path 颜色（null=未起笔/已收笔）
+      let prev = null;       // 前一点 {x,y,value}（null=首点/断点后）
+      const flush = () => { if (curColor) { ctx.stroke(); curColor = null; } };
+      for (let i = i0; i <= i1; i++) {
+        const pt = data[i];
+        const x = ts.timeToCoordinate(pt.time);
+        const y = pt.value == null ? null : s.priceToCoordinate(pt.value);
+        if (x == null || y == null) { flush(); prev = null; continue; }
+        const xr = Math.round(x * hpr) + half, yr = Math.round(y * vpr) + half;
+        if (prev) {
+          const col = this._opts.colors[pt.value >= prev.value ? 0 : 1];
+          if (col !== curColor) {   // 变色：收笔当前 path，自前一点重起新 path
+            flush();
+            curColor = col; ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(prev.x, prev.y);
+          }
+          ctx.lineTo(xr, yr);
+        }
+        prev = { x: xr, y: yr, value: pt.value };
+      }
+      flush();
+      ctx.restore();
+    });
+  }
+}
 /* 指标基础名（不含参数）：图例常驻显示这个，参数改由 title 悬停提示（见 indParams） */
 function indBaseName(it) {
   if (it.type === 'custom') return it.name || it.type;
@@ -1210,6 +1285,17 @@ function buildInstance(it, styleUI, opts = {}) {
         return;
       }
       const st = indSeriesStyle(inst, i);
+      if (bs?.plot === 'dirline') {
+        /* 变色线字段：series 透明仅承载连续值，DirLinePrimitive 按方向逐段自绘（图例用上升色） */
+        const s = chart.addSeries(LineSeries, { color: 'transparent', ...LINE_BASE, ...st.opt, ...(inst.pane === 0 ? NO_AUTOSCALE : {}) }, inst.pane);
+        const dc = fieldDirColors(inst, i);
+        const prim = new DirLinePrimitive({ colors: dc, lineStyle: st.opt.lineStyle ?? 0, lineWidth: st.opt.lineWidth || LINE_BASE.lineWidth });
+        s.attachPrimitive(prim);
+        inst.series.push(s);
+        (inst.dirPrims ||= [])[i] = prim;
+        parts.push({ key: f, label: f, color: dc[0] });
+        return;
+      }
       if (bs?.step === true) {
         /* 阶梯线字段：series 线体透明仅承载数据，StepLinePrimitive 自绘（图例/自选色仍用 st.color） */
         const s = chart.addSeries(LineSeries, { color: 'transparent', ...LINE_BASE, ...st.opt, ...(inst.pane === 0 ? NO_AUTOSCALE : {}) }, inst.pane);
@@ -1280,6 +1366,16 @@ function instHistColors(inst) { return fieldHistColors(inst, 0); }
 /* 柱状字段判定：内置 MACD 的 HIST（index 0）+ def 式声明 plot:'histogram' 的字段 */
 function isHistField(inst, i) {
   return (inst.type === 'macd' && i === 0) || backendFieldStyle(inst, i)?.plot === 'histogram';
+}
+/* 变色线字段判定：def 式声明 plot:'dirline'（TDX PartLine 合流为单字段分段变色） */
+function isDirField(inst, i) {
+  return backendFieldStyle(inst, i)?.plot === 'dirline';
+}
+/* 变色线两槽色 [上升, 下降]：用户自选 > 后端声明 dir_colors > 前端默认（洋红/青） */
+function fieldDirColors(inst, i) {
+  const s = inst.styleUI?.[i];
+  if (s?.dirColors?.some(c => c)) return s.dirColors;
+  return backendFieldStyle(inst, i)?.dir_colors || ['#ff00ff', '#00ffff'];
 }
 /* 副图参考线：[{price, color, lineStyle}]。用户自选（styleUI.refLines）> 默认（内置目录 refLines / 后端 price_lines 声明）；
    空数组 = 用户明确清空（不回退默认） */
@@ -1352,6 +1448,7 @@ function indSeriesStyle(inst, i, consume = true) {
   if (s && s.lineStyle != null) opt.lineStyle = s.lineStyle;
   else if (inst.type === 'boll' && i === 1) opt.lineStyle = 2;   // BOLL 中轨默认虚线（历史观感）
   else if (inst.type === 'custom') { const ls = backendFieldStyle(inst, i)?.line_style; if (ls != null) opt.lineStyle = ls; }   // 后端声明的默认线型
+  if (inst.type === 'custom') { const lw = backendFieldStyle(inst, i)?.line_width; if (lw != null) opt.lineWidth = lw; }   // 后端声明的默认线宽（TDX linethickN）
   return { color, opt };
 }
 /* 线型下拉（图形化：option 直接画线型样本，title/aria 保留文字）；线条样式与参考线共用 */
@@ -1392,6 +1489,19 @@ function indStyleUI(inst) {
           `</div></div>`;
       }).join('');
       return `<div class="ind-style-row hist-wrap" data-si="${i}"><div class="hist-head"><input type="checkbox" class="ind-fvis-chk" data-si="${i}" title="取消勾选隐藏此柱"${fieldHidden(inst, i) ? '' : ' checked'}><span class="ind-style-name">${label}</span></div>${subs}</div>`;
+    }
+    if (isDirField(inst, i)) {
+      /* 变色线字段（def 式 plot:dirline）：两个子行各一条色板（上升/下降），无线型选项；
+         预选当前生效色（用户自选 > 后端 dir_colors > 前端默认洋红/青） */
+      const dc = fieldDirColors(inst, i);
+      const slots = [['上升段', dc[0]], ['下降段', dc[1]]];
+      const subs = slots.map(([name, cur], hi) => {
+        const swList = IND_SWATCHES.includes(cur) ? IND_SWATCHES : [cur, ...IND_SWATCHES];
+        return `<div class="hist-sub" data-hi="${hi}"><span class="hist-sub-name">${name}</span><div class="ind-swatches">` +
+          swList.map(c => `<button type="button" class="ind-sw${c === cur ? ' active' : ''}" data-c="${c}" style="background:${c}" title="${c}"></button>`).join('') +
+          `</div></div>`;
+      }).join('');
+      return `<div class="ind-style-row hist-wrap" data-si="${i}"><div class="hist-head"><input type="checkbox" class="ind-fvis-chk" data-si="${i}" title="取消勾选隐藏此线"${fieldHidden(inst, i) ? '' : ' checked'}><span class="ind-style-name">${label}</span></div>${subs}</div>`;
     }
     const s = inst.styleUI?.[i] || {};
     const cur = s.color || indSeriesStyle(inst, i, false).color;
@@ -1478,6 +1588,15 @@ function collectIndStyles(inst) {
       out[i] = { histColors: hc.some(x => x) ? hc : null, lineStyle: null };
       return;
     }
+    if (isDirField(inst, i)) {
+      /* 变色线字段：两个子行各采一槽（上升/下降） */
+      const dc = [...r.querySelectorAll('.hist-sub')].map(s => {
+        const sw = s.querySelector('.ind-sw.active');
+        return sw && sw.dataset.c ? sw.dataset.c : null;
+      });
+      out[i] = { dirColors: dc.some(x => x) ? dc : null, lineStyle: null };
+      return;
+    }
     const sw = r.querySelector('.ind-sw.active');
     const sel = r.querySelector('.ind-line-sel');
     out[i] = { color: sw && sw.dataset.c ? sw.dataset.c : null, lineStyle: sel ? +sel.value : null };
@@ -1495,7 +1614,7 @@ function collectIndStyles(inst) {
     else if (rl.length) return { refLines: rl };
   }
   if (!out) return null;
-  const changed = out.some(x => x && (x.color || x.lineStyle != null || x.histColors)) || out.refLines;
+  const changed = out.some(x => x && (x.color || x.lineStyle != null || x.histColors || x.dirColors)) || out.refLines;
   return changed ? out : null;
 }
 /* 仅样式变化（参数未变）：就地应用不重建，避免后端指标重新拉取与窗格高度动画重跑 */
@@ -1515,10 +1634,12 @@ function applyInstStyles(inst, styleUI) {
     }
     const st = indSeriesStyle(inst, i, false);   // 就地改样式作用于已构建实例：读缓存色（consume=false），不再漂移全局 maColorIdx
     const prim = inst.stepPrims?.[i];
-    /* 阶梯线字段：series 保持透明，颜色/线型改到 primitive 上就地生效 */
-    s.applyOptions({ color: prim ? 'transparent' : st.color, ...st.opt });
+    const dprim = inst.dirPrims?.[i];
+    /* 阶梯线/变色线字段：series 保持透明，颜色/线型改到 primitive 上就地生效 */
+    s.applyOptions({ color: (prim || dprim) ? 'transparent' : st.color, ...st.opt });
     if (prim) prim.applyOptions({ color: st.color, lineStyle: st.opt.lineStyle ?? 0 });
-    if (keys[i]) inst.legendVals[keys[i]].parentElement.style.color = st.color;
+    if (dprim) dprim.applyOptions({ colors: fieldDirColors(inst, i), lineStyle: st.opt.lineStyle ?? 0 });
+    if (keys[i]) inst.legendVals[keys[i]].parentElement.style.color = dprim ? fieldDirColors(inst, i)[0] : st.color;
   });
   applyRefLines(inst);   // 参考线自选变化：就地重建（默认→自选→清空均可）
 }
@@ -1538,8 +1659,8 @@ function applyInstVisibility(inst) {
   inst.series.forEach((s, i) => {
     const vis = !inst.off && !fieldHidden(inst, i);
     s.applyOptions({ visible: vis });
-    const prim = inst.stepPrims?.[i];
-    if (prim) prim.setVisible(vis);   // 阶梯线自绘不受 series.visible 控制，须同步
+    const prim = inst.stepPrims?.[i] || inst.dirPrims?.[i];
+    if (prim) prim.setVisible(vis);   // 阶梯线/变色线自绘不受 series.visible 控制，须同步
     const el = inst.legendVals[keys[i]];
     if (el) el.parentElement.classList.toggle('lg-off', !vis);
   });
@@ -1793,7 +1914,11 @@ function renderInstance(inst, reset = false) {
         const time = Math.floor(d.timestamp / 1000);
         inst.fields.forEach((f, i) => {
           const v = d.values[f];
-          if (v == null) return;
+          if (v == null) {
+            /* 稀疏字段（如变色线非激活段）：插 whitespace 断点，避免 lwc 跨空档连线；柱字段跳过 */
+            if (!isHistField(inst, i)) datas[i].push({ time });
+            return;
+          }
           if (isHistField(inst, i)) {
             datas[i].push({ time, value: v, color: histColor(v, histPrev[i], fieldHistColors(inst, i)) });
             histPrev[i] = v;

@@ -52,6 +52,7 @@ async def get_history(
     params: Optional[str] = Query(None, description="参数 JSON，如 {\"fast_period\":12}"),
     limit: int = Query(300, ge=1, le=30000, description="返回根数（显示需求，上限对齐前端 PRELOAD_HARD_CAP 与预热深度 _MAX_WARMUP_TOTAL）"),
     exchange: Optional[str] = Query(None, description="市场源，缺省默认所"),
+    refresh: bool = Query(False, description="强制重新预热重建序列（序列中段空洞自愈，绕过深度短路）"),
 ):
     """指标历史序列：注册+预热（拉取深度=显示需求+预热根数）后返回有效序列"""
     ex = (exchange or market_manager.default_exchange()).strip().lower()
@@ -73,7 +74,7 @@ async def get_history(
         return empty
 
     try:
-        ind = await ensure_warmed(ex, symbol.upper(), timeframe, name, p, limit)
+        ind = await ensure_warmed(ex, symbol.upper(), timeframe, name, p, limit, force=refresh)
     except KeyError:
         logger.error(f"Indicator history: unknown indicator {name}")
         return empty
