@@ -10,6 +10,7 @@ from core.indicator_engine.graph.dsl import (
     ema,
     maximum,
     minimum,
+    null,
     pyindicator,
     rolling_max,
     rolling_min,
@@ -37,4 +38,5 @@ __all__ = [
     "minimum",
     "where",
     "abs_",
+    "null",
 ]

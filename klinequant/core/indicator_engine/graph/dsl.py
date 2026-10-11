@@ -41,6 +41,7 @@ from .nodes import (
     MaximumNode,
     MinimumNode,
     Node,
+    NullNode,
     RollingMaxNode,
     RollingMinNode,
     RollingStdNode,
@@ -61,10 +62,11 @@ INPUT_COLUMNS = ("open", "high", "low", "close", "volume")
 #   [零轴上增, 零轴上缩, 零轴下增, 零轴下缩]，空槽回退前端涨跌方案色。
 # step: true 声明阶梯线（Pine plot.style_stepline 语义：bar 内保持水平、下一 bar 跳变），
 #   仅对 line 字段生效，由前端 Series Primitive 自绘还原（lwc 无原生阶梯线型）。
+# line_width: 正整数像素宽（对齐 TDX linethickN / lwc lineWidth），仅对 line 字段生效，缺省 1。
 # 前端消费优先级：用户自选 > 后端声明 > 前端默认色槽；未声明字段不受影响。
 _HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 _LINE_STYLES = (0, 1, 2, 3)
-_PLOT_TYPES = ("line", "histogram")
+_PLOT_TYPES = ("line", "histogram", "dirline")
 
 
 def _validate_style(name: str, style: Optional[List[Dict[str, Any]]]):
@@ -122,6 +124,33 @@ def _validate_style(name: str, style: Optional[List[Dict[str, Any]]]):
                         f"指标 {name} 的 style[{idx}].hist_colors 元素必须为 #RRGGBB 或 null"
                     )
             item["hist_colors"] = norm
+        lw = s.get("line_width")
+        if lw is not None:
+            # 对齐 TDX linethickN / lwc lineWidth：正整数像素宽（line / dirline 字段生效）
+            if not isinstance(lw, int) or isinstance(lw, bool) or lw < 1:
+                raise ValueError(
+                    f"指标 {name} 的 style[{idx}].line_width 必须为正整数"
+                )
+            if plot not in ("line", "dirline"):
+                raise ValueError(
+                    f"指标 {name} 的 style[{idx}].line_width 仅对 line/dirline 字段生效"
+                )
+            item["line_width"] = lw
+        dc = s.get("dir_colors")
+        if dc is not None:
+            # 变色线（TDX PartLine 合流）：[上升色, 下降色] 两槽，前端 primitive 逐段着色
+            if plot != "dirline":
+                raise ValueError(
+                    f"指标 {name} 的 style[{idx}].dir_colors 仅对 dirline 字段生效"
+                )
+            if not (
+                isinstance(dc, list) and len(dc) == 2
+                and all(isinstance(c, str) and _HEX_COLOR.fullmatch(c) for c in dc)
+            ):
+                raise ValueError(
+                    f"指标 {name} 的 style[{idx}].dir_colors 必须为 2 个 #RRGGBB（上升/下降）"
+                )
+            item["dir_colors"] = list(dc)
         out.append(item)
     return out
 
@@ -223,6 +252,16 @@ def abs_(x: Any) -> Node:
     return AbsNode(_node(x))
 
 
+def null() -> Node:
+    """恒 null 常量节点（TDX PartLine 变色线非激活段占位）
+
+    典型用法：where(cond, line, null()) —— cond 成立的 bar 输出 line 值，
+    否则输出 null。需指标声明 sparse=True，引擎才会逐字段透传 null
+    （否则非 partial 路径下任一字段 null 会整根丢弃）。
+    """
+    return NullNode()
+
+
 # ─── 图定义与指标适配 ───
 
 class GraphDef:
@@ -238,6 +277,7 @@ class GraphDef:
         min_periods_override: Optional[int],
         style: Optional[List[Dict[str, Any]]] = None,
         price_lines: Optional[List[Dict[str, Any]]] = None,
+        sparse: bool = False,
     ):
         self.fn = fn
         self.name = name
@@ -245,6 +285,7 @@ class GraphDef:
         self.range = range_
         self.desc = desc
         self.min_periods_override = min_periods_override
+        self.sparse = bool(sparse)
         self.style = _validate_style(name, style)
         self.price_lines = _validate_price_lines(name, price_lines)
 
@@ -399,13 +440,20 @@ class GraphIndicator(IndicatorBase):
         if not partial:
             if not self._warmed_up:
                 return None
-            if any(v is None for v in values.values()):
+            # 稀疏字段指标（如 TDX PartLine 变色线）：预热后仍允许逐字段 null
+            # （非激活段输出 null，前端断点分段绘制），不做「任一字段 null 即整根丢弃」门控
+            if not self._gdef.sparse and any(v is None for v in values.values()):
                 return None  # 结构性预热未完成（或除零等奇异点）：不输出失真数据
         # partial（降级场景：源深度不足全局预热）：逐字段透传 null，
         # 窗口型原语未满足出 null、递推型出冷启动值——与 TV 逐线自满足起点绘制同观感
         out = {k: (None if v is None else float(v)) for k, v in values.items()}
         if all(v is not None for v in out.values()):
             self._last_values = out
+        elif self._gdef.sparse:
+            # 稀疏字段：逐字段合并末值（各段最后一次有效值），供图例/last_values 显示
+            merged = dict(self._last_values or {})
+            merged.update({k: v for k, v in out.items() if v is not None})
+            self._last_values = merged or None
         return out
 
 
@@ -428,6 +476,7 @@ def pyindicator(
     desc: str = "",
     style: Optional[List[Dict[str, Any]]] = None,
     price_lines: Optional[List[Dict[str, Any]]] = None,
+    sparse: bool = False,
 ):
     """装饰器：把 def 函数注册为计算图指标
 
@@ -443,10 +492,15 @@ def pyindicator(
             color 为 #RRGGBB；line_style：0 实线 / 1 点线 / 2 虚线 / 3 大虚线；
             plot=histogram 时前端按柱渲染，hist_colors 四槽 = 零轴上增/上缩/下增/下缩（null 槽回退方案色）；
             step=true 声明阶梯线（Pine stepline 语义，仅 line 字段，前端 primitive 自绘）。
+            line_width 为正整数像素宽（TDX linethickN，仅 line 字段，缺省 1）。
             前端优先级：用户自选 > 此处声明 > 前端默认色槽
         price_lines: 副图固定参考线（水平线），如：
             [{"price": 80}, {"price": 20, "color": "#787b86", "line_style": 2}]
             price 必填；color 缺省灰色；line_style 缺省虚线（2）
+        sparse: 稀疏字段输出（TDX PartLine 变色线类）。默认 False：预热后
+            任一字段为 null 则整根丢弃（避免输出失真数据）。置 True 后逐字段
+            透传 null（配合 where(cond, line, null()) 实现按条件分段绘线），
+            前端将 null 作 whitespace 断点，不跨空档连线。
     """
 
     def wrapper(fn: Callable) -> Callable:
@@ -460,6 +514,7 @@ def pyindicator(
             min_periods_override=min_periods,
             style=style,
             price_lines=price_lines,
+            sparse=sparse,
         )
         get_registry().register(make_indicator_cls(gdef))
         logger.info(f"Registered graph indicator {gdef.name} from {fn.__name__}")

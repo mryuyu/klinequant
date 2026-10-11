@@ -1,14 +1,14 @@
 """Web 栈启动器 — 运行模式态①/态③ 共享（详见《KlineQuant 迭代计划》六·六节）。
 
 态①（纯行情看板 + 回测工作台，无策略）：
-    python -m webstack            # 前台起 gateway（托管 lc-live.html + Vue /app + API）并开浏览器
+    python -m webstack            # 前台起 gateway（托管 index-live.html + Vue /app + API）并开浏览器
 
 态③（策略研究带 GUI，--webgui，WEBGUI-L1）：
     from webstack import start_in_background
     start_in_background()         # 后台线程起同一 gateway，策略进程继续在主线程跑 LiveRunner
 
 设计要点：
-    - gateway 单进程即“整个 web 栈”：/ → lc-live.html，/app → Vue dist，/api → 后端，/ws → 推送。
+    - gateway 单进程即“整个 web 栈”：/ → index-live.html，/app → Vue dist，/api → 后端，/ws → 推送。
     - 前端是否启动由“是否调用本启动器”决定，而非浏览器反向拉起（浏览器无法启动死掉的后端）。
     - dist 未构建时 gateway 自动跳过 /app（见 gateway/app.py），本启动器不依赖 dist 是否存在。
 """
@@ -76,7 +76,7 @@ def run_foreground(
         ).start()
 
     print(f"[webstack] gateway 启动中：")
-    print(f"    lc-live.html  ->  http://{host}:{port}/")
+    print(f"    index-live.html ->  http://{host}:{port}/")
     print(f"    Vue 正式版     ->  http://{host}:{port}{open_path}")
     print(f"    API           ->  http://{host}:{port}/api/  |  WS /ws")
     uvicorn.run(APP_IMPORT, host=host, port=port, log_level="info")
@@ -120,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     p.add_argument(
         "--open", dest="open_path", default="/app/",
-        help="就绪后打开的路径（默认 /app/ Vue 正式版；填 / 则打开 lc-live.html）",
+        help="就绪后打开的路径（默认 /app/ Vue 正式版；填 / 则打开 index-live.html）",
     )
     args = p.parse_args(argv)
 

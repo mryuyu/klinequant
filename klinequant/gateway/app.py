@@ -32,7 +32,7 @@ from gateway.ws import ws_manager
 
 logger = logging.getLogger(__name__)
 
-# 前端页面目录（lc-live.html 为默认首页与唯一迭代基线）：klinequant/../frontend/mockup
+# 前端页面目录（index-live.html 为默认首页与唯一迭代基线；lc-live.html 为旧基线存档）：klinequant/../frontend/mockup
 FRONTEND_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "frontend", "mockup")
 )
@@ -114,13 +114,13 @@ def create_app() -> FastAPI:
             logger.error(f"WS error: {ws_id}: {e}")
             ws_manager.disconnect(ws_id)
 
-    # 前端页面：根路径重定向到 /static/lc-live.html（保证页面内相对路径 lwc.js 正确解析），
+    # 前端页面：根路径重定向到 /static/index-live.html（保证页面内相对路径 lwc.js 正确解析），
     # /static 挂载整个 mockup 目录
-    index_file = os.path.join(FRONTEND_DIR, "lc-live.html")
+    index_file = os.path.join(FRONTEND_DIR, "index-live.html")
     if os.path.isfile(index_file):
         @app.get("/", include_in_schema=False)
         async def index():
-            return RedirectResponse("/static/lc-live.html")
+            return RedirectResponse("/static/index-live.html")
 
         app.mount("/static", _NoCacheStaticFiles(directory=FRONTEND_DIR, html=True), name="static")
     else:

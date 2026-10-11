@@ -237,6 +237,89 @@ def test_sample_macd_multi_price_lines():
     assert ind.display_meta["price_lines"] == [{"price": 0}]
 
 
+# ─── line_width / dirline 样式契约 + sparse 稀疏字段 ───
+
+def test_line_width_style_validation():
+    """line_width 声明校验：正整数、仅 line/dirline 字段（对齐 TDX linethickN）"""
+    from core.indicator_engine.graph.dsl import _validate_style
+
+    assert _validate_style("X", [{"color": "#ff00ff", "line_width": 2}]) == [
+        {"color": "#ff00ff", "line_width": 2}
+    ]
+    assert _validate_style("X", [{}]) == [{}]   # 未声明不产出该键
+    with pytest.raises(ValueError):
+        _validate_style("X", [{"line_width": 0}])       # 非正
+    with pytest.raises(ValueError):
+        _validate_style("X", [{"line_width": 1.5}])     # 非整数
+    with pytest.raises(ValueError):
+        _validate_style("X", [{"line_width": True}])    # bool 非合法整数
+    with pytest.raises(ValueError):
+        _validate_style("X", [{"plot": "histogram", "line_width": 2}])   # 柱字段拒绝
+
+
+def test_dirline_style_validation():
+    """dirline 变色线契约：dir_colors 两槽 #RRGGBB，仅 dirline 字段可用"""
+    from core.indicator_engine.graph.dsl import _validate_style
+
+    ok = [{"plot": "dirline", "dir_colors": ["#ff00ff", "#00ffff"], "line_width": 2}]
+    assert _validate_style("X", ok) == ok
+    with pytest.raises(ValueError):
+        _validate_style("X", [{"plot": "line", "dir_colors": ["#ff00ff", "#00ffff"]}])
+    with pytest.raises(ValueError):
+        _validate_style("X", [{"plot": "dirline", "dir_colors": ["#ff00ff"]}])
+    with pytest.raises(ValueError):
+        _validate_style("X", [{"plot": "dirline", "dir_colors": ["#f00", "#00ffff"]}])
+
+
+def test_sparse_vs_non_sparse_null_gating():
+    """sparse 门控回归：非 sparse 任一字段 null 整根丢弃；sparse 逐字段透传 null"""
+    # B 恒 null（0/0 除零奇异点），A 恒有值
+    fn = lambda close: {"A": close, "B": (close - close) / (close - close)}  # noqa: E731
+    df = _gen_df(10)
+
+    gdef_ns = GraphDef(fn=fn, name="NS", pane="sub", range_="unbounded",
+                       desc="", min_periods_override=None)
+    ind_ns = make_indicator_cls(gdef_ns)()
+    assert all(v is None for _, v in _replay(ind_ns, df))   # 非 sparse：整根被丢弃
+
+    gdef_sp = GraphDef(fn=fn, name="SP", pane="sub", range_="unbounded",
+                       desc="", min_periods_override=None, sparse=True)
+    ind_sp = make_indicator_cls(gdef_sp)()
+    vals = [v for _, v in _replay(ind_sp, df)]
+    assert all(v is not None and v["A"] is not None and v["B"] is None for v in vals)
+
+
+def test_zline_dirline():
+    """ZLine 变色线（TDX PartLine）：单字段连续值 + dirline 两槽色 + 批量增量一致 + 升降段均存在"""
+    import custom_indicators  # noqa: F401
+
+    reg = get_registry()
+    assert "ZLINE" in reg
+    ind = reg.create("ZLINE", None)
+    meta = ind.display_meta
+    assert meta["pane"] == "main" and meta["range"] == "price"
+    assert meta["fields"] == ["ZLINE"]
+    assert meta["style"] == [
+        {"plot": "dirline", "dir_colors": ["#ff00ff", "#00ffff"], "line_width": 2},
+    ]
+
+    df = _gen_df(300)
+    inc = _replay(ind, df)
+    zb = _batch_col(ind, df, "ZLINE")
+
+    vals = []
+    for i, (_, v) in enumerate(inc):
+        if v is None:
+            continue   # 预热段
+        assert v["ZLINE"] is not None   # 连续字段：不应有 null（变色由前端按方向分段）
+        assert zb[i] == pytest.approx(v["ZLINE"], rel=1e-12)
+        vals.append(v["ZLINE"])
+    # 升降段均存在（否则变色线退化为单色）
+    up = sum(1 for a, b in zip(vals, vals[1:]) if b > a)
+    dn = sum(1 for a, b in zip(vals, vals[1:]) if b < a)
+    assert up > 50 and dn > 50
+
+
 # ─── 快照法：未收盘 bar 同 ts 重复推送幂等 ───
 
 def test_snapshot_replay_idempotent():

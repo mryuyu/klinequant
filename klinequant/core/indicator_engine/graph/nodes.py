@@ -183,6 +183,28 @@ class ConstNode(Node):
         return 0
 
 
+class NullNode(Node):
+    """恒 null 常量（TDX PartLine 变色线的非激活段占位）
+
+    与 where(cond, a, null()) 配合：条件不成立的 bar 输出 null，
+    前端按 whitespace 断点分段绘制（须指标声明 sparse=True 才逐字段透传）。
+    """
+
+    def __init__(self):
+        super().__init__([])
+
+    def batch(self) -> pl.Expr:
+        return pl.lit(None, dtype=pl.Float64)
+
+    def incr(self, env: Dict[str, Any]) -> Optional[float]:
+        self._value = None
+        return None
+
+    @property
+    def min_periods(self) -> int:
+        return 0
+
+
 # ─── 递推类原语 ───
 
 class EmaNode(Node):

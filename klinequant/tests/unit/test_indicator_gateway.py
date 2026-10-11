@@ -201,6 +201,34 @@ class TestIndicatorHistory:
         assert resp["count"] == 500
         assert src.fetch_calls > calls_after_first   # 确有一次加深重拉
 
+    def test_history_short_circuits_at_warmup_cap(self, client, monkeypatch):
+        """回归：need 逼近预热上限 _MAX_WARMUP_TOTAL 时短路仍须命中（不满深度全量重放）。
+
+        窗口型指标预热后有效序列 = target - min_periods + 1，当 target 被钳到上限时
+        恒 < need，旧 `series_len >= need` 短路永不命中→每次历史请求都重放满深度。
+        改按可及深度 min(need, target-min_periods+1) 封顶后，达深度即免重算。
+        monkeypatch 把上限压到 100 复现钳制（need=90 + MACD 预热 34 > 100）：
+        target=100、可及深度=100-34+1=67 < need=90；首次预热后 series_len=67，
+        二次同请求应短路（fetch_calls 不增）；旧代码 67>=90 为假会再拉一次。
+        """
+        monkeypatch.setattr("gateway.indicator_service._MAX_WARMUP_TOTAL", 100)
+        bars = _gen_bars(200)
+        src = _FakeSource(bars)
+        market_manager.register(src)
+
+        url = (
+            "/api/indicator/history?symbol=MOCKUSD&timeframe=1m&exchange=mockex"
+            f"&indicator=MACD&limit=90&params={json.dumps(MACD_PARAMS)}"
+        )
+        r1 = client.get(url).json()
+        assert r1["warmed"] is True
+        assert r1["count"] == 67          # 可及深度 = 100 - 34 + 1（源足量，非 partial）
+        calls_after_first = src.fetch_calls
+
+        r2 = client.get(url).json()
+        assert r2["count"] == 67
+        assert src.fetch_calls == calls_after_first   # 二次请求短路，不再拉取/重放
+
     def test_history_unknown_indicator(self, client):
         """未注册指标：降级返回空序列（不 500）"""
         market_manager.register(_FakeSource(_gen_bars(50)))
