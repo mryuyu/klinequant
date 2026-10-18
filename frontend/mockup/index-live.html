@@ -196,6 +196,8 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .ctx-row.disabled { opacity:.4; pointer-events:none; }   /* 菜单行禁用态（如锁定画线的「删除」） */
 .ctx-input { width:70px; background:transparent; border:1px solid var(--border-light); color:var(--text); border-radius:4px; font-size:12px; padding:3px 6px; outline:none; font-family:var(--font-ui); }
 .ctx-input:focus { border-color:var(--accent); }
+.ctx-field { display:flex; align-items:center; gap:6px; }   /* 输入框 + 单位（% / 根K线）右对齐成组 */
+.ctx-field em { font-style:normal; font-size:12px; color:var(--text-sub); }
 .ctx-row input[type="checkbox"] { width:14px; height:14px; accent-color:var(--accent); cursor:pointer; }
 /* 动作行（左图标+标签可点击，如「重置图表」）与分组分隔线；悬停提亮同 TV */
 .ctx-action { cursor:pointer; justify-content:flex-start; gap:10px; }
@@ -204,9 +206,11 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .ctx-sep { height:1px; background:var(--border); margin:4px 0; }
 .watermark { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:40px; font-weight:800; color:rgba(209,212,220,0.05); pointer-events:none; letter-spacing:4px; z-index:0; }
 /* 当前价标签（自定义：价格 + K 线收盘倒计时同框，替代 LC 内置轴标签），垂直居中于当前价坐标 */
-.price-tag { position:absolute; right:0; z-index:6; display:none; flex-direction:column; align-items:flex-end; gap:1px; padding:3px 8px 4px; border-radius:2px; pointer-events:none; white-space:nowrap; font-family:var(--font-mono); }
-.price-tag .pt-price { font-size:11px; font-weight:700; color:#fff; line-height:1.15; }
-.price-tag .pt-cd { font-size:9px; color:rgba(255,255,255,.8); line-height:1; }
+/* 宽度由 JS 设为价格轴宽（right:0 + border-box）与坐标栏精确对齐、不越界；
+   配色取坐标栏反色（轴文字色 #787b86 作底、轴背景色 #131722 作字），同 TV */
+.price-tag { position:absolute; right:0; z-index:6; display:none; flex-direction:column; align-items:center; gap:1px; padding:3px 4px 4px; border-radius:2px; pointer-events:none; white-space:nowrap; font-family:var(--font-mono); box-sizing:border-box; background:#787b86; }
+.price-tag .pt-price { font-size:13px; color:#131722; line-height:1.15; }   /* 与 layout.fontSize（坐标栏字号）一致、不加粗（同坐标栏刻度观感） */
+.price-tag .pt-cd { font-size:11px; color:rgba(19,23,34,.8); line-height:1; }
 
 /* 底部持仓（高度可拖拽 + 可折叠隐藏） */
 .positions-bar { border-top:1px solid var(--border); background:var(--bg-panel); height:var(--pos-h,150px); display:flex; flex-direction:column; }
@@ -613,7 +617,9 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
   <div class="ctx-row ctx-action" id="ctx-reset"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg><span>重置图表</span></div>
   <div class="ctx-sep"></div>
   <div class="ctx-row"><span>首屏K线</span><input id="ctx-ps" class="ctx-input" type="number" min="100" max="30000" step="100"></div>
-  <div class="ctx-row"><span>右侧留白</span><input id="ctx-ro" class="ctx-input" type="number" min="0" max="100"></div>
+  <div class="ctx-row"><span>顶部</span><span class="ctx-field"><input id="ctx-mt" class="ctx-input" type="number" min="0" max="60" step="1"><em>%</em></span></div>
+  <div class="ctx-row"><span>底部</span><span class="ctx-field"><input id="ctx-mb" class="ctx-input" type="number" min="0" max="60" step="1"><em>%</em></span></div>
+  <div class="ctx-row"><span>右侧留白</span><span class="ctx-field"><input id="ctx-ro" class="ctx-input" type="number" min="0" max="100"><em>根K线</em></span></div>
   <div class="ctx-row"><span>成交量</span><input id="ctx-vol" type="checkbox" checked></div>
   <div class="ctx-row"><span>涨跌配色</span><select id="ctx-scheme" class="ctx-input"><option value="gd">绿涨红跌</option><option value="cn">红涨绿跌</option></select></div>
 </div>
@@ -650,6 +656,9 @@ const sourcesMeta = {};         // exchange -> 插件元数据（label/周期支
 let firstScreenBars = 1000;     // 首屏 K 线数量（右键菜单可调，默认 1000，localStorage 持久化）
 const PRELOAD_PAGE_SIZE = 5000; // 左滑按需加载页大小（后端已支持大页；源插件内部分页）
 let curRightOffset = 20;        // 图表右侧预留空 K 线数：可调，默认 20
+let scaleTopPct = 10;           // 主图上方留白 %（scaleMargins.top）：右键菜单可调，持久化，默认 10
+let scaleBottomPct = 22;        // 主图下方留白 %（scaleMargins.bottom，成交量显示时）：隐藏成交量时收敛到 ≤5%
+const SPAN_FLOOR = 10;          // 切视图保持跨度的下限：小于此值视为异常残留（残页加载/极缩误触），回退默认首屏根数
 let showVol = true;             // 成交量显示开关（右键菜单切换，持久化）
 const lastPrices = {};          // symbol -> 最新价（供持仓表/品种列表用）
 const symbolPrec = {};          // symbol -> 显示小数位（后端按订阅价格下发，只记录不推导）
@@ -735,6 +744,8 @@ if (savedLayout) {
   if (savedLayout.posCollapsed) document.getElementById('pos-bar')?.classList.add('collapsed');
   if (savedLayout.tradeHidden) document.querySelector('.main')?.classList.add('no-trade');
   if (typeof savedLayout.showVol === 'boolean') showVol = savedLayout.showVol;
+  if (typeof savedLayout.scaleTop === 'number') scaleTopPct = Math.min(60, Math.max(0, savedLayout.scaleTop));
+  if (typeof savedLayout.scaleBottom === 'number') scaleBottomPct = Math.min(60, Math.max(0, savedLayout.scaleBottom));
 }
 function saveLayout() {
   try {
@@ -752,6 +763,8 @@ function saveLayout() {
       exchange: curExchange,
       indLayout,
       showVol,
+      scaleTop: scaleTopPct,
+      scaleBottom: scaleBottomPct,
     }));
   } catch (e) {}
 }
@@ -1014,6 +1027,7 @@ const chart = createChart(container, {
   layout: {
     background: { color: '#131722' },
     textColor: '#787b86',
+    fontSize: 13,   // 坐标栏/时间轴刻度字号放大（lwc 默认 12）；最新价标签 .pt-price 与此保持一致
     panes: { separatorColor: '#2a2e39', separatorHoverColor: '#363a45', enableResize: true },
   },
   localization: {
@@ -1026,7 +1040,7 @@ const chart = createChart(container, {
     vertLine: { color: '#758696', width: 1, style: 3, labelBackgroundColor: '#2a2e39' },
     horzLine: { color: '#758696', width: 1, style: 3, labelBackgroundColor: '#2a2e39' },
   },
-  rightPriceScale: { borderColor: '#2a2e39', scaleMargins: { top: 0.10, bottom: 0.22 } },
+  rightPriceScale: { borderColor: '#2a2e39', minimumWidth: 90, scaleMargins: { top: scaleTopPct / 100, bottom: scaleBottomPct / 100 } },
   handleDoubleClickZoom: false,   // 双击让位给副图最大化/还原切换
   timeScale: {
     borderColor: '#2a2e39', timeVisible: true, secondsVisible: false, rightOffset: curRightOffset,
@@ -1058,10 +1072,15 @@ chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } })
 /* 成交量显示/隐藏：隐藏时释放底部 18% 空间给主图，图例 VOL 同步隐藏；
    OTC 市场（如外汇）无成交量，强制隐藏并禁用开关 */
 function sourceSupportsVolume() { const m = sourcesMeta[curExchange]; return !m || m.supports_volume !== false; }
+/* 主图上/下留白（scaleMargins 百分比，右键菜单可调）：成交量隐藏时底部收敛到 ≤5% 释放空间 */
+function applyScaleMargins() {
+  const vol = showVol && sourceSupportsVolume();
+  chart.priceScale('right').applyOptions({ scaleMargins: { top: scaleTopPct / 100, bottom: vol ? scaleBottomPct / 100 : Math.min(scaleBottomPct, 5) / 100 } });
+}
 function applyVolVisibility() {
   const vol = showVol && sourceSupportsVolume();
   volumeSeries.applyOptions({ visible: vol });
-  chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.10, bottom: vol ? 0.22 : 0.05 } });
+  applyScaleMargins();
   document.getElementById('lg-vol').style.display = vol ? '' : 'none';
   const ctxVol = document.getElementById('ctx-vol');
   ctxVol.checked = showVol;
@@ -1149,13 +1168,13 @@ class StepLinePrimitive {
         const yr = Math.round(y * vpr) + half;
         /* 边界对齐：垂直跳变落在两 bar 中心中点（=bar 边界，lwc 索引制时间轴等距），
            走平段覆盖整根 bar [左边界, 右边界]——每根 K 线对应自己值的水平段（Pine stepline 观感）；
-           首/末点无相邻 bar 时按相邻间距外推半格（末点=forming bar 水平段延伸到最后蜡烛右侧） */
+           首点无左邻 bar 时按右邻间距外推半格；末点（forming bar）走平段止于蜡烛中心 x（半格宽），
+           与 TV 一致——TV 最后一根阶梯横线只画到 bar 中心、不外推到右边界（v9.107） */
         const pv = i > 0 ? ts.timeToCoordinate(data[i - 1].time) : null;
         const nx = i < data.length - 1 ? ts.timeToCoordinate(data[i + 1].time) : null;
         const gapL = pv != null ? Math.abs(x - pv) : (nx != null ? Math.abs(nx - x) : 0);
-        const gapR = nx != null ? Math.abs(nx - x) : (pv != null ? Math.abs(x - pv) : 0);
         const curL = Math.round((pv != null ? (x + pv) / 2 : x - gapL / 2) * hpr) + half;
-        const curR = Math.round((nx != null ? (x + nx) / 2 : x + gapR / 2) * hpr) + half;
+        const curR = Math.round((nx != null ? (x + nx) / 2 : x) * hpr) + half;
         if (pR != null) {
           ctx.lineTo(pR, yr);                        // 垂直跳变落在 bar 边界（前值走平已由上轮 lineTo(curR) 画到边界）
         } else {
@@ -1740,7 +1759,7 @@ function rebuildIndicators() {
   indInstances.forEach(destroyInstance);
   indInstances = [];
   maColorIdx = 0;
-  maxPane = 0;   // 重建后窗格索引重新分配，最大化状态作废；旧按钮直接清除，由后续 layoutPaneLegends 重建
+  maxPane = -1;   // 重建后窗格索引重新分配，最大化状态作废；旧按钮直接清除，由后续 layoutPaneLegends 重建
   chart.panes().forEach(p => setPaneRowHidden(p, false));   // 复位最大化隐藏的窗格行（隐藏态随最大化作废，否则残留 display:none 的窗格凭空消失）
   paneBtnCache.forEach(b => b.remove());
   paneBtnCache.clear();
@@ -1831,12 +1850,14 @@ function layoutPaneLegends() {
   const wrap = container.parentElement;   // .chart-wrap（.legend 的定位父，CSS 变量向下继承到主/副图所有 .legend）
   const lr = ((chart.priceScale('right').width() || 60) + 8) + 'px';
   if (wrap.__lastLR !== lr) { wrap.__lastLR = lr; wrap.style.setProperty('--legend-right', lr); }
-  /* 副图最大化时主图窗格已隐藏：其覆盖层（OHLC/主图指标图例、水印、价格标签）一并隐藏 */
-  const maximized = maxPane > 0 && maxPane < panes.length;
+  /* 副图最大化时主图窗格已隐藏：其覆盖层（OHLC/主图指标图例、水印、价格标签）一并隐藏。
+     主图最大化(maxPane===0)时主图正是显示方，覆盖层须保留 → 仅在副图最大化(subMaximized)时隐藏 */
+  const maximized = maxPane >= 0 && maxPane < panes.length;
+  const subMaximized = maxPane > 0 && maxPane < panes.length;
   const ohlc = document.getElementById('lg-ohlc');
-  setDisplay(ohlc && ohlc.closest('.legend'), maximized ? 'none' : '');
-  setDisplay(wrap.querySelector('.watermark'), maximized ? 'none' : '');
-  setDisplay(document.getElementById('price-tag'), maximized ? 'none' : '');
+  setDisplay(ohlc && ohlc.closest('.legend'), subMaximized ? 'none' : '');
+  setDisplay(wrap.querySelector('.watermark'), subMaximized ? 'none' : '');
+  setDisplay(document.getElementById('price-tag'), subMaximized ? 'none' : '');
   for (const inst of indInstances) {
     if (inst.pane === 0 || inst.pane >= panes.length) continue;
     const el = inst.legendEl;
@@ -1855,7 +1876,7 @@ function layoutPaneLegends() {
 /* 注：立即执行与定时器注册置于本区块末尾（依赖下方 maxPane/paneBtnCache 声明，提前执行会命中暂时性死区） */
 
 /* ═══ 副图最大化/还原：双击副图区域切换，窗格右上角提供同功能按钮 ═══ */
-let maxPane = 0;   // 当前最大化的副图索引（0=无）
+let maxPane = -1;   // 当前最大化的窗格索引（-1=无，0=主图，>0=对应副图）
 let hoverPane = 0;   // 当前悬停的副图索引（按钮显示态随它切换，TradingView 式悬停淡入）
 const paneBtnCache = new Map();   // pane 索引 → 按钮元素（窗格增删后按当前索引重建）
 const MAX_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="12" height="12" rx="1"/><path d="M16 8h3a1 1 0 011 1v10a1 1 0 01-1 1H9a1 1 0 01-1-1v-3"/></svg>';
@@ -1867,7 +1888,7 @@ function syncPaneBtns() {
   const ht = chart.timeScale().height();
   const axisW = chart.priceScale('right').width() || 60;
   const seen = new Set();
-  const maximized = maxPane > 0 && maxPane < panes.length;
+  const maximized = maxPane >= 0 && maxPane < panes.length;   // 含主图最大化：此时全部副图窗格隐藏，其按钮也须隐藏
   for (let p = 1; p < panes.length; p++) {
     seen.add(p);
     let btn = paneBtnCache.get(p);
@@ -1932,12 +1953,12 @@ function paneAtY(y) {
    权重一次性设定、单次重算定版，浏览器只绘制最终态一帧，无逐帧收敛抖动。 */
 function togglePaneMax(pane) {
   const panes = chart.panes();
-  if (pane <= 0 || pane >= panes.length) return;
-  const target = maxPane === pane ? 0 : pane;
+  if (pane < 0 || pane >= panes.length) return;   // pane 0=主图，也允许最大化（无按钮，仅双击触发）
+  const target = maxPane === pane ? -1 : pane;
   maxPane = target;
   /* 统一从「全部窗格可见」起步（切换目标/还原都先复位，避免残留隐藏行） */
   panes.forEach(p => setPaneRowHidden(p, false));
-  if (!target) {
+  if (target < 0) {
     /* 还原：各副图回目录默认高度，主图吃余额 */
     subPaneTargets = indInstances.filter(i => i.pane > 0).map(inst => ({ pane: inst.pane, h: catOf(inst).h || SUB_PANE_H }));
     applyPaneHeights();
@@ -1955,7 +1976,7 @@ function togglePaneMax(pane) {
 container.addEventListener('dblclick', e => {
   const rect = container.getBoundingClientRect();
   const p = paneAtY(e.clientY - rect.top);
-  if (p > 0) togglePaneMax(p);
+  if (p >= 0) togglePaneMax(p);   // 主图(0)与副图(>0)均可双击最大化/还原；-1=分隔条/空白不响应
 });
 /* 悬停副图时淡入其按钮（TradingView 式）；监听绑定 chart-wrap（按钮也在其内）：
    光标移上按钮不会离开 wrap，避免 container mouseleave 把按钮藏掉导致点不到 */
@@ -2207,6 +2228,12 @@ function detectPrecision(bars) {
 async function load() {
   loadGen++;                // 作废进行中的翻页请求
   const gen = loadGen;
+  /* 窗格最大化态跨视图保留（最大化后切周期对比查看是常用需求）：隐藏行与拉伸权重
+     不随 load() 复位，仅 rebuildIndicators（窗格索引重分配）时作废。 */
+  /* 切视图复位价格轴手动缩放：在坐标栏上下拖拽调 K 线比例会把该窗格价格轴置为
+     autoScale=false（手动量程），跨视图携带时新周期数据被旧窄量程裁剪成满屏竖线/
+     直方图填窗格（2026-10-17 实证：15m 拖坐标栏后切周线）。切视图统一恢复自适应。 */
+  chart.panes().forEach(pn => { try { pn.priceScale('right').applyOptions({ autoScale: true }); } catch (e) { /* 无右轴窗格忽略 */ } });
   initialLoaded = false;    // 重新拉取期间暂不接收 WS bar
   noMoreData = false;
   curIndData = {};          // 本次视图指标原始序列（saveViewCache 落盘用）
@@ -2280,15 +2307,20 @@ function finalizeLoad(gen, prec) {
   reloadDrawingsForView();   // 切视图后重载该 exchange:symbol:tf 的画线
   if (!panesSized) { panesSized = true; setTimeout(applyPaneHeights, 200); }   // 首屏就绪后应用副图高度（等 autoSize 布局稳定）
   const isFirst = firstFit;
-  if (isFirst) {   // 首屏：铺满首屏K线数量 + 右侧留白（与「重置图表」同一口径）；此后切换保持原比例 + 最新 K 线右对齐
+  if (isFirst) {   // 首屏：默认间距铺首屏K线数量 + 右侧留白（与「重置图表」同一口径）；此后切换保持原比例 + 最新 K 线右对齐
     firstFit = false;
     const to = klines.length - 1 + curRightOffset;
-    chart.timeScale().setVisibleLogicalRange({ from: klines.length - Math.min(firstScreenBars, klines.length) - 0.5, to });
+    /* from 恒按 firstScreenBars 口径（不取 min(len)）：残页（源劣化只回几根）时旧写法
+       会让几根 K 线拉满全屏成「最大缩放」态，且该极小 span 会经切换保持污染后续视图 */
+    chart.timeScale().setVisibleLogicalRange({ from: klines.length - firstScreenBars - 0.5, to });
   }
   initialLoaded = true;   // 首屏就绪，开始接收 WS 增量
-  if (!isFirst && span) {   // 非首屏：显示根数不变（即缩放比例不变），最新 K 线对齐右侧留白
+  if (!isFirst) {   // 非首屏：显示根数不变（即缩放比例不变），最新 K 线对齐右侧留白
     const to = klines.length - 1 + curRightOffset;
-    chart.timeScale().setVisibleLogicalRange({ from: to - span, to });
+    /* span 下限护栏：极小 span 只来自残页/极缩残留，跨视图携带表现为「切周期后 K 线
+       缩到最大」（2026-10-18 实证）；此时回退默认首屏根数，正常缩放原样保持 */
+    const keep = span >= SPAN_FLOOR ? span : firstScreenBars;
+    chart.timeScale().setVisibleLogicalRange({ from: to - keep, to });
   }
   lastPrices[curSymbol] = klines[klines.length - 1].close;
   updateTicker(klines[klines.length - 1].close);
@@ -2310,7 +2342,8 @@ async function reconcileTail(gen, key) {
        边缘、抹掉 finalizeLoad 刚设好的右侧留白（切缓存品种后留白丢失实证）。记缩放宽度
        span0，合并后按“新右缘 + 留白”重新对齐（缩放比例不变）。 */
     const lvr0 = chart.timeScale().getVisibleLogicalRange();
-    const span0 = lvr0 ? lvr0.to - lvr0.from : Math.min(firstScreenBars, klines.length);
+    let span0 = lvr0 ? lvr0.to - lvr0.from : firstScreenBars;
+    if (!(span0 >= SPAN_FLOOR)) span0 = firstScreenBars;   // 同 finalizeLoad 下限护栏，愈合残留极小跨度
     if (fresh.bars[0].time > cachedLastT) {
       // 缓存过旧、与最新一屏之间存在缺口 → 整屏替换，指标联网重拉（清空防陈旧残留）
       activeIndCache = null; curIndData = {};
@@ -2470,9 +2503,8 @@ document.addEventListener('pointerdown', e => {
 document.getElementById('ctx-reset').addEventListener('click', () => {
   ctxMenu.classList.remove('show');
   if (!klines.length) return;
-  const show = Math.min(firstScreenBars, klines.length);
   const to = klines.length - 1 + curRightOffset;
-  chart.timeScale().setVisibleLogicalRange({ from: klines.length - show - 0.5, to });
+  chart.timeScale().setVisibleLogicalRange({ from: klines.length - firstScreenBars - 0.5, to });   // 与首屏同口径（残页留左空白不拉满）
 });
 /* ═══ 侧边栏：画线工具栏 + 系统模块卡片弹层 ═══
    原侧边模块导航（行情/交易/…/告警）回收进「系统」按钮，点击以小卡片弹出；
@@ -2518,15 +2550,19 @@ document.getElementById('draw-toolbar').addEventListener('click', e => {
 const ctxMenu = document.getElementById('ctx-menu');
 const ctxRo = document.getElementById('ctx-ro');
 const ctxPs = document.getElementById('ctx-ps');
+const ctxMt = document.getElementById('ctx-mt');
+const ctxMb = document.getElementById('ctx-mb');
 document.getElementById('chart').addEventListener('contextmenu', e => {
   e.preventDefault();
   if (openDrawCtxMenu(e.clientX, e.clientY)) return;   // 右键命中画线 → 画线专属菜单（样式/删除），不弹图表菜单
   ctxRo.value = curRightOffset;
   ctxPs.value = firstScreenBars;
+  ctxMt.value = scaleTopPct;
+  ctxMb.value = scaleBottomPct;
   document.getElementById('ctx-vol').checked = showVol;
   document.getElementById('ctx-scheme').value = colorScheme;
   ctxMenu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
-  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 205) + 'px';
+  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 280) + 'px';
   ctxMenu.classList.add('show');
 });
 document.addEventListener('click', e => { if (!ctxMenu.contains(e.target)) ctxMenu.classList.remove('show'); });
@@ -2544,6 +2580,23 @@ ctxRo.addEventListener('change', () => {
   if (v === curRightOffset) return;
   curRightOffset = v;
   chart.timeScale().applyOptions({ rightOffset: v });
+  saveLayout();
+});
+/* 主图上/下留白（scaleMargins 百分比）：即时生效并持久化；底部在成交量隐藏时自动收敛 */
+ctxMt.addEventListener('change', () => {
+  const v = Math.min(60, Math.max(0, parseInt(ctxMt.value) || 0));
+  ctxMt.value = v;
+  if (v === scaleTopPct) return;
+  scaleTopPct = v;
+  applyScaleMargins();
+  saveLayout();
+});
+ctxMb.addEventListener('change', () => {
+  const v = Math.min(60, Math.max(0, parseInt(ctxMb.value) || 0));
+  ctxMb.value = v;
+  if (v === scaleBottomPct) return;
+  scaleBottomPct = v;
+  applyScaleMargins();
   saveLayout();
 });
 /* 首屏 K 线数量：钳位 100~30000，持久化并即时重载当前品种/周期生效；「重置图表」按此值恢复显示根数 */
@@ -2995,8 +3048,7 @@ function updatePriceTag() {
   const last = klines[klines.length - 1];
   const y = last ? candleSeries.priceToCoordinate(last.close) : null;
   if (y == null) { priceTag.style.display = 'none'; return; }
-  const prev = klines.length > 1 ? klines[klines.length - 2].close : null;
-  priceTag.style.background = barColor(last, prev);
+  priceTag.style.width = (chart.priceScale('right').width() || 60) + 'px';   // 与坐标栏等宽对齐（right:0 + border-box），不越界
   priceTag.querySelector('.pt-price').textContent = fmtSym(curSymbol, last.close);
   priceTag.querySelector('.pt-cd').textContent = cdText();
   priceTag.style.display = 'flex';
