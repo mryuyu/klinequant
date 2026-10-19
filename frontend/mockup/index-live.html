@@ -3879,7 +3879,7 @@ class DrawingPrimitive {
       ctx.fillRect(lx, ly, s, Math.round(s*0.8));
       ctx.restore();
     }
-    if (sh.type === 'info' && sh.id === this._selId && x1 != null && y1 != null) this._drawInfoCard(ctx, sh, x1, y1, W, H, hpr, vpr);   // 信息卡片仅选中时显示；最后画保证盖在锚点方块上层
+    if (sh.type === 'info' && emph && x1 != null && y1 != null) this._drawInfoCard(ctx, sh, x1, y1, W, H, hpr, vpr);   // 信息卡片：选中/悬停(激活)/绘制预览三态均显示（emph=选中‖悬停‖preview）；最后画保证盖在锚点方块上层
   }
   _drawInfoCard(ctx, sh, ax, ay, W, H, hpr, vpr) {   // TV 式信息卡片：圆角灰底两行（图标+文案），锚定第二锚点，越界自动翻转
     const st = infoStats(sh);
