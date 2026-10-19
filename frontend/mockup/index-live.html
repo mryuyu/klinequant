@@ -308,6 +308,10 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 /* 分组重命名行内输入框（嵌在分组头 flex 内，占满剩余宽度） */
 .wl-rename-input { flex:1; min-width:0; padding:2px 6px; font-size:11px; background:var(--bg-elevated); border:1px solid var(--accent); border-radius:4px; color:var(--text); outline:none; }
 .wl-del:hover { color:var(--down); }
+/* 拖拽调序：拖动元素半透明，落点显示 accent 插入线 */
+.wl-row.dragging, .wl-group-head.dragging { opacity:.35; }
+.wl-drop-before { box-shadow:inset 0 2px 0 var(--accent); }
+.wl-drop-after { box-shadow:inset 0 -2px 0 var(--accent); }
 /* 添加品种弹窗 */
 .modal-mask { position:fixed; inset:0; background:rgba(0,0,0,0.55); display:none; align-items:center; justify-content:center; z-index:100; }
 .modal-mask.show { display:flex; }
@@ -3387,10 +3391,10 @@ function renderSymbols() {
     const nameCell = (wlRenamingGroup === gi && !kw)
       ? `<input class="wl-rename-input" id="wl-rename-input" value="${(g.name || '').replace(/"/g, '&quot;')}" maxlength="20">`
       : `<span>${g.name}</span>`;
-    html += `<div class="wl-group-head ${g.collapsed && !kw ? 'collapsed' : ''}" data-g="${gi}">
+    html += `<div class="wl-group-head ${g.collapsed && !kw ? 'collapsed' : ''}" data-g="${gi}"${(!kw && wlRenamingGroup !== gi) ? ' draggable="true" title="拖拽调整分组顺序 · 右键更多"' : ''}>
       <span class="caret">▼</span>${nameCell}<span class="cnt">${list.length}</span></div>`;
     if (g.collapsed && !kw) return;
-    list.forEach(s => {
+    list.forEach((s, si) => {
       const isUp = (s.chg || '').startsWith('+');
       const chgCls = s.chg === '--' ? 'muted' : (isUp ? 'up' : 'down');
       /* 无订阅品种（静态示例数据）：按数据自身小数位渲染，不受当前图精度污染 */
@@ -3402,7 +3406,7 @@ function renderSymbols() {
          s.name（添加/回填时即存 A股去前缀纯数字码）；s.name 为原码或中文名（=desc）时再兜底原码 */
       const label = dispOf(s.sym) !== s.sym ? dispOf(s.sym)
         : (s.name && s.name !== s.sym && s.name !== s.desc ? s.name : s.sym);
-      html += `<div class="wl-row${activeCls}" data-ex="${s.ex || ''}" data-real="${s.sym}" data-sym="${s.name}">
+      html += `<div class="wl-row${activeCls}" data-ex="${s.ex || ''}" data-real="${s.sym}" data-sym="${s.name}" data-gi="${gi}" data-si="${si}"${!kw ? ' draggable="true" title="点击切换 · 拖拽调序"' : ''}>
         <span class="wl-ico" style="background:${icoFor(s.name)}">${(label[0] || '?').toUpperCase()}</span>
         <span class="wl-name"><span class="wl-code">${label}</span>${s.desc ? `<span class="wl-desc">${s.desc}</span>` : ''}</span>
         <span class="wl-val">${priceTxt}</span>
@@ -3507,6 +3511,73 @@ document.getElementById('sym-filter').addEventListener('input', e => {
   symFilter = e.target.value;
   renderSymbols();
 });
+
+/* ═══ 品种列表拖拽调序（HTML5 原生 DnD）：分组之间 / 组内品种 / 跨组移动；搜索过滤时禁用拖拽（子集顺序无法映射回原数组）。
+   落点以目标元素中线分前/后插入；拖动元素 .dragging 半透明，落点 .wl-drop-before/after 显 accent 插入线。顺序随 saveWl 持久化 ═══ */
+const symListEl = document.getElementById('sym-list');
+let wlDrag = null;   // {kind:'group'|'sym', gi, si}
+function wlClearDrop() { symListEl.querySelectorAll('.wl-drop-before,.wl-drop-after').forEach(el => el.classList.remove('wl-drop-before', 'wl-drop-after')); }
+function wlClearAll() { symListEl.querySelectorAll('.dragging,.wl-drop-before,.wl-drop-after').forEach(el => el.classList.remove('dragging', 'wl-drop-before', 'wl-drop-after')); }
+/* 分组调序：取出 from 组，按移除后目标位置（from<to 时目标左移一位）插到 to 组前/后 */
+function reorderGroup(from, to, after) {
+  if (from === to || !symGroups[from]) return;
+  const g = symGroups.splice(from, 1)[0];
+  const t = from < to ? to - 1 : to;
+  symGroups.splice(Math.max(0, Math.min(symGroups.length, after ? t + 1 : t)), 0, g);
+  saveWl();
+}
+/* 品种移位：从源组取出插到目标组 dst.si 前/后（同组且源在目标前时目标索引减一）；支持跨组 */
+function moveSymbol(src, dst, after) {
+  const fromG = symGroups[src.gi]; if (!fromG || !fromG.symbols[src.si]) return;
+  const toG = symGroups[dst.gi]; if (!toG) return;
+  const item = fromG.symbols.splice(src.si, 1)[0];
+  let t = dst.si;
+  if (src.gi === dst.gi && src.si < dst.si) t--;
+  toG.symbols.splice(Math.max(0, Math.min(toG.symbols.length, after ? t + 1 : t)), 0, item);
+  saveWl();
+}
+/* 品种拖到分组头：追加到该组末尾并展开（源组置空仍保留，交用户自行删除） */
+function moveSymbolToGroup(src, toGi) {
+  const fromG = symGroups[src.gi]; if (!fromG || !fromG.symbols[src.si]) return;
+  const toG = symGroups[toGi]; if (!toG) return;
+  const item = fromG.symbols.splice(src.si, 1)[0];
+  toG.symbols.push(item); toG.collapsed = false;
+  saveWl();
+}
+symListEl.addEventListener('dragstart', e => {
+  const head = e.target.closest('.wl-group-head');
+  const row = e.target.closest('.wl-row');
+  if (head) { wlDrag = { kind: 'group', gi: +head.dataset.g }; head.classList.add('dragging'); }
+  else if (row) { wlDrag = { kind: 'sym', gi: +row.dataset.gi, si: +row.dataset.si }; row.classList.add('dragging'); }
+  else return;
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', ''); } catch (_) {}
+});
+symListEl.addEventListener('dragover', e => {
+  if (!wlDrag) return;
+  const head = e.target.closest('.wl-group-head');
+  const row = e.target.closest('.wl-row');
+  const target = wlDrag.kind === 'group' ? head : (row || head);   // 分组只能落到分组头；品种可落行(定位)或分组头(追加)
+  wlClearDrop();
+  if (!target) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+  const r = target.getBoundingClientRect();
+  target.classList.add((e.clientY - r.top) > r.height / 2 ? 'wl-drop-after' : 'wl-drop-before');
+});
+symListEl.addEventListener('drop', e => {
+  if (!wlDrag) return;
+  e.preventDefault();
+  const head = e.target.closest('.wl-group-head');
+  const row = e.target.closest('.wl-row');
+  const midAfter = el => { const r = el.getBoundingClientRect(); return (e.clientY - r.top) > r.height / 2; };
+  if (wlDrag.kind === 'group' && head) reorderGroup(wlDrag.gi, +head.dataset.g, midAfter(head));
+  else if (wlDrag.kind === 'sym') {
+    if (row) moveSymbol(wlDrag, { gi: +row.dataset.gi, si: +row.dataset.si }, midAfter(row));
+    else if (head) moveSymbolToGroup(wlDrag, +head.dataset.g);
+  }
+  wlClearAll(); wlDrag = null; renderSymbols();
+});
+symListEl.addEventListener('dragend', () => { wlDrag = null; wlClearAll(); });
 
 /* 添加品种入口已并入分组头右键卡片菜单（顶部 ＋ 按钮已移除） */
 
