@@ -84,6 +84,14 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .draw-btn { width:40px; height:40px; border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--text-sub); background:none; border:none; transition:all .15s; }
 .draw-btn svg { width:20px; height:20px; }
 .draw-btn:hover { background:var(--bg-elevated); color:var(--text); }
+/* 清空画线确认卡片（图表内浮层：替代浏览器 confirm/alert 弹窗，不打断操作流）；
+   垂直居中锚定主图窗格中心（showDrawConfirm 动态写 top，副图增删/最大化不跑偏） */
+.draw-confirm { position:absolute; left:50%; transform:translate(-50%,-50%); z-index:30; display:none; align-items:center; gap:14px; background:var(--bg-base); border:1px solid var(--border-light); border-radius:8px; padding:10px 14px; box-shadow:0 10px 30px rgba(0,0,0,.6); font-size:13px; color:var(--text); white-space:nowrap; }
+.draw-confirm.show { display:flex; }
+.dc-ok { padding:5px 14px; border:none; border-radius:6px; background:rgba(var(--down-rgb),0.85); color:#fff; font-size:12px; cursor:pointer; }
+.dc-ok:hover { background:rgb(var(--down-rgb)); }
+.dc-cancel { padding:5px 14px; border:none; border-radius:6px; background:var(--bg-elevated); color:var(--text-sub); font-size:12px; cursor:pointer; }
+.dc-cancel:hover { color:var(--text); }
 .draw-btn.active { background:var(--accent-dim); color:var(--accent); }
 /* 预留工具（后续迭代）：置灰禁用，无 hover/active 反馈 */
 .draw-btn:disabled { opacity:.28; cursor:not-allowed; }
@@ -322,6 +330,23 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 #draw-style-modal input.draw-color-custom { width:34px; height:22px; padding:0; border:1px solid var(--border); border-radius:4px; background:none; cursor:pointer; flex:none; }
 .draw-style-preview { margin-top:12px; height:26px; border-radius:6px; background:var(--bg-base); display:flex; align-items:center; overflow:hidden; }
 .draw-style-preview > div { width:100%; }
+/* 斐波那契级别编辑器：每行两栏（左=文本说明+文本色 | 右=比例+线色+线型）；
+   控件全部定宽 flex:none——弹窗全局 .modal input{width:100%} 与 flex 伸缩叠加曾把左栏挤为 0 宽，定宽后免疫 */
+#draw-style-modal .fib-wrap { max-height:332px; overflow-y:auto; padding-right:2px; }
+.fib-head, .fib-row { display:flex; align-items:center; gap:6px; padding:3px 0; }
+.fib-head { color:var(--text-sub); font-size:11px; border-bottom:1px solid var(--border); margin-bottom:4px; padding-bottom:5px; }
+.fib-head span { white-space:nowrap; overflow:hidden; }
+.fib-grp-l, .fib-grp-r { display:flex; align-items:center; gap:6px; flex:none; }
+.fib-grp-r { border-left:1px solid var(--border); padding-left:8px; }
+#draw-style-modal input.fib-on { width:15px; height:15px; margin:0; padding:0; border:none; border-radius:3px; background:none; flex:none; }   /* 重置 .modal input 全局 width:100%（否则勾选框被撑宽、钩子居中致与文本列间距巨大） */
+#draw-style-modal input.fib-text { width:110px; flex:none; padding:4px 6px; font-size:12px; }
+#draw-style-modal input.fib-ratio { width:110px; flex:none; padding:4px 6px; font-size:12px; font-family:var(--font-mono); }
+#draw-style-modal input.fib-color { width:26px; height:20px; padding:0; border:1px solid var(--border); border-radius:4px; background:none; cursor:pointer; flex:none; }
+#draw-style-modal .fib-row .ind-line-sel { width:92px; flex:none; }
+.fib-del { width:18px; background:none; border:none; color:var(--text-sub); cursor:pointer; font-size:13px; padding:0; flex:none; }
+.fib-del:hover { color:var(--down); }
+.fib-add { margin-top:8px; width:100%; padding:6px 0; background:var(--bg-elevated); border:1px dashed var(--border-light); border-radius:6px; color:var(--text-sub); font-size:12px; cursor:pointer; }
+.fib-add:hover { color:var(--accent); border-color:var(--accent); }
 .m-remove:hover { background:rgba(var(--down-rgb),0.22); }
 /* 添加指标选择面板 */
 .pick-row { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-radius:6px; cursor:pointer; }
@@ -421,7 +446,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
         <button class="draw-btn" data-tool="text" title="文本"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 6h14M12 6v13"/></svg></button>
         <div class="draw-sep"></div>
         <!-- 组③ 预留（后续迭代，禁用占位） -->
-        <button class="draw-btn" data-tool="fib" title="斐波那契回调（后续迭代）" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16M4 10h16M4 14h16M4 19h16"/></svg></button>
+        <button class="draw-btn" data-tool="fib" title="斐波那契回调：两点定起止，双击编辑级别比例"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16M4 10h16M4 14h16M4 19h16"/></svg></button>
         <button class="draw-btn" data-tool="channel" title="平行通道（后续迭代）" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 16L13 4"/><path d="M10 20L19 8"/></svg></button>
         <div class="draw-sep"></div>
         <!-- 组④ 辅助（磁吸 / 连续绘制 / 样式） -->
@@ -472,6 +497,12 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
         <div id="ind-legends"></div>
         <div class="price-tag" id="price-tag"><span class="pt-price"></span><span class="pt-cd"></span></div>
         <div id="chart"></div>
+        <!-- 清空画线确认卡片（图表内：工具栏清空按钮触发，替代浏览器弹窗） -->
+        <div class="draw-confirm" id="draw-confirm">
+          <span class="dc-text"></span>
+          <button class="dc-ok">清空</button>
+          <button class="dc-cancel">取消</button>
+        </div>
       </div>
 
       <div class="split split-h" data-r="pos" title="拖拽调整高度，双击恢复"></div>
@@ -3459,23 +3490,27 @@ renderSymbols();
 let srType = 'all', srRegion = 'global', srKw = '';
 let srMode = 'switch', srTargetGroup = null;
 let srFull = null;            // 全量品种目录（后端 /api/market/symbols，含全部数据源）；null=未拉取
+let srLoading = null;         // 拉取中的共享 Promise（启动预热与弹窗打开并发时只发一次请求）
 const srModal = document.getElementById('sr-modal');
 const SR_RENDER_CAP = 200;    // 单次渲染上限（品种数千级，先筛选后渲染）
 /* 资产类别 pill 固定顺序（仅展示数据中实际存在的类别） */
 const TYPE_ORDER = ['crypto', 'forex', 'metal', 'index', 'commodity', 'stock', 'bond'];
 const TYPE_NAMES = { crypto: '加密', forex: '外汇', metal: '贵金属', index: '指数', commodity: '商品', stock: '股票', bond: '债券' };
 
-async function loadSrFull() {
-  if (srFull) return;
-  try {
-    const d = await (await fetch('/api/market/symbols')).json();
-    srFull = d.symbols || [];
-  } catch (e) {
-    /* 后端未连接：回退源元数据默认品种，保证弹窗可用 */
-    srFull = Object.entries(sourcesMeta).flatMap(([ex, m]) =>
-      ((m && m.default_symbols) || []).map(s => ({ exchange: ex, source: m.label, region: m.region || 'global', symbol: s.symbol, name: s.name, type: s.type || '', code: s.code || s.symbol })));
-  }
-  symCode = Object.fromEntries((srFull || []).filter(r => r.code).map(r => [r.symbol, r.code]));
+async function loadSrFull(force = false) {
+  if (srFull && !force) return;
+  if (srLoading) return srLoading;   // 并发去重：多处同时触发只发一次请求
+  srLoading = (async () => {
+    try {
+      /* 超时宽于后端单源护栏（10s）：慢源劣化时宁可多等也不轻易丢全量目录退回默认品种 */
+      const d = await (await fetch(`${API}/api/market/symbols`, { signal: AbortSignal.timeout(25000) })).json();
+      srFull = d.symbols || [];
+    } catch (e) {
+      /* 后端未连接/超时：回退源元数据默认品种，保证弹窗可用（下次打开会重试） */
+      srFull = Object.entries(sourcesMeta).flatMap(([ex, m]) =>
+        ((m && m.default_symbols) || []).map(s => ({ exchange: ex, source: m.label, region: m.region || 'global', symbol: s.symbol, name: s.name, type: s.type || '', code: s.code || s.symbol })));
+    }
+    symCode = Object.fromEntries((srFull || []).filter(r => r.code).map(r => [r.symbol, r.code]));
     /* 旧收藏回填：name 曾存带前缀路由码→改为目录展示码；补中文描述（股票即股票名称） */
     let wlChanged = false;
     symGroups.forEach(g => g.symbols.forEach(s => {
@@ -3485,6 +3520,8 @@ async function loadSrFull() {
       if (!s.desc && cat.name && cat.name !== s.sym) { s.desc = cat.name; wlChanged = true; }
     }));
     if (wlChanged) { saveWl(); renderSymbols(); }
+  })().finally(() => { srLoading = null; });
+  return srLoading;
 }
 function renderSrTabs() {
   const present = new Set((srFull || []).map(r => r.type).filter(Boolean));
@@ -3535,7 +3572,21 @@ async function openSymSearch(mode, targetGroup = null) {
   document.getElementById('sr-input').value = '';
   srModal.classList.add('show');
   renderSrAll();
-  if (!srFull) { await loadSrFull(); renderSrAll(); }
+  /* 目录未就绪：后台拉取不阻塞弹窗（body 已有"加载中"占位），到达后整体刷新 */
+  if (!srFull) loadSrFull().then(() => { renderSrAll(); refreshSymLabels(); }).catch(() => {});
+  else {
+    /* 已就绪但缺源（页面加载时 MT5/THS 尚在后台补注册，国内品种/分类会缺失，
+       观感像 BUG）：重拉注册表比对，有缺则后台重拉目录补齐，不阻塞已渲染内容 */
+    refreshSources().then(() => {
+      const have = new Set((srFull || []).map(r => r.exchange));
+      if (Object.keys(sourcesMeta).some(ex => !have.has(ex))) {
+        loadSrFull(true).then(() => {
+          if (srModal.classList.contains('show')) renderSrAll();
+          refreshSymLabels(); renderSymbols();
+        }).catch(() => {});
+      }
+    });
+  }
   setTimeout(() => document.getElementById('sr-input').focus(), 30);
 }
 function closeSymSearch() { srModal.classList.remove('show'); }
@@ -3684,7 +3735,7 @@ const DRAW_LS_KEY = 'kq-drawings-live';
 const DRAW_PREF_KEY = 'kq-draw-pref';
 const DRAW_COLOR = '#2962ff';
 const DRAW_DASH = { 0: [], 1: [2, 3], 2: [5, 4], 3: [9, 5] };   // lineStyle→canvas dash（×pixelRatio）
-const TOOL_ANCHORS = { trend: 2, sray: 2, ray: 1, hline: 1, vline: 1, rect: 2, text: 1, info: 2 };
+const TOOL_ANCHORS = { trend: 2, sray: 2, ray: 1, hline: 1, vline: 1, rect: 2, text: 1, info: 2, fib: 2 };
 const genDrawId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 function barIndexOfTime(t) {   // 锚点 time 为真实 bar time，二分精确命中
@@ -3712,6 +3763,26 @@ function infoStats(sh) {   // 信息线统计：返回卡片两行文案（行1 
     line2: bars != null ? `${bars}根K线 (${dur})` : dur,
   };
 }
+
+/* 斐波那契级别：每级 {on,ratio,text,textColor,color,lineStyle}；价格 = p1 + (p0-p1)*ratio（0=终点/第二锚点，1=起点/第一锚点，>1 越起点延伸；
+   即低点拉高点时高点为 0、低点为 1，同 TV 回撤读法）。默认级别取 TV 常用回调/延伸位；存档缺 levels 的旧 fib 图形回落默认表（防御）。 */
+const FIB_TEXT_COLOR = '#d1d4dc';
+function fibDefaultLevels() {
+  return [
+    { on: true, ratio: 0,     text: '0',     textColor: FIB_TEXT_COLOR, color: '#90a4ae', lineStyle: 1 },
+    { on: true, ratio: 0.236, text: '0.236', textColor: FIB_TEXT_COLOR, color: '#90a4ae', lineStyle: 1 },
+    { on: true, ratio: 0.382, text: '0.382', textColor: FIB_TEXT_COLOR, color: '#90a4ae', lineStyle: 1 },
+    { on: true, ratio: 0.5,   text: '0.5',   textColor: FIB_TEXT_COLOR, color: '#90a4ae', lineStyle: 1 },
+    { on: true, ratio: 0.618, text: '0.618', textColor: FIB_TEXT_COLOR, color: '#f5c542', lineStyle: 1 },
+    { on: true, ratio: 0.786, text: '0.786', textColor: FIB_TEXT_COLOR, color: '#b39ddb', lineStyle: 1 },
+    { on: true, ratio: 1,     text: '1',     textColor: FIB_TEXT_COLOR, color: '#f6465d', lineStyle: 1 },
+    { on: true, ratio: 1.618, text: '1.618', textColor: FIB_TEXT_COLOR, color: '#0ecb81', lineStyle: 1 },
+    { on: true, ratio: 2.618, text: '2.618', textColor: FIB_TEXT_COLOR, color: '#42a5f5', lineStyle: 1 },
+    { on: true, ratio: 4.236, text: '4.236', textColor: FIB_TEXT_COLOR, color: '#0ecb81', lineStyle: 1 },
+  ];
+}
+const fibLevelsOf = sh => (Array.isArray(sh.levels) && sh.levels.length) ? sh.levels : fibDefaultLevels();
+const fibLevelPrice = (sh, r) => sh.points[1].price + (sh.points[0].price - sh.points[1].price) * r;
 
 class DrawingPrimitive {
   constructor() {
@@ -3772,6 +3843,27 @@ class DrawingPrimitive {
         ctx.globalAlpha=0.12; ctx.fillRect(rx,ry,rw,rh); ctx.globalAlpha=1; ctx.strokeRect(rx,ry,rw,rh); break;
       }
       case 'info': if (x0==null||y0==null||x1==null||y1==null) return; ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke(); break;
+      case 'fib': {   // 多级水平线：自较早锚点起向右延伸整屏；每级独立色/线型，线头画「文本 (价格)」标签
+        if (x0==null||y0==null||x1==null||y1==null) return;
+        const xL = Math.min(x0, x1);
+        const prec = (typeof curPrec === 'number' && curPrec > 0) ? curPrec : 2;
+        const prevDash = (sh === this._preview) ? 2 : null;   // 橡皮筋预览整组虚线
+        for (const lv of fibLevelsOf(sh)) {
+          if (!lv.on) continue;
+          const pr = pts[1].price + (pts[0].price - pts[1].price) * lv.ratio;
+          const py = by(pr);
+          if (py == null) continue;
+          ctx.strokeStyle = lv.color || col;
+          ctx.lineWidth = Math.max(1, Math.floor(((sh === this._preview) ? 1 : (st.lineWidth || 1)) * hpr));   // 参考线性质：悬停/选中不加粗（同 TV），预览橡皮筋恒 1
+          ctx.setLineDash((DRAW_DASH[prevDash ?? (lv.lineStyle || 0)] || []).map(x => x * hpr));
+          ctx.beginPath(); ctx.moveTo(xL, py); ctx.lineTo(W, py); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = lv.textColor || FIB_TEXT_COLOR;
+          ctx.font = `${Math.round(11 * vpr)}px sans-serif`; ctx.textBaseline = 'bottom';
+          ctx.fillText(`${(lv.text != null && lv.text !== '') ? lv.text : lv.ratio} (${pr.toFixed(prec)})`, xL + 4 * hpr, py - 2 * vpr);
+        }
+        break;
+      }
       case 'text': if (x0==null||y0==null) return; ctx.setLineDash([]); ctx.font=`${Math.round(12*vpr)}px sans-serif`; ctx.textBaseline='middle'; ctx.fillText(sh.text||'', x0+4*hpr, y0); break;
     }
     ctx.setLineDash([]);
@@ -3892,6 +3984,7 @@ function reloadDrawingsForView() {
   if (!drawingsByKey[k]) drawingsByKey[k] = [];
   drawings = drawingsByKey[k];
   placePts = []; selectedId = null;
+  hideDrawConfirm();   // 切视图关闭确认卡：防确认后误删新视图画线
   drawPrim.setShapes(drawings); drawPrim.setPreview(null); drawPrim.setSelected(null);
 }
 function syncToolUI() {
@@ -3938,6 +4031,12 @@ function shapeHit(sh, pt) {
     case 'vline': return P[0].x != null && Math.abs(pt.x - P[0].x) <= T;
     case 'trend': case 'info': case 'sray': return P.length >= 2 && nearSeg(P[0], P[1]);
     case 'rect': return P.length >= 2 && ok(P[0]) && ok(P[1]) && (nearSeg(P[0],{x:P[1].x,y:P[0].y}) || nearSeg({x:P[1].x,y:P[0].y},P[1]) || nearSeg(P[1],{x:P[0].x,y:P[1].y}) || nearSeg({x:P[0].x,y:P[1].y},P[0]));
+    case 'fib': {
+      if (!ok(P[0]) || !ok(P[1])) return false;
+      const xL = Math.min(P[0].x, P[1].x);
+      if (pt.x < xL - T) return false;   // 级别线自较早锚点向右延伸：左侧不命中
+      return fibLevelsOf(sh).some(lv => { if (!lv.on) return false; const y = candleSeries.priceToCoordinate(fibLevelPrice(sh, lv.ratio)); return y != null && Math.abs(pt.y - y) <= T; });
+    }
     case 'text': return ok(P[0]) && Math.abs(pt.x-P[0].x)<=48 && Math.abs(pt.y-P[0].y)<=10;
   }
   return false;
@@ -3961,6 +4060,7 @@ function commitShape(text) {
   const ds = drawPref.defaultStyle || {};
   const sh = { id: genDrawId(), type: activeTool, points: placePts.slice(), style: { color: ds.color || DRAW_COLOR, lineWidth: ds.lineWidth || 1, lineStyle: ds.lineStyle || 0 } };
   if (activeTool === 'text') sh.text = text || '文本';
+  if (activeTool === 'fib') { sh.levels = fibDefaultLevels(); sh.style.lineWidth = 1; }   // 新建 fib 带默认级别表（独立副本）；级别线默认线宽 1，不继承全局默认画线线宽
   drawings.push(sh); saveDrawings(); drawPrim.setShapes(drawings);
   placePts = []; drawPrim.setPreview(null);
   if (!drawPref.continuousDraw) activeTool = null;   // 连续绘制开启则保持当前工具
@@ -3993,6 +4093,7 @@ function duplicateSelected() {   // 复制：生成解锁副本，向右 2 bar�
   });
   const copy = { id: genDrawId(), type: src.type, points: pts, style: Object.assign({}, src.style), locked: false };
   if (src.text != null) copy.text = src.text;
+  if (Array.isArray(src.levels)) copy.levels = JSON.parse(JSON.stringify(src.levels));   // fib 级别表深拷贝
   drawings.push(copy);
   selectedId = copy.id; drawPrim.setSelected(copy.id);
   saveDrawings(); drawPrim.setShapes(drawings);
@@ -4006,11 +4107,41 @@ function toggleLockSelected() {   // 锁定/解锁：锁定后取消选中（冻
 function clearAll() {
   if (!drawings.length) return;
   const lockedCnt = drawings.filter(d => d.locked).length;   // 锁定画线不可删：清空仅移除未锁定者
-  if (lockedCnt === drawings.length) { alert('当前画线全部为锁定状态，请先解锁再清空。'); return; }
-  if (!confirm(lockedCnt ? `清空未锁定画线？${lockedCnt} 条锁定画线将保留。` : '清空当前品种/周期下的全部画线？')) return;
-  for (let i = drawings.length - 1; i >= 0; i--) if (!drawings[i].locked) drawings.splice(i, 1);
-  saveDrawings(); selectedId = null; drawPrim.setSelected(null); drawPrim.setShapes(drawings);
+  if (lockedCnt === drawings.length) { showDrawConfirm('当前画线全部为锁定状态，请先解锁再清空。', { hideOk: true }); return; }
+  showDrawConfirm(lockedCnt ? `清空未锁定画线？${lockedCnt} 条锁定画线将保留。` : '清空当前品种/周期下的全部画线？', {
+    onOk: () => {
+      for (let i = drawings.length - 1; i >= 0; i--) if (!drawings[i].locked) drawings.splice(i, 1);
+      saveDrawings(); selectedId = null; drawPrim.setSelected(null); drawPrim.setShapes(drawings);
+    },
+  });
 }
+/* 图表内确认卡片：showDrawConfirm 展示（hideOk=仅提示单按钮），确认/取消/Esc/点击图表其它区域关闭 */
+const dcCard = document.getElementById('draw-confirm');
+let dcOnOk = null;
+function showDrawConfirm(text, opts = {}) {
+  dcCard.querySelector('.dc-text').textContent = text;
+  const okBtn = dcCard.querySelector('.dc-ok');
+  okBtn.style.display = opts.hideOk ? 'none' : '';
+  dcCard.querySelector('.dc-cancel').textContent = opts.hideOk ? '知道了' : '取消';
+  dcOnOk = opts.hideOk ? null : (opts.onOk || null);
+  /* 卡片垂直居中锚定主图窗格（pane 0）中心：图表区视觉焦点不易漏看；
+     窗格几何不可用（极端初始化时序）时回退图表区整体中心 */
+  const mainReg = (paneRegions() || []).find(r => r.idx === 0);
+  dcCard.style.top = (mainReg ? (mainReg.top + mainReg.bottom) / 2 : container.clientHeight / 2) + 'px';
+  dcCard.classList.add('show');
+  /* 延迟挂载外部点击关闭：开卡当次点击（工具栏清空按钮）不得立即把卡关掉 */
+  setTimeout(() => document.addEventListener('mousedown', dcOutsideClose), 0);
+}
+function dcOutsideClose(e) { if (!dcCard.contains(e.target)) hideDrawConfirm(); }
+function hideDrawConfirm() {
+  dcCard.classList.remove('show');
+  dcOnOk = null;
+  document.removeEventListener('mousedown', dcOutsideClose);
+}
+dcCard.addEventListener('click', e => {
+  if (e.target.closest('.dc-ok') && dcOnOk) { const fn = dcOnOk; hideDrawConfirm(); fn(); }
+  else if (e.target.closest('.dc-cancel')) hideDrawConfirm();
+});
 
 /* 文本浮层输入：点击落点后弹出，Enter/失焦提交，Esc 取消 */
 let textInputEl = null;
@@ -4135,7 +4266,7 @@ chart.subscribeCrosshairMove(e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Control') { ctrlHeld = true; updateSnapGuide(); }   // 磁吸开关（鼠标静止时按 Ctrl 也生效）
   if (textInputEl) return;
-  if (e.key === 'Escape') { activeTool = null; placePts = []; selectedId = null; drawPrim.setPreview(null); drawPrim.setSelected(null); syncToolUI(); }
+  if (e.key === 'Escape') { hideDrawConfirm(); activeTool = null; placePts = []; selectedId = null; drawPrim.setPreview(null); drawPrim.setSelected(null); syncToolUI(); }
   else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) { e.preventDefault(); deleteSelected(); }
 });
 document.addEventListener('keyup', e => { if (e.key === 'Control') { ctrlHeld = false; updateSnapGuide(); } });
@@ -4146,7 +4277,11 @@ const drawStyleModal = document.getElementById('draw-style-modal');
 const drawStyleBody = document.getElementById('draw-style-body');
 let styleTargetId = null;   // null=编辑默认样式；否则编辑指定画线
 let styleDraft = { color: DRAW_COLOR, lineWidth: 1, lineStyle: 0 };
+let styleTargetIsFib = false;   // fib 画线走级别编辑器（两栏），其余走通用颜色/线宽/线型
+let fibDraft = [];              // fib 级别草稿（确认才写回 shape）
+const fibEsc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 function renderStyleModal() {
+  if (styleTargetIsFib) { renderFibModal(); return; }
   const swList = IND_SWATCHES.includes(styleDraft.color) ? IND_SWATCHES : [styleDraft.color, ...IND_SWATCHES];
   drawStyleBody.innerHTML =
     `<div class="ind-style-row"><span class="ind-style-name">颜色</span><div class="ind-swatches">` +
@@ -4167,16 +4302,52 @@ function updateStylePreview() {
   pv.style.borderTop = `${Math.max(1, styleDraft.lineWidth) + 1}px ${dashName} ${styleDraft.color}`;
 }
 function syncSwatchActive() { drawStyleBody.querySelectorAll('.ind-sw').forEach(b => b.classList.toggle('active', b.dataset.c === styleDraft.color)); }
+function renderFibModal() {   // 斐波那契级别编辑器：行内两栏（左=文本说明+文本色 | 右=比例+线色+线型），勾选显隐，可增删级别
+  const rowHtml = (lv, i) =>
+    `<div class="fib-row" data-fi="${i}">` +
+      `<input type="checkbox" class="fib-on"${lv.on ? ' checked' : ''} title="显示/隐藏此级别">` +
+      `<div class="fib-grp-l"><input type="text" class="fib-text" value="${fibEsc(lv.text)}" title="级别文本说明（线头显示）">` +
+      `<input type="color" class="fib-color fib-tc" value="${fibEsc(lv.textColor || FIB_TEXT_COLOR)}" title="文本颜色"></div>` +
+      `<div class="fib-grp-r"><input type="number" step="any" class="fib-ratio" value="${lv.ratio}" title="级别比例（0=终点 1=起点 >1 越起点延伸）">` +
+      `<input type="color" class="fib-color fib-lc" value="${fibEsc(lv.color || DRAW_COLOR)}" title="线颜色">` +
+      lineStyleSel(lv.lineStyle || 0) +
+      `<button type="button" class="fib-del" title="删除此级别">×</button></div>` +
+    `</div>`;
+  drawStyleBody.innerHTML =
+    `<div class="ind-style-row"><span class="ind-style-name">线宽</span><select class="ind-line-sel draw-lw-sel" id="draw-lw">` +
+      [1, 2, 3, 4].map(w => `<option value="${w}"${w === styleDraft.lineWidth ? ' selected' : ''}>${w} px</option>`).join('') +
+    `</select></div>` +
+    `<div class="fib-wrap">` +
+      `<div class="fib-head"><input type="checkbox" disabled style="visibility:hidden">` +
+      `<div class="fib-grp-l"><span style="width:142px">文本说明 / 文本颜色</span></div>` +
+      `<div class="fib-grp-r"><span style="width:264px">比例 / 线颜色 / 线型</span></div></div>` +
+      fibDraft.map(rowHtml).join('') +
+    `</div>` +
+    `<button type="button" class="fib-add" id="fib-add">＋ 增加比例</button>`;
+}
 function openStyleModal(shapeId) {
   styleTargetId = shapeId || null;
-  const src = shapeId ? (((drawings.find(d => d.id === shapeId) || {}).style) || {}) : (drawPref.defaultStyle || {});
+  const target = shapeId ? (drawings.find(d => d.id === shapeId) || null) : null;
+  styleTargetIsFib = !!(target && target.type === 'fib');
+  const src = (target ? target.style : null) || (shapeId ? {} : (drawPref.defaultStyle || {}));
   styleDraft = { color: src.color || DRAW_COLOR, lineWidth: src.lineWidth || 1, lineStyle: src.lineStyle || 0 };
-  document.getElementById('draw-style-title').textContent = shapeId ? '编辑画线样式' : '默认画线样式';
+  fibDraft = styleTargetIsFib ? JSON.parse(JSON.stringify(fibLevelsOf(target))) : [];
+  drawStyleModal.querySelector('.modal').style.width = styleTargetIsFib ? '560px' : '300px';
+  document.getElementById('draw-style-title').textContent = styleTargetIsFib ? '斐波那契级别' : (shapeId ? '编辑画线样式' : '默认画线样式');
   renderStyleModal();
   drawStyleModal.classList.add('show');
 }
-function closeStyleModal() { drawStyleModal.classList.remove('show'); styleTargetId = null; }
+function closeStyleModal() { drawStyleModal.classList.remove('show'); styleTargetId = null; styleTargetIsFib = false; }
 function applyStyleModal() {
+  if (styleTargetIsFib && styleTargetId) {   // fib：级别草稿 + 线宽写回 shape
+    const sh = drawings.find(d => d.id === styleTargetId);
+    if (sh) {
+      sh.levels = fibDraft.map(l => Object.assign({}, l));
+      sh.style = Object.assign({}, sh.style, { lineWidth: styleDraft.lineWidth });
+      saveDrawings(); drawPrim.setShapes(drawings);
+    }
+    closeStyleModal(); return;
+  }
   const st = { color: styleDraft.color, lineWidth: styleDraft.lineWidth, lineStyle: styleDraft.lineStyle };
   if (styleTargetId) {
     const sh = drawings.find(d => d.id === styleTargetId);
@@ -4198,6 +4369,34 @@ function onStyleField(e) {
 }
 drawStyleBody.addEventListener('input', onStyleField);
 drawStyleBody.addEventListener('change', onStyleField);
+/* 斐波那契级别编辑器事件：行级委托（显隐/文本/文本色/比例/线色/线型/删除）+ 增加比例；草稿态编辑，确认才写回 */
+drawStyleBody.addEventListener('click', e => {
+  if (!styleTargetIsFib) return;
+  if (e.target.id === 'fib-add') {
+    fibDraft.push({ on: true, ratio: 0.5, text: '0.5', textColor: FIB_TEXT_COLOR, color: IND_SWATCHES[fibDraft.length % IND_SWATCHES.length], lineStyle: 1 });
+    renderFibModal(); return;
+  }
+  const del = e.target.closest('.fib-del');
+  if (del) {
+    const row = del.closest('.fib-row'); if (!row) return;
+    if (fibDraft.length > 1) { fibDraft.splice(+row.dataset.fi, 1); renderFibModal(); }   // 至少保留一级
+    return;
+  }
+});
+function onFibField(e) {
+  if (!styleTargetIsFib) return;
+  const t = e.target;
+  const row = t.closest ? t.closest('.fib-row') : null; if (!row) return;
+  const lv = fibDraft[+row.dataset.fi]; if (!lv) return;
+  if (t.classList.contains('fib-on')) lv.on = t.checked;
+  else if (t.classList.contains('fib-text')) lv.text = t.value;
+  else if (t.classList.contains('fib-tc')) lv.textColor = t.value;
+  else if (t.classList.contains('fib-lc')) lv.color = t.value;
+  else if (t.classList.contains('fib-ratio')) { const v = parseFloat(t.value); if (!Number.isNaN(v)) lv.ratio = v; }
+  else if (t.classList.contains('ind-line-sel')) lv.lineStyle = +t.value || 0;
+}
+drawStyleBody.addEventListener('input', onFibField);
+drawStyleBody.addEventListener('change', onFibField);
 document.getElementById('draw-style-ok').addEventListener('click', applyStyleModal);
 document.getElementById('draw-style-cancel').addEventListener('click', closeStyleModal);
 document.getElementById('draw-style-close').addEventListener('click', closeStyleModal);
@@ -4239,7 +4438,11 @@ reloadDrawingsForView(); syncToolUI();
 /* ═══ 启动（所有定义就绪后；先拉市场源注册表再初始化图表链路） ═══ */
 (async () => {
   await initSources();
-  loadSrFull().then(() => { refreshSymLabels(); renderSymbols(); }).catch(() => {});   // 展示码目录就绪：刷新顶栏/水印 + 重渲染品种列表（去 A股代码前缀，不阻塞首屏）
+  /* 目录预热前先刷一次源注册表：启动早期慢源（MT5/THS）可能刚补注册，提高首次目录完整度；
+     仍缺的源由弹窗打开时的缺源重拉兜底（见 openSymSearch） */
+  refreshSources().catch(() => {})
+    .then(() => loadSrFull())
+    .then(() => { refreshSymLabels(); renderSymbols(); }).catch(() => {});   // 展示码目录就绪：刷新顶栏/水印 + 重渲染品种列表（去 A股代码前缀，不阻塞首屏）
   await fetchBackendMeta();   // IND-110：后端 def 式指标目录（失败不阻塞内置指标）
   rebuildIndicators();   // 按 indLayout 构建指标实例（首屏数据就绪前，series 空数据）
   connectWS();
