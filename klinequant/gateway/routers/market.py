@@ -11,6 +11,7 @@ exchange 缺省时路由到默认市场源（binance），保持旧前端兼容�
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -115,6 +116,11 @@ async def get_klines(
     }
 
 
+# 单源目录拉取护栏（秒）：略大于各源驱动层内部超时（如 THS _CALL_TIMEOUT=8s），
+# 会话劣化的源不得把整个目录接口拖到数十秒（弹窗"加载中"假死观感）
+_SYMBOLS_SOURCE_TIMEOUT = 10.0
+
+
 @router.get("/symbols")
 async def get_symbols(
     exchange: Optional[str] = Query(None, description="市场源，缺省返回全部已注册所"),
@@ -124,19 +130,32 @@ async def get_symbols(
     每行含 exchange（内部路由标识）/ source（数据源展示名）/ type（资产类别）/ region（国内/国外）/
     code（面向用户的展示码，A 股为 6 位纯数字，缺省同 symbol），
     同名品种来自不同数据源时为多行（如 EURUSD 同时存在于 IC Markets 与 IG）。
-    拉取失败回退到插件默认品种，保证弹窗永远有结果。
+    各源并发拉取 + 单源超时护栏；失败/超时的源回退到插件默认品种，
+    保证弹窗永远有结果且总耗时取决于最慢单源而非各源之和。
     """
     sources = (
         [s for s in [market_manager.get(exchange)] if s]
         if exchange else market_manager.list_sources()
     )
-    symbols = []
-    for s in sources:
+
+    async def _fetch(s):
         try:
-            rows = await market_manager.list_symbols(s.name) or []
+            return await asyncio.wait_for(
+                market_manager.list_symbols(s.name), timeout=_SYMBOLS_SOURCE_TIMEOUT
+            ) or []
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"list symbols timeout >{_SYMBOLS_SOURCE_TIMEOUT:.0}s [{s.name}], "
+                "falling back to default symbols"
+            )
+            return []
         except Exception as e:
             logger.error(f"Failed to list symbols from {s.name}: {e}")
-            rows = []
+            return []
+
+    results = await asyncio.gather(*(_fetch(s) for s in sources))
+    symbols = []
+    for s, rows in zip(sources, results):
         if not rows:
             rows = [
                 {
