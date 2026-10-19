@@ -3754,7 +3754,7 @@ function infoStats(sh) {   // 信息线统计：返回卡片两行文案（行1 
   const p1 = sh.points[0], p2 = sh.points[1];
   const dp = p2.price - p1.price, pct = p1.price ? (dp / p1.price) * 100 : 0;
   const i1 = barIndexOfTime(p1.time), i2 = barIndexOfTime(p2.time);
-  const bars = (i1 >= 0 && i2 >= 0) ? Math.abs(i2 - i1) : null;
+  const bars = (i1 >= 0 && i2 >= 0) ? Math.abs(i2 - i1) + 1 : null;   // 含端点的 K 线根数（非索引差）：相邻两根=2、同一根=1
   const sgn = dp >= 0 ? '+' : '';
   const prec = (typeof curPrec === 'number' && curPrec > 0) ? curPrec : 2;
   const dur = fmtDurSec(p2.time - p1.time);
