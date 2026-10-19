@@ -348,6 +348,9 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 .fib-del:hover { color:var(--down); }
 .fib-add { margin-top:8px; width:100%; padding:6px 0; background:var(--bg-elevated); border:1px dashed var(--border-light); border-radius:6px; color:var(--text-sub); font-size:12px; cursor:pointer; }
 .fib-add:hover { color:var(--accent); border-color:var(--accent); }
+.fib-reset { margin-top:6px; }
+.fib-reset:hover { color:var(--down); border-color:var(--down); }
+.fib-hint { margin-top:7px; font-size:11px; color:var(--text-sub); text-align:center; line-height:1.4; }
 .m-remove:hover { background:rgba(var(--down-rgb),0.22); }
 /* 添加指标选择面板 */
 .pick-row { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-radius:6px; cursor:pointer; }
@@ -3792,7 +3795,8 @@ function infoStats(sh) {   // 信息线统计：返回卡片两行文案（行1 
 /* 斐波那契级别：每级 {on,ratio,text,textColor,color,lineStyle}；价格 = p1 + (p0-p1)*ratio（0=终点/第二锚点，1=起点/第一锚点，>1 越起点延伸；
    即低点拉高点时高点为 0、低点为 1，同 TV 回撤读法）。默认级别取 TV 常用回调/延伸位；存档缺 levels 的旧 fib 图形回落默认表（防御）。 */
 const FIB_TEXT_COLOR = '#d1d4dc';
-function fibDefaultLevels() {
+/* 出厂默认级别（TV 常用回调/延伸位）——级别弹窗「恢复默认」按钮回填此表 */
+function fibFactoryLevels() {
   return [
     { on: true, ratio: 0,     text: '0',     textColor: FIB_TEXT_COLOR, color: '#90a4ae', lineStyle: 1 },
     { on: true, ratio: 0.236, text: '0.236', textColor: FIB_TEXT_COLOR, color: '#90a4ae', lineStyle: 1 },
@@ -3806,6 +3810,15 @@ function fibDefaultLevels() {
     { on: true, ratio: 4.236, text: '4.236', textColor: FIB_TEXT_COLOR, color: '#0ecb81', lineStyle: 1 },
   ];
 }
+/* fib 级别模板永久记忆：级别弹窗确认后把该级别表存为默认模板（kq-fib-levels），
+   此后新建 fib 一律沿用——比例/文本/颜色/线型跨刷新、跨品种周期记住；无存档时回退出厂 10 级。 */
+const FIB_LEVELS_KEY = 'kq-fib-levels';
+function fibSavedLevels() {
+  try { const a = JSON.parse(localStorage.getItem(FIB_LEVELS_KEY) || 'null'); if (Array.isArray(a) && a.length) return a; } catch (e) {}
+  return null;
+}
+function fibDefaultLevels() { return fibSavedLevels() || fibFactoryLevels(); }
+function saveFibLevels(levels) { try { localStorage.setItem(FIB_LEVELS_KEY, JSON.stringify(levels)); } catch (e) {} }
 const fibLevelsOf = sh => (Array.isArray(sh.levels) && sh.levels.length) ? sh.levels : fibDefaultLevels();
 const fibLevelPrice = (sh, r) => sh.points[1].price + (sh.points[0].price - sh.points[1].price) * r;
 
@@ -4348,7 +4361,9 @@ function renderFibModal() {   // 斐波那契级别编辑器：行内两栏（�
       `<div class="fib-grp-r"><span style="width:264px">比例 / 线颜色 / 线型</span></div></div>` +
       fibDraft.map(rowHtml).join('') +
     `</div>` +
-    `<button type="button" class="fib-add" id="fib-add">＋ 增加比例</button>`;
+    `<button type="button" class="fib-add" id="fib-add">＋ 增加比例</button>` +
+    `<button type="button" class="fib-add fib-reset" id="fib-reset" title="恢复出厂默认 10 级">↺ 恢复默认级别</button>` +
+    `<div class="fib-hint">确认后此级别表将记为默认，新建 FIBO 自动沿用（永久记忆）</div>`;
 }
 function openStyleModal(shapeId) {
   styleTargetId = shapeId || null;
@@ -4369,6 +4384,7 @@ function applyStyleModal() {
     if (sh) {
       sh.levels = fibDraft.map(l => Object.assign({}, l));
       sh.style = Object.assign({}, sh.style, { lineWidth: styleDraft.lineWidth });
+      saveFibLevels(sh.levels);   // 记住为默认模板：此后新建 fib 沿用此比例/颜色/线型
       saveDrawings(); drawPrim.setShapes(drawings);
     }
     closeStyleModal(); return;
@@ -4401,6 +4417,7 @@ drawStyleBody.addEventListener('click', e => {
     fibDraft.push({ on: true, ratio: 0.5, text: '0.5', textColor: FIB_TEXT_COLOR, color: IND_SWATCHES[fibDraft.length % IND_SWATCHES.length], lineStyle: 1 });
     renderFibModal(); return;
   }
+  if (e.target.id === 'fib-reset') { fibDraft = fibFactoryLevels(); renderFibModal(); return; }   // 回退出厂 10 级（需再点确认才生效并覆写默认模板）
   const del = e.target.closest('.fib-del');
   if (del) {
     const row = del.closest('.fib-row'); if (!row) return;
