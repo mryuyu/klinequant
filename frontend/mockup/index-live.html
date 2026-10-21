@@ -959,6 +959,17 @@ async function fetchIndSeries(indicator, params, gen) {
      仍写入 curIndData 供 saveViewCache 原样回写，避免缓存指标被清空 */
   if (activeIndCache && activeIndCache[subKey] && activeIndCache[subKey].length) {
     const d = activeIndCache[subKey];
+    /* 末点陈旧校验：缓存快照末根滞后当前 K 线超整 bar ⇒ 快照已陈旧（推送中断窗口、
+       或命中后 K 线经对账前进）。必须作废转网络：否则看门狗每次 resync 都同步命中这份
+       旧缓存重画旧快照（且不走 REST ⇒ 后端推送注册无法重建），指标线永久冻死
+       （2026-10-21 MR_Y_MAIN 冻 12h 实证：后端序列新鲜、前端被缓存焊住）。
+       命中瞬间 K 线与指标同源快照 lag=0 不误判；中段洞检查语义不变 */
+    const staleLag = klines.length && d.length
+      ? klines[klines.length - 1].time - Math.floor(d[d.length - 1].timestamp / 1000) : 0;
+    if (staleLag > tfDurSec(curTf)) {
+      activeIndCache = null; curIndData = {};
+      return fetchIndSeries(indicator, params, gen);   // 陈旧：改联网重拉，不画旧快照
+    }
     curIndData[subKey] = d;
     /* 缓存序列带可自愈空洞：作废本视图指标缓存并异步 resync 重拉重建，本次先返回旧数据不阻塞首帧 */
     if (gapHealable(seriesMissingTs(d))) { activeIndCache = null; curIndData = {}; scheduleIndResync('indicator series gap in view cache'); }
@@ -2063,6 +2074,12 @@ let klines = [];
 let initialLoaded = false;   // 首屏数据是否就绪（拦截冷启动竞态下的 WS 推送）
 let indReady = false;        // 指标历史批量渲染是否就绪；未就绪时忽略 WS 指标增量，
                              // 避免切品种/周期期间历史序列未回齐时只显示最新一根（“动画计算”观感）
+/* 首屏加载窗口：load() 起至 K 线+指标就绪（或 8s 兜底过期）期间为 true。公网源（binance
+   经代理）REST 实质串行，此窗口内周期性辅助 REST（顶栏 ticker/延时/持仓/列表价格）让路，
+   不与用户等待的 klines/指标抢代理（跨市场切换慢的主因，2026-10-22 实证）。 */
+let chartLoadUntil = 0;
+function markChartLoading() { chartLoadUntil = Date.now() + 8000; }   // 8s 兜底：加载异常也能自动过期
+function chartLoading() { return Date.now() < chartLoadUntil && !(initialLoaded && indReady); }
 let sbInfo = '';             // 状态栏基础信息（装载完成后更新，WS 延迟由定时器每秒拼接刷新）
 /* ═══ 前端视图缓存（LRU）：切回看过的 品种×周期 秒开 ═══
    权责单向：后端 kline_cache 是唯一权威源，前端缓存只是其“渲染快照”，永不回写后端。
@@ -2156,6 +2173,7 @@ function renderIndData(reset = false) {
     const q = indPushQueue; indPushQueue = [];   // 回放暂存增量：补齐 setData 快照之后、就绪之前收盘的 bar，防序列空洞
     q.forEach(applyIndMsg);
     saveViewCache();   // 就绪后落盘视图缓存（切回秒开）
+    lastIndRefetchAt = Date.now();   // 记录最近一次指标重拉完成时刻（30min TTL 起算点）
   });
 }
 /* ═══ v9.87 指标序列自愈：WS 重连 resync + 推送中断看门狗 ═══
@@ -2169,7 +2187,8 @@ let lastBarPushAt = 0;        // 最近一次 applyBar 收到 K 线推送的时�
 let lastIndPushAt = 0;        // 最近一次 applyIndPush 收到当前契约指标推送的时刻
 let indResyncPending = false;
 let persistOneBarLagKey = null;   // 上一轮检查恰滞后整 bar 的实例键（连续两轮⇒增量丢失非瞬时）
-let klineHealState = {};   // viewKey -> {at, tries}：K 线中段小洞自愈限频限次状态
+let klineHealState = {};   // viewKey -> {sig, at}：K 线空洞自愈按洞形签名限频状态
+let lastIndRefetchAt = Date.now();   // 最近一次指标历史重拉完成时刻（30min 无条件重拉 TTL 起算点）
 function scheduleIndResync(reason) {
   if (indResyncPending || !initialLoaded || !klines.length || !indInstances.length) return;
   indResyncPending = true;
@@ -2186,25 +2205,37 @@ setInterval(() => {
   const now = Date.now();
   /* K 线中段空洞自愈：页面在后端缓存带洞期间加载会焊住洞（reconcileTail 仅缓存命中路径跑，
      网络首载不跑对账）；后端愈合后已开页面不回填。不限空洞根数——合并只添加后端实际返回的
-     bar，大洞若后端已有（前端陈旧）同样能填；源侧真缺/休市大洞后端也缺⇒changed=false 无副作用，
-     靠每视图 5min 限频、最多 3 次防刷屏，洞消失即恢复额度 */
+     bar，大洞若后端已有（前端陈旧）同样能填；源侧真缺/休市大洞后端也缺⇒changed=false 无副作用。
+     限频按「洞形签名」：休市合法洞（周末/日间停盘）签名稳定，仅 TTL 到期重试一次；真实新洞
+     签名必新⇒立即对账。旧版按 tries 累计且仅 missing=0 清零：视口含合法洞的品种（XAUUSD 周末）
+     missing 永≥1，额度耗尽后真实洞终生不对账（2026-10-21 主图中段空白焊死实证） */
   {
     const barSec = tfDurSec(curTf);
     const from = Math.max(0, klines.length - firstScreenBars);
-    let missing = 0;
+    let missing = 0, holeFirst = 0, holeLast = 0;
     for (let i = from; i < klines.length - 1 && missing <= 64; i++) {
       const dt = klines[i + 1].time - klines[i].time;
-      if (dt > barSec) missing += Math.round(dt / barSec) - 1;
-    }
-    const key = viewKey(curExchange, curSymbol, curTf);
-    const rec = klineHealState[key] || (klineHealState[key] = { at: 0, tries: 0 });
-    if (missing >= 1) {
-      if (rec.tries < 3 && now - rec.at > 300000) {
-        rec.at = now; rec.tries++;
-        console.info('[kline-heal] mid gap ' + missing + ' bars, reconcile tail');
-        reconcileTail(loadGen, key);   // 合并最新一屏填洞；后端仍缺则 changed=false 无副作用
+      if (dt > barSec) {
+        if (!missing) holeFirst = klines[i].time;
+        holeLast = klines[i + 1].time;
+        missing += Math.round(dt / barSec) - 1;
       }
-    } else rec.tries = 0;   // 洞已消失（自愈成功/切回连续段）：恢复额度
+    }
+    /* 尾部冻住也算洞：WS 活着但本品种推送长期静默（服务端订阅丢失/feed 停摆）末根不前进。
+       合法休市期 lag 恒定⇒签名稳定，只按 TTL 限频，不刷屏 */
+    const lastT = klines[klines.length - 1].time;
+    const lagBars = lastBarPushAt && now - lastBarPushAt > 120000
+      ? Math.floor((Math.floor(now / 1000) - lastT) / barSec) - 1 : 0;
+    if (lagBars > 0) { missing += lagBars; if (!holeFirst) holeFirst = lastT; holeLast = lastT; }
+    const key = viewKey(curExchange, curSymbol, curTf);
+    const rec = klineHealState[key] || (klineHealState[key] = { sig: '', at: 0 });
+    const sig = missing >= 1 ? `${holeFirst}-${holeLast}-${missing}` : '';
+    if (sig && ((sig !== rec.sig && now - rec.at > 30000) || now - rec.at > 1800000)) {
+      rec.sig = sig; rec.at = now;
+      console.info('[kline-heal] mid gap ' + missing + ' bars, reconcile tail');
+      reconcileTail(loadGen, key);   // 合并最新一屏填洞；后端仍缺则 changed=false 无副作用
+    }
+    if (!sig) { rec.sig = ''; rec.at = 0; }   // 无洞（含自愈成功）：签名清零，新洞立即响应
   }
   /* 推送中断判定：K 线仍在到达而指标推送静默超 120s（注册丢失/订阅丢失/后端重启） */
   if (lastBarPushAt && lastIndPushAt && now - lastBarPushAt < 120000 && now - lastIndPushAt > 120000) {
@@ -2234,6 +2265,15 @@ setInterval(() => {
       }
       break;
     }
+  }
+  /* 30min 无条件指标重拉 TTL：推送看似健康时序列内容仍可能已偏离——推送中断窗口漏 bar
+     永不回放进后端增量状态，窗口型长周期字段（sma764/滚动 std）带洞长期偏离全量且序列 ts
+     连续，上述滞后/静默触发器全都看不见（2026-10-21 MR_Y_MAIN 主图慢字段冻平实证）。
+     定期作废视图缓存转联网重拉：后端 ensure_warmed 借请求对拍 ts 集合检出漏 bar 强制重建
+     （v9.120），前端全量重画即愈 */
+  if (indInstances.length && now - lastIndRefetchAt > 1800000) {
+    activeIndCache = null; curIndData = {};
+    scheduleIndResync('periodic indicator refetch ttl');
   }
 }, 30000);
 function renderChart(reset = false) {
@@ -2288,6 +2328,7 @@ function detectPrecision(bars) {
 }
 async function load() {
   loadGen++;                // 作废进行中的翻页请求
+  markChartLoading();       // 开启首屏加载窗口：周期性辅助 REST 让路，不与此处的 klines/指标抢公网源串行代理
   const gen = loadGen;
   /* 窗格最大化态跨视图保留（最大化后切周期对比查看是常用需求）：隐藏行与拉伸权重
      不随 load() 复位，仅 rebuildIndicators（窗格索引重分配）时作废。 */
@@ -2982,10 +3023,28 @@ function setWs(ok) {
   document.getElementById('ws-status').textContent = ok ? 'WS 连接' : 'WS 断开';
   document.querySelector('.dot').style.background = ok ? '#0ecb81' : '#f6465d';   // 连接状态色固定，不随涨跌方案交换
 }
+/* 图表主题差量订阅/退订：只保留当前视图的 klines/indicators 两条主题。
+   旧实现只订不退，浏览过的每个 品种×周期 永久留在后端订阅表 ⇒ MT5 等轮询源的
+   stream_loop 目标随浏览历史线性增长（串行锁 + 逐目标 0.5s），切品种的 REST 请求
+   排在累积轮询长队之后——"刚启动 3-5s、几小时后 20s"的根因（2026-10-21 实证
+   health.subscriptions=55）。退订即从后端 _active_targets 消失，轮询目标恒为 1。
+   离开期间漏掉的实时 bar 由既有自愈链在切回时按需愈合（v9.119 前端快照末点陈旧
+   校验转联网重拉 + v9.120 后端 ensure_warmed 漏 bar ts 对拍强制重建），无静默偏离。 */
+let chartTopics = new Set();
 function subscribeWS() {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ action: 'subscribe', topic: `klines.${curExchange}.${curSymbol}.${curTf}` }));
-    ws.send(JSON.stringify({ action: 'subscribe', topic: `indicators.${curExchange}.${curSymbol}.${curTf}` }));
+    const want = new Set([
+      `klines.${curExchange}.${curSymbol}.${curTf}`,
+      `indicators.${curExchange}.${curSymbol}.${curTf}`,
+    ]);
+    for (const t of chartTopics) if (!want.has(t)) {
+      ws.send(JSON.stringify({ action: 'unsubscribe', topic: t }));
+      chartTopics.delete(t);
+    }
+    for (const t of want) if (!chartTopics.has(t)) {
+      ws.send(JSON.stringify({ action: 'subscribe', topic: t }));
+      chartTopics.add(t);
+    }
   }
 }
 /* 品种列表价格改走 WS（与图表同源同频）：按各行自身数据源差量订阅/退订 1m 主题（收藏为全局列表，可跨所混排） */
@@ -3022,8 +3081,13 @@ function connectWS() {
     ws = new WebSocket(WS_URL);
     ws.onopen = () => {
       wsLastMsgAt = Date.now();
-      setWs(true); subscribeWS();
+      setWs(true);
+      chartTopics = new Set();   // 服务端 disconnect 已清空订阅，本地台账同步清零后全量重订
+      subscribeWS();
       scheduleIndResync('ws-reconnect');   // v9.87 自愈：重连后指标推送可能已中断（后端重启丢注册等），resync 历史
+      /* K 线断线窗回填：断线期间丢失的推送会被 applyBar 只追加语义焊成数组中段洞，
+         重连后立即对账补栏，不占用看门狗限频额度 */
+      if (initialLoaded && klines.length) reconcileTail(loadGen, viewKey(curExchange, curSymbol, curTf));
       posPriceTopics.forEach(t => ws.send(JSON.stringify({ action: 'subscribe', topic: t })));
       listPriceTopics.clear(); resyncListTopics();   // 重连后服务端订阅已丢，全量重建
     };
@@ -3196,15 +3260,19 @@ async function fetchPositions() {
       fetch(`${API}/api/trade/account`).then(r => r.json()),
     ]);
     posList = p.positions || [];
-    // 持仓品种实时价格：WS 订阅（更新频率与图表 500ms 一致）
+    // 持仓品种实时价格：WS 差量订阅（更新频率与图表 500ms 一致）；平仓后的主题退订，
+    // 防旧格式 klines.{sym}.1m 主题在后端累积成默认所的常驻轮询目标
     if (ws && ws.readyState === WebSocket.OPEN) {
-      posList.forEach(p => {
-        const topic = `klines.${p.symbol}.1m`;
-        if (p.symbol !== curSymbol && !posPriceTopics.has(topic)) {
-          posPriceTopics.add(topic);
-          ws.send(JSON.stringify({ action: 'subscribe', topic }));
-        }
-      });
+      const want = new Set();
+      posList.forEach(p => { if (p.symbol !== curSymbol) want.add(`klines.${p.symbol}.1m`); });
+      for (const t of [...posPriceTopics]) if (!want.has(t)) {
+        ws.send(JSON.stringify({ action: 'unsubscribe', topic: t }));
+        posPriceTopics.delete(t);
+      }
+      for (const t of want) if (!posPriceTopics.has(t)) {
+        posPriceTopics.add(t);
+        ws.send(JSON.stringify({ action: 'subscribe', topic: t }));
+      }
     }
     if (typeof a.available_balance === 'number') {
       document.getElementById('avail-bal').textContent = `可用 ${a.available_balance.toFixed(2)} USDT`;
@@ -3233,19 +3301,27 @@ function renderPositions() {
 async function refreshListPrices() {
   const targets = [];
   symGroups.forEach(g => g.symbols.forEach(s => { if (s.sym) targets.push(s); }));
-  await Promise.all(targets.map(async s => {
-    try {
-      const t = await (await fetch(`${API}/api/market/ticker?symbol=${s.sym}&exchange=${s.ex || curExchange}`)).json();
-      if (t.last_price > 0) {
-        s.price = t.last_price;
-        s.chg = (t.price_change_pct >= 0 ? '+' : '') + t.price_change_pct.toFixed(2) + '%';
-        lastPrices[s.sym] = t.last_price;
-        if (t.price_precision) symbolPrec[s.sym] = t.price_precision;   // 后端下发的品种精度
-      }
-    } catch (e) {}
-  }));
+  /* 限并发（≤3）分批拉取：公网源（binance 经代理）请求实质串行（实测单请求
+     ~0.5-1.3s、12 并发 wall 6.4s），全量 Promise.all 会瞬间打出 N 个并发把首屏
+     klines/指标挤在代理长队之后（2026-10-22 实证风暴下 klines 832ms→6853ms）。
+     分批既不风暴也不拖慢整体（本就串行）；列表价格实时值另走 WS 同频推送。 */
+  const CONC = 3;
+  for (let i = 0; i < targets.length; i += CONC) {
+    await Promise.all(targets.slice(i, i + CONC).map(fetchOneListTicker));
+  }
   renderSymbols();
   renderPositions();
+}
+async function fetchOneListTicker(s) {
+  try {
+    const t = await (await fetch(`${API}/api/market/ticker?symbol=${s.sym}&exchange=${s.ex || curExchange}`)).json();
+    if (t.last_price > 0) {
+      s.price = t.last_price;
+      s.chg = (t.price_change_pct >= 0 ? '+' : '') + t.price_change_pct.toFixed(2) + '%';
+      lastPrices[s.sym] = t.last_price;
+      if (t.price_precision) symbolPrec[s.sym] = t.price_precision;   // 后端下发的品种精度
+    }
+  } catch (e) {}
 }
 
 /* ═══ 品种列表 = 全局收藏夹（TradingView 式）：单一列表跨数据源，与当前图表品种/数据源完全独立；
@@ -3286,6 +3362,17 @@ let symFilter = '';
 let wlAddingGroup = false;   // 新建分组行内输入态（列表底部入口，非弹窗）
 let wlRenamingGroup = null;  // 正在重命名的分组索引（分组头名称变行内输入框），null=非重命名态
 
+/* 图表就绪门控：跨市场切换时，辅助 REST（顶栏 ticker / 延时探测 / 列表价格兜底）延后到
+   首屏 K 线+指标就绪后再发。公网源（binance 经代理）请求实质串行，若与首屏并发会
+   把用户等待的 klines+指标从 ~2s 拖到 5-8s（2026-10-22 实证：12 并发 wall 6.4s、风暴下
+   klines 832ms→6853ms）。列表价格实时值本就走 WS 同频推送，REST 仅涨跌幅兜底，延后无感。 */
+function deferAuxFetches(gen) {
+  (function wait() {
+    if (gen !== loadGen) return;   // 已被更新的切换取代，作废
+    if (!chartLoading()) { fetchTopTicker(); fetchLatency(); refreshListPrices(); return; }   // 首屏就绪（或 8s 兜底）后一次补齐
+    setTimeout(wait, 150);
+  })();
+}
 async function switchExchange(ex, opts = {}) {
   let meta = sourcesMeta[ex];
   if (!meta) {
@@ -3321,10 +3408,8 @@ async function switchExchange(ex, opts = {}) {
   resyncListTopics();   // 切所：退订旧所列表品种、订阅新所
   load();
   subscribeWS();
-  fetchTopTicker();
-  fetchLatency();
-  refreshListPrices();
   saveLayout();
+  deferAuxFetches(loadGen);   // 辅助 REST 延后到首屏就绪：避免与 klines/指标并发挤串行代理（跨市场慢的主因）
 }
 /* 周期按钮可用性：当前源不供给的周期档置灰禁点（meta.timeframes 为真值；自定义倍率全源可用） */
 function applyTfAvailability() {
@@ -4560,10 +4645,11 @@ reloadDrawingsForView(); syncToolUI();
   rebuildIndicators();   // 按 indLayout 构建指标实例（首屏数据就绪前，series 空数据）
   connectWS();
   load();
-  fetchTopTicker(); setInterval(fetchTopTicker, 15000);
-  fetchLatency(); setInterval(fetchLatency, 5000);
-  fetchPositions(); setInterval(fetchPositions, 5000);
-  refreshListPrices(); setInterval(refreshListPrices, 30000);   // 价格已走 WS 同频推送，轮询仅兜底涨跌幅
+  deferAuxFetches(loadGen);   // 首屏优先：顶栏 ticker/延时/列表价格待图表就绪再发（初次加载同样避免风暴）
+  setInterval(() => { if (!chartLoading()) fetchTopTicker(); }, 15000);
+  setInterval(() => { if (!chartLoading()) fetchLatency(); }, 5000);
+  fetchPositions(); setInterval(() => { if (!chartLoading()) fetchPositions(); }, 5000);   // 持仓面板首屏即取；周期轮询首屏加载窗口内让路
+  setInterval(() => { if (!chartLoading()) refreshListPrices(); }, 30000);   // 价格已走 WS 同频推送，轮询仅兜底涨跌幅
 })();
 </script>
 </body>

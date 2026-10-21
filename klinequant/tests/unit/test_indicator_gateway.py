@@ -170,8 +170,9 @@ class TestIndicatorHistory:
         data = resp.json()
         assert data["warmed"] is True
         assert data["count"] == 1200
-        # 目标深度 1200+34=1234：缓存层尾刷 3 根 + 缺口单页补齐（1140 根），共 3 次拉取
-        assert src.fetch_calls == 3
+        # 目标深度 1200+34=1234：与首请求同属切换 burst（<尾刷 TTL），尾刷被收敛跳过，
+        # 仅缺口单页补齐（1140 根），共 2 次拉取（末值对拍不受影响：尾刷仅重拉已有最新 3 根）
+        assert src.fetch_calls == 2
         fetched = bars[-1234:]
         expect = _macd_full_last([b["close"] for b in fetched])
         got = data["data"][-1]["values"]

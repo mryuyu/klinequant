@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional
 
 import polars as pl
 
+from gateway.market_sources import kline_cache
 from gateway.market_sources.kline_cache import cached_klines
 from gateway.state import state
 from gateway.ws import ws_manager
@@ -44,6 +45,32 @@ def _bars_to_df(bars: list[dict]) -> pl.DataFrame:
         "is_closed": [bool(b.get("is_closed", True)) for b in bars],
     })
 
+
+
+async def _missed_bars(engine, exchange: str, symbol: str, timeframe: str, tail: int = 2000) -> bool:
+    """网关 K 线缓存已回填、但引擎增量缓存缺失的 bar（推送中断窗口漏 bar）⇒ 需强制重建
+
+    漏 bar 永不回放进增量状态：窗口型字段（长周期 SMA/滚动 std）带洞长期偏离全量
+    （2026-10-21 实证：MR_Y_MAIN 主图慢字段冻平「未计算」，副图递推型指数自收敛看似正常）；
+    序列 ts 连续（逐 push upsert）、深度短路亦不可见，故按 ts 集合对拍检测。
+    合法休市洞两缓存皆无，不计入。
+    """
+    eng_ts = engine.kline_cache_ts(symbol, exchange, timeframe, tail)
+    if not eng_ts:
+        return False
+    from gateway.market_sources.manager import market_manager
+    source = market_manager.get(exchange)
+    if source is None:
+        return False
+    # 只读 peek 网关内存缓存（零源请求：短路路径不能走 cached_klines，其尾刷/补拉即 fetch）
+    gw_ts = kline_cache.peek_timestamps(source, symbol, timeframe, tail)
+    if not gw_ts:
+        return False
+    eng_set = set(eng_ts)
+    first, last = eng_ts[0], eng_ts[-1]
+    # 只比对引擎缓存覆盖区间 [first, last)：左侧比网关浅属预热深度差（正常），
+    # 区间内缺失才是中断窗口漏 bar；合法休市洞两缓存皆无不计入
+    return any(first <= ts < last and ts not in eng_set for ts in gw_ts)
 
 
 async def ensure_warmed(
@@ -77,7 +104,11 @@ async def ensure_warmed(
     target = min(_MAX_WARMUP_TOTAL, need + indicator.min_periods)
     achievable = max(0, target - indicator.min_periods + 1)
     if not force and series_len >= min(need, achievable):
-        return indicator   # 有效序列已覆盖显示需求（或已达预热上限可及深度），免重算
+        # 漏 bar 自愈：深度短路前对拍网关/引擎缓存 ts 集合，中断窗口漏 bar 已回填网关但
+        # 未回放进增量状态时强制重建（否则长窗口字段偏离焊死，无任何触发器自愈）
+        force = await _missed_bars(engine, exchange, symbol, timeframe)
+        if not force:
+            return indicator   # 有效序列已覆盖显示需求（或已达预热上限可及深度），免重算
     # series_len < 可及深度：左侧存在未覆盖的历史缺口，必须加深预热补齐。此前这里有一条
     # `is_warmed_up and need - series_len < _PAGE_FETCH_LIMIT(1000)` 的迟滞直接跳过，会把
     # 一次瞬时短拉（补页异常 break / 短页）留下的 <1000 根缺口永久锁死——阶梯线等

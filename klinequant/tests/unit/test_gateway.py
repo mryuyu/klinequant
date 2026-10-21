@@ -218,6 +218,24 @@ class TestConnectionManager:
         mgr.unsubscribe("ws-1", "klines")
         assert "ws-1" not in mgr._subscriptions.get("klines", set())
 
+    def test_unsubscribe_removes_empty_topic_key(self):
+        """回归（v9.121）：最后一个订阅者退订后主题键须删除。
+
+        旧实现只 discard 留空集合，前端差量退订（切品种退旧图表主题）后空键
+        永久累积 ⇒ health.subscriptions 计数/订阅表扫描开销只增不减。
+        """
+        mgr = ConnectionManager()
+        mgr._connections["ws-1"] = None
+        mgr._connections["ws-2"] = None
+        mgr.subscribe("ws-1", "klines.mt5.XAUUSD.15m")
+        mgr.subscribe("ws-2", "klines.mt5.XAUUSD.15m")
+
+        mgr.unsubscribe("ws-1", "klines.mt5.XAUUSD.15m")
+        assert "klines.mt5.XAUUSD.15m" in mgr._subscriptions   # 尚有订阅者，键保留
+        mgr.unsubscribe("ws-2", "klines.mt5.XAUUSD.15m")
+        assert "klines.mt5.XAUUSD.15m" not in mgr._subscriptions   # 清空即删键
+        assert len(mgr._subscriptions) == 0
+
     def test_disconnect_cleans_subscriptions(self):
         """断开连接清除订阅"""
         mgr = ConnectionManager()

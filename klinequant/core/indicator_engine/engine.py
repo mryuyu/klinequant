@@ -370,6 +370,22 @@ class IndicatorEngine:
         else:
             series.append((timestamp, dict(values)))
 
+    def kline_cache_ts(
+        self,
+        symbol: str,
+        exchange: str,
+        timeframe: str,
+        tail: Optional[int] = None,
+    ) -> List[int]:
+        """引擎增量 K 线缓存的 timestamp 列表（尾部 tail 根），供漏 bar 自检对拍用"""
+        df = self._kline_cache.get((symbol, exchange, timeframe))
+        if df is None or len(df) == 0:
+            return []
+        ts = df["timestamp"]
+        if tail:
+            ts = ts.tail(tail)
+        return ts.to_list()
+
     def get_series(
         self,
         name: str,

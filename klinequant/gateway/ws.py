@@ -61,9 +61,12 @@ class ConnectionManager:
         self._subscriptions[topic].add(ws_id)
 
     def unsubscribe(self, ws_id: str, topic: str) -> None:
-        """取消订阅"""
-        if topic in self._subscriptions:
-            self._subscriptions[topic].discard(ws_id)
+        """取消订阅（订阅者清空后删除主题键，防空键永久累积致 health 计数/扫描开销只增不减）"""
+        subs = self._subscriptions.get(topic)
+        if subs is not None:
+            subs.discard(ws_id)
+            if not subs:
+                del self._subscriptions[topic]
 
     async def publish(self, topic: str, data: Any) -> int:
         """向主题的所有订阅者推送数据

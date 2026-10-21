@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 _MAX_ENTRIES = 64       # 缓存条目上限（约 64 × 3 万根 × ~150B ≈ 300MB 上限，实际远达不到）
 _TAIL_REFRESH = 3       # 命中且窗口含最新端时的尾部刷新根数（覆盖未收盘 bar）
+_TAIL_REFRESH_TTL = 2.0  # 尾刷最小间隔（秒）：切换 burst 内同键并发（REST K 线 + N 个指标
+                         # 预热）串行命中，各自尾刷一次（公网源经代理 ~0.7s/往返）冗余拖慢
+                         # 冷跨市场首屏；TTL 内复用现有 bars 跳过重复尾刷（未收盘 bar 至多
+                         # TTL 秒陈旧，由 WS 实时推送纠正；REST 仅用于历史/初载，低频）
 
 # 内部中空洞自愈：源掉线/子进程重启期间实时流漏采的 bar，会在缓存中段留下永久
 # 缺口——尾部刷新只取最新 3 根、前向补拉只朝更早方向，两者都无法回填中段。表现为
@@ -44,6 +48,7 @@ class _Entry:
     bars: list[dict] = field(default_factory=list)   # 时间升序
     exhausted: bool = False                          # 源已无更早数据
     gap_attempts: dict = field(default_factory=dict)  # (a_ts,b_ts) -> monotonic，缺洞补拉冷却台账
+    last_tail_at: float = 0.0                        # 上次尾刷时刻(monotonic)；TTL 内跳过重复尾刷
 
 
 _cache: "OrderedDict[tuple, _Entry]" = OrderedDict()
@@ -166,7 +171,10 @@ async def cached_klines(
         # 窗口含最新端时做尾部小额刷新（未收盘 bar 不陈旧）；首拉空缓存也走此路顺带建底。
         # 注意：exhausted 只表示“无更早数据”，最新端仍会变，不受它影响。
         touches_latest = end_time is None or (bool(e.bars) and end_time >= int(e.bars[-1]["timestamp"]))
-        if touches_latest:
+        # 尾刷 TTL：已有存量且距上次尾刷 < TTL 时跳过（冷启动无存量必拉，不受限）。
+        # 收敛切换 burst 内 REST K 线 + 多个指标预热对同键的重复公网尾刷往返。
+        skip_tail = bool(e.bars) and (time.monotonic() - e.last_tail_at) < _TAIL_REFRESH_TTL
+        if touches_latest and not skip_tail:
             tail_n = _TAIL_REFRESH if e.bars else limit
             try:
                 tail = await _fetch_page(source, symbol, timeframe, tail_n, None)
@@ -174,6 +182,7 @@ async def cached_klines(
                 if not e.bars:
                     raise   # 首拉失败无存量兜底，向上抛由路由兜底
                 tail = []   # 有存量：刷新失败退回缓存（可能陈旧一根）
+            e.last_tail_at = time.monotonic()
             if tail:
                 if e.bars:
                     _merge_tail(e, tail)
@@ -229,6 +238,18 @@ def _count_le(bars: list[dict], end_time: int | None) -> int:
         else:
             hi = mid
     return lo
+
+
+def peek_timestamps(source, symbol: str, timeframe: str, tail: int) -> list[int]:
+    """只读 peek 内存缓存尾部 tail 根 timestamp（不拉取/不尾刷/不补拉）；缓存未命中返空
+
+    供指标引擎漏 bar 自检对拍用（ensure_warmed 短路分支）：短路路径必须零源请求，
+    不能走 cached_klines（其尾刷/补拉本身即 fetch）。
+    """
+    e = _cache.get((source.name, symbol, timeframe))
+    if e is None or not e.bars:
+        return []
+    return [int(b["timestamp"]) for b in e.bars[-tail:]]
 
 
 def clear() -> None:

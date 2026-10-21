@@ -54,13 +54,28 @@ def test_first_fetch_then_hit_sliced_no_full_refetch():
     assert out3 == out2 and len(src.calls) == n_calls_after_fill
 
 
-def test_tail_refresh_updates_open_bar():
+def test_tail_refresh_updates_open_bar(monkeypatch):
+    monkeypatch.setattr(kc, "_TAIL_REFRESH_TTL", 0.0)   # 隔离 TTL：本测专注尾刷覆盖未收盘 bar 机制
     src = FakeSource([bar(i) for i in range(10)])
     run(kc.cached_klines(src, "S", "1d", 5))
     # 未收盘 bar 变化（收盘抬高）
     src.data[-1] = bar(9, close=2.5)
     out = run(kc.cached_klines(src, "S", "1d", 5))
     assert out[-1]["close"] == 2.5 and len(out) == 5
+
+
+def test_tail_refresh_ttl_collapses_burst():
+    """尾刷 TTL：切换 burst 内已有存量的二次命中跳过重复尾刷（收敛公网源往返）"""
+    src = FakeSource([bar(i) for i in range(10)])
+    run(kc.cached_klines(src, "S", "1d", 5))            # 冷启动建底（无存量必拉）
+    n = len(src.calls)
+    out = run(kc.cached_klines(src, "S", "1d", 5))      # TTL 内二次命中：跳过尾刷
+    assert len(out) == 5 and len(src.calls) == n        # 零新增源请求
+    # TTL 过期后恢复尾刷（未收盘 bar 变化重新拉取）
+    kc._cache[("fake", "S", "1d")].last_tail_at -= kc._TAIL_REFRESH_TTL + 1
+    src.data[-1] = bar(9, close=3.0)
+    out2 = run(kc.cached_klines(src, "S", "1d", 5))
+    assert out2[-1]["close"] == 3.0 and len(src.calls) > n
 
 
 def test_fill_merges_without_duplicates():
@@ -135,8 +150,9 @@ def test_interior_gap_repaired_with_end_time_paging():
     assert diffs == {60_000}                              # 完全连续，无缺口
 
 
-def test_legit_gap_empty_source_not_refetched_within_cooldown():
+def test_legit_gap_empty_source_not_refetched_within_cooldown(monkeypatch):
     """源确无数据的合法空洞：补拉返空后缺口保留，冷却内二次请求不再拉源补洞"""
+    monkeypatch.setattr(kc, "_TAIL_REFRESH_TTL", 0.0)   # 隔离 TTL：本测验证冷却内仅尾刷 1 次、不重复补洞
     data = [bar(i * 60_000) for i in range(40)] + [bar(i * 60_000) for i in range(60, 100)]
     src = FakeSource(data)                                # 源本身就带洞（周末式）
     e = kc._entry(("fake", "S2", "1m"))
