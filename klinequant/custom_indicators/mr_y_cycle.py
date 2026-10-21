@@ -51,15 +51,15 @@ def _stoch(close, high, low, period):
         {"color": "#00ffff", "step": True},   # D_1024X
     ],
     price_lines=[
-        {"price": 85, "color": "#ffff00", "line_style": 2},   # Highest（虚线）
+        {"price": 81, "color": "#ffff00", "line_style": 2},   # Highest（虚线）
         {"price": 76, "color": "#787b86", "line_style": 0},   # Upper Band
-        {"price": 61.8, "color": "#ff0000", "line_style": 0},  # Upper
-        {"price": 58, "color": "#11cc0e", "line_style": 0},   # long_level
+       # {"price": 61.8, "color": "#ff0000", "line_style": 0},  # Upper
+       # {"price": 58, "color": "#11cc0e", "line_style": 0},   # long_level
         {"price": 50, "color": "#58b1d8", "line_style": 0},   # mid
-        {"price": 46, "color": "#c60ecc", "line_style": 0},   # short_level
-        {"price": 38.2, "color": "#008000", "line_style": 0},  # Under
+       # {"price": 46, "color": "#c60ecc", "line_style": 0},   # short_level
+       # {"price": 38.2, "color": "#008000", "line_style": 0},  # Under
         {"price": 23.6, "color": "#787b86", "line_style": 0},  # Lower Band
-        {"price": 18, "color": "#ffff00", "line_style": 2},   # low_level（虚线）
+        {"price": 19, "color": "#ffff00", "line_style": 2},   # low_level（虚线）
     ],
 )
 def mr_y_cycle(high, low, close, n1=1, n2=1, n3=1,
