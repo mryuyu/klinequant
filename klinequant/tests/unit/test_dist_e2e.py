@@ -9,9 +9,9 @@ import asyncio
 from decimal import Decimal
 from types import SimpleNamespace
 
+from kqsdk.broadcaster import SignalBroadcaster
+from kqsdk.order_agent import OrderAgent
 from protocol.types import OrderResult
-from strategy.sdk.broadcaster import SignalBroadcaster
-from strategy.sdk.order_agent import OrderAgent
 
 TOKEN = "e2e-token"
 INTENT_EP = "tcp://127.0.0.1:16680"

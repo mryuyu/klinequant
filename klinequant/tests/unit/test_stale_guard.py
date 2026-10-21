@@ -13,11 +13,11 @@ from decimal import Decimal
 from core.trade_engine.executors.mt5_executor import SubmitResult
 from core.trade_engine.ledger import ExposureLedger
 from core.trade_engine.resolver import UnifiedResolver
+from kqsdk.api import KqApi
+from kqsdk.backtest_feed import BacktestDataFeed
+from kqsdk.binance_feed import BinanceDataFeed
+from kqsdk.data_feed import Mt5DataFeed
 from protocol.types import Kline, Offset, OrderSide, SymbolInfo
-from strategy.sdk.api import KqApi
-from strategy.sdk.backtest_feed import BacktestDataFeed
-from strategy.sdk.binance_feed import BinanceDataFeed
-from strategy.sdk.data_feed import Mt5DataFeed
 
 # ─── 脚手架 ───
 

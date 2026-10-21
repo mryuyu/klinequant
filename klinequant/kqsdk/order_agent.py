@@ -33,10 +33,8 @@ from typing import TYPE_CHECKING, Any
 
 from core.trade_engine.ledger import ExposureLedger
 from core.trade_engine.resolver import UnifiedResolver
-from protocol.transport.zmq_transport import ZmqTransport
-from protocol.types import Offset, OrderKind, OrderSide, Tif
-from strategy.sdk.api import KqApi
-from strategy.sdk.dist_protocol import (
+from kqsdk.api import KqApi
+from kqsdk.dist_protocol import (
     ACTION_CANCEL,
     ACTION_FLATTEN,
     DEFAULT_INTENT_ENDPOINT,
@@ -50,11 +48,13 @@ from strategy.sdk.dist_protocol import (
     parse_message,
     report_to_message,
 )
-from strategy.sdk.order_id import OrderIdFactory
+from kqsdk.order_id import OrderIdFactory
+from protocol.transport.zmq_transport import ZmqTransport
+from protocol.types import Offset, OrderKind, OrderSide, Tif
 
 if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合
     from core.notification.alert_manager import AlertManager
-    from strategy.sdk.backend import MarketBackend
+    from kqsdk.backend import MarketBackend
 
 logger = logging.getLogger(__name__)
 

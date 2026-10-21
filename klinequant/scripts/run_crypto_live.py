@@ -38,12 +38,12 @@ from gateway.env import load_env  # noqa: E402
 
 load_env()  # 凭证从 klinequant/.env 加载（已有环境变量不覆盖）
 
-from strategy.sdk.backend import BinanceBackend  # noqa: E402
-from strategy.sdk.broadcaster import build_broadcaster_from_account  # noqa: E402
-from strategy.sdk.live_runner import LiveRunner  # noqa: E402
-from strategy.sdk.order_journal import SqliteJournal  # noqa: E402
-from strategy.sdk.state_store import SqliteStateBackend  # noqa: E402
 from config.accounts import AccountConfigError, resolve_account  # noqa: E402
+from kqsdk.backend import BinanceBackend  # noqa: E402
+from kqsdk.broadcaster import build_broadcaster_from_account  # noqa: E402
+from kqsdk.live_runner import LiveRunner  # noqa: E402
+from kqsdk.order_journal import SqliteJournal  # noqa: E402
+from kqsdk.state_store import SqliteStateBackend  # noqa: E402
 
 
 def setup_logging(verbose: bool = False) -> None:

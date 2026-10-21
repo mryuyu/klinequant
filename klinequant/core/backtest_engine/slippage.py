@@ -118,10 +118,23 @@ class VolumeBasedSlippage(SlippageModel):
         return price - slip
 
 
+def _to_decimal(v):
+    """数值参数归一为 Decimal（兼容 yaml/JSON 传入的 float/int/str；Decimal 原样返回）。
+
+    滑点模型内部以 Decimal 与价格相乘，float 参数会触发
+    ``Decimal * float`` TypeError，故在工厂入口统一转换。
+    """
+    if isinstance(v, Decimal):
+        return v
+    if isinstance(v, (int, float, str)):
+        return Decimal(str(v))
+    return v
+
+
 def create_slippage_model(
     model_type: str = "percentage", **kwargs
 ) -> SlippageModel:
-    """工厂函数：创建滑点模型"""
+    """工厂函数：创建滑点模型（数值参数统一转 Decimal，兼容 yaml/JSON 的 float/int）。"""
     models = {
         "fixed": FixedSlippage,
         "percentage": PercentageSlippage,
@@ -130,4 +143,4 @@ def create_slippage_model(
     cls = models.get(model_type)
     if cls is None:
         raise ValueError(f"Unknown slippage model: {model_type}, available: {list(models.keys())}")
-    return cls(**kwargs)
+    return cls(**{k: _to_decimal(v) for k, v in kwargs.items()})

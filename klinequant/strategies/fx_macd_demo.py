@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from kqsdk.api import KqApi
 from protocol.types import Offset, OrderKind, OrderSide
-from strategy.sdk.api import KqApi
 
 
 def strategy(api: KqApi):

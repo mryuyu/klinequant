@@ -1,0 +1,74 @@
+# KlineQuant 策略配置（多策略 / 多标的 / 多周期，实盘与回测同一份）
+#
+# 运行：
+#   python scripts/run_strategies.py --config config/strategies.yaml --mode live
+#   python scripts/run_strategies.py --config config/strategies.yaml --mode backtest
+#
+# 约定：
+#   - 账户凭证不在此文件：走 config/accounts.yaml + --account（${ENV_VAR} 插值）。
+#   - name = 自定义策略名（不需要与文件名同名），全局唯一；作为敞口 tag /
+#     StateStore key / magic 派生 / 日志前缀的身份标识。
+#   - module = 策略模块导入路径；模块内可用 @strategy(name=...) 注册多个策略函数，
+#     框架按 name 匹配；未注册时回落模块级 strategy 函数（兼容旧写法）。
+#   - params = 策略自定义参数（自由 dict，框架透传给 StrategyContext.params）。
+#   - risk.rules 按 create_default_rules 参数形状配置；未列出的既有规则默认禁用
+#     （FX 语义不适用的名义价值/币数量纲规则：max_order_amount / max_total_position
+#     / available_balance / min_order_quantity 保持禁用）。
+
+defaults:
+  poll_interval: 0.5
+  bar_count: 1000          # MR_Y_CYCLE min_periods=768，故默认 >=800
+  stale_guard: 120         # R5 断线闸门阈值秒（0=禁用）
+  duration: 0              # 实盘运行时长秒（0=不限时，Ctrl+C 优雅退出）
+  magic: 202609            # MT5 执行器实例级回落 magic（多策略按 (account,tag) 派生）
+  deviation: 20            # MT5 滑点容忍 points
+
+risk:                      # 全局风控参数（策略侧 api.risk_check 消费，不强制拦截）
+  rules:
+    max_daily_loss: {enabled: true, max_loss: 200}               # RISK-004 单日最大亏损（账户币）
+    max_strategy_loss: {enabled: true, max_loss: 100}            # RISK-005 单策略最大亏损
+    consecutive_loss: {enabled: true, max_consecutive_losses: 5} # RISK-010 连续亏损限制
+    max_position_per_symbol: {enabled: true, max_quantity: 1.0}  # RISK-002 单品种最大持仓（手数）
+    order_frequency: {enabled: true, max_orders: 10, window_seconds: 60}  # RISK-006
+    price_deviation: {enabled: false}                            # RISK-007（市价单自动跳过）
+    night_trading: {enabled: false}                              # RISK-011
+    new_symbol: {enabled: false}                                 # RISK-012 白名单
+  # SDK 轨新增规则（kqsdk/risk_rules.py）
+  max_daily_loss_pct: 2.0        # 与 max_daily_loss 金额取先到先拒（0=禁用）
+  max_total_positions: 10        # 全局持仓笔数上限，跨策略汇总（0=禁用）
+  max_positions_per_strategy: 3  # 单策略持仓笔数上限（0=禁用）
+
+backtest:
+  initial_capital: 10000
+  history_bars: 3000
+  account_currency: USD
+  slippage: {model: percentage, params: {pct: 0.0001}}
+  fee: {model: fixed, params: {fee_per_trade: 0}}
+
+strategies:
+  # ─── 标准示范策略：双均线（主循环+新K线判定+信号+风控+发单 五段式模板）───
+  - name: dualma-eur            # 自定义策略名（≠文件名 sdk_dual_ma）
+    module: strategies.sdk_dual_ma
+    enabled: true
+    symbols: [EURUSD]
+    period: 1m                  # 主/驱动周期
+    periods: [1m, 15m]          # 订阅周期（1m 线程跨周期读 15m 指标做趋势过滤）
+    params:
+      fast: 7                   # 短期均线
+      slow: 25                  # 长期均线
+      trend_period: 15m         # 趋势过滤周期（跨周期共享）
+      trend_ma: 50              # 趋势均线周期
+      risk_pct: 1.0             # 单笔风险 = 账户权益 × 1%
+      atr_period: 14            # 止损距离 = ATR × atr_mult + 点差
+      atr_mult: 1.5
+      use_mry: false            # true 时附加 MR_Y_MAIN / MACD_MINI 确认（示范自定义指标）
+    max_consecutive_errors: 20
+
+  # ─── 同模块第二实例（不同 name/params/symbols，演示多策略并行）───
+  # - name: dualma-gbp
+  #   module: strategies.sdk_dual_ma
+  #   enabled: true
+  #   symbols: [GBPUSD]
+  #   period: 1m
+  #   periods: [1m, 15m]
+  #   params: {fast: 5, slow: 20, trend_period: 15m, trend_ma: 50, risk_pct: 0.5}

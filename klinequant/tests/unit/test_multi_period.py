@@ -14,9 +14,9 @@ from decimal import Decimal
 from core.trade_engine.executors.mt5_executor import SubmitResult
 from core.trade_engine.ledger import ExposureLedger
 from core.trade_engine.resolver import UnifiedResolver, derive_magic
+from kqsdk.api import KqApi
+from kqsdk.live_runner import LiveRunner
 from protocol.types import Offset, OrderSide, SymbolInfo
-from strategy.sdk.api import KqApi
-from strategy.sdk.live_runner import LiveRunner
 
 # ─── 常量 ───
 
@@ -194,20 +194,23 @@ def test_reconcile_targets_single_period():
     """单周期 → [(base tag, base magic)]（完全等价旧口径，后向兼容）。
 
     _FakeBackend 无 account_magic → self._magic=None（回落执行器实例级），与 M4 之前一致。
+    多策略重构后 _reconcile_targets 按策略实例取目标；单策略路径即 _strategies[0]。
     """
     runner = _make_runner(period="1h")
-    assert runner._multi_period is False
-    assert runner._reconcile_targets() == [(BASE, None)]
+    strat = runner._strategies[0]
+    assert len(strat.periods) == 1                     # 单周期
+    assert runner._reconcile_targets(strat) == [(BASE, None)]
     # 显式 magic 覆盖时沿用覆盖值
     runner_ov = _make_runner(period="1h", magic=4242)
-    assert runner_ov._reconcile_targets() == [(BASE, 4242)]
+    assert runner_ov._reconcile_targets(runner_ov._strategies[0]) == [(BASE, 4242)]
 
 
 def test_reconcile_targets_multi_period():
     """多周期 → 逐 period 返回 (`{base}:{period}`, 派生 magic)，各周期独立对账。"""
     runner = _make_runner(period="1h", periods=["1h", "15m"])
-    assert runner._multi_period is True
-    assert runner._reconcile_targets() == [
+    strat = runner._strategies[0]
+    assert len(strat.periods) > 1                      # 多周期
+    assert runner._reconcile_targets(strat) == [
         (f"{BASE}:1h", derive_magic(ACCT, f"{BASE}:1h")),
         (f"{BASE}:15m", derive_magic(ACCT, f"{BASE}:15m")),
     ]

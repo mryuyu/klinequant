@@ -26,8 +26,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from strategy.sdk.backtest_runner import BacktestRunner  # noqa: E402
 from config.accounts import AccountConfigError, resolve_account  # noqa: E402
+from kqsdk.backtest_runner import BacktestRunner  # noqa: E402
 
 
 def setup_logging(verbose: bool = False) -> None:

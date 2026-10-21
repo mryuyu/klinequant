@@ -34,9 +34,9 @@ from core.trade_engine.executors.mt5_executor import Mt5Executor
 from core.trade_engine.ledger import ExposureLedger
 from core.trade_engine.spec_loader import load_spec_from_mt5
 from gateway.market_sources.mt5_driver import Mt5Api
+from kqsdk.api import DataFeedProtocol, ExecutorProtocol
+from kqsdk.data_feed import Mt5DataFeed
 from protocol.types import Offset, OrderSide, SymbolInfo
-from strategy.sdk.api import DataFeedProtocol, ExecutorProtocol
-from strategy.sdk.data_feed import Mt5DataFeed
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,16 @@ class MarketBackend(Protocol):
         symbols: List[str], tag: str, magic: Optional[int] = None,
     ) -> None:
         """启动时从 venue 对账恢复持仓到 ledger（magic 非 None 时按 magic 隔离）。"""
+        ...
+
+    def profit_calc(
+        self, symbol: str, price_delta: Decimal, volume: Decimal,
+    ) -> Optional[Decimal]:
+        """价格变动 ``price_delta``、量 ``volume`` 的账户币盈亏（KqApi.calc_qty 换算用）。
+
+        MT5 走 order_calc_profit（精确含交叉盘）；Binance USDT-M 恒等换算。
+        无法换算时返回 None（调用方回落 spec 名义计算）。
+        """
         ...
 
     def shutdown(self) -> None:
@@ -219,6 +229,29 @@ class Mt5Backend:
     ) -> None:
         """逐品种从 MT5 对账恢复持仓（净敞口 = 该品种所有持仓带符号求和）"""
         _reconcile_net_positions(executor, ledger, symbols, tag, venue="MT5", magic=magic)
+
+    def profit_calc(
+        self, symbol: str, price_delta: Decimal, volume: Decimal,
+    ) -> Optional[Decimal]:
+        """MT5 order_calc_profit 推导账户币盈亏（精确含交叉盘 quote→账户币换算）。
+
+        以当前 bid 为开仓价、bid+price_delta 为平仓价，BUY 方向算 volume 手的利润。
+        驱动未连接 / 无行情 / 计算失败 → None（调用方回落名义计算）。
+        """
+        if self._driver is None:
+            return None
+        try:
+            tick = self._driver.symbol_info_tick(symbol)
+            p = float(tick.get("bid") or 0) if tick else 0.0
+            if p <= 0:
+                return None
+            profit = self._driver.order_calc_profit(
+                0, symbol, float(volume), p, p + float(price_delta)
+            )
+        except Exception as e:
+            logger.warning(f"[MT5] profit_calc({symbol}) failed: {e}")
+            return None
+        return Decimal(str(profit)) if profit is not None else None
 
     def shutdown(self) -> None:
         if self._driver:
@@ -339,6 +372,7 @@ class BinanceBackend:
 
     async def _async_connect(self) -> None:
         import httpx
+
         from core.market_engine.adapters.binance_futures import BinanceFuturesAdapter
 
         self._adapter = BinanceFuturesAdapter({
@@ -448,7 +482,7 @@ class BinanceBackend:
         self, symbols: List[str], periods: List[str],
         poll_interval: float, bar_count: int,
     ) -> DataFeedProtocol:
-        from strategy.sdk.binance_feed import BinanceDataFeed
+        from kqsdk.binance_feed import BinanceDataFeed
 
         return BinanceDataFeed(
             loop=self._loop, adapter=self._adapter, symbols=symbols,
@@ -461,6 +495,12 @@ class BinanceBackend:
     ) -> None:
         """逐品种从币安对账恢复持仓（One-way，同 MT5）"""
         _reconcile_net_positions(executor, ledger, symbols, tag, venue="Binance", magic=magic)
+
+    def profit_calc(
+        self, symbol: str, price_delta: Decimal, volume: Decimal,
+    ) -> Optional[Decimal]:
+        """USDT-M 线性合约：账户币=USDT，盈亏 = volume × price_delta（恒等换算）。"""
+        return Decimal(str(price_delta)) * Decimal(str(volume))
 
     def shutdown(self) -> None:
         if self._loop and self._loop.is_running():

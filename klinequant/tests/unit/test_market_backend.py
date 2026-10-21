@@ -15,9 +15,9 @@ import pytest
 
 from core.trade_engine.executors.mt5_executor import SubmitResult
 from core.trade_engine.ledger import ExposureLedger
+from kqsdk.backend import BinanceBackend, MarketBackend, Mt5Backend
+from kqsdk.live_runner import LiveRunner
 from protocol.types import Offset, SymbolInfo
-from strategy.sdk.backend import BinanceBackend, MarketBackend, Mt5Backend
-from strategy.sdk.live_runner import LiveRunner
 
 
 def _fx_spec(symbol="EURUSD"):
@@ -44,10 +44,10 @@ def _run_mt5_runner(symbols, positions):
         seen.append((api._symbol, tuple(api.symbols())))
         # 立即退出（wait_update 返回 False）→ 线程结束 → 触发 shutdown flatten
 
-    with mock.patch("strategy.sdk.backend.Mt5Api") as MockApi, \
-         mock.patch("strategy.sdk.backend.load_spec_from_mt5") as mock_spec, \
-         mock.patch("strategy.sdk.backend.Mt5Executor") as MockExec, \
-         mock.patch("strategy.sdk.backend.Mt5DataFeed") as MockFeed:
+    with mock.patch("kqsdk.backend.Mt5Api") as MockApi, \
+         mock.patch("kqsdk.backend.load_spec_from_mt5") as mock_spec, \
+         mock.patch("kqsdk.backend.Mt5Executor") as MockExec, \
+         mock.patch("kqsdk.backend.Mt5DataFeed") as MockFeed:
 
         driver = MockApi.return_value
         driver.initialize.return_value = True
@@ -180,7 +180,7 @@ def test_binance_load_specs():
 
 def test_binance_make_executor_and_feed():
     from core.trade_engine.executors.binance_executor import BinanceExecutor
-    from strategy.sdk.binance_feed import BinanceDataFeed
+    from kqsdk.binance_feed import BinanceDataFeed
 
     backend = BinanceBackend(["BTCUSDT"], api_key="k", api_secret="s")
     backend._ensure_loop()

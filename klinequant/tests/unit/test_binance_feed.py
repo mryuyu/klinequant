@@ -13,8 +13,8 @@ from decimal import Decimal
 
 import pytest
 
+from kqsdk.binance_feed import BinanceDataFeed
 from protocol.types import Kline
-from strategy.sdk.binance_feed import BinanceDataFeed
 
 
 def _kline(ts, o, h, l, c, v, symbol="BTCUSDT", tf="1m", closed=True):

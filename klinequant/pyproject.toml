@@ -1,5 +1,5 @@
 [project]
-name = "klinequant"
+name = "kqsdk"
 version = "1.0.0"
 description = "面向专业量化交易者的小型团队级量化交易平台"
 requires-python = ">=3.10"
@@ -74,3 +74,18 @@ testpaths = ["tests"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# kqsdk 为对外策略 SDK 公开入口（from kqsdk import strategy, KqApi, ...），
+# 但运行期与平台内部包强耦合（backend 引 gateway.market_sources、api/live_runner 引
+# core.*/protocol.*/config.*）。hatchling 默认只按发行版名发现 kqsdk/，故需显式
+# 声明 packages 闭包，否则 pip 安装后 import kqsdk 会因缺依赖而失败。
+[tool.hatch.build.targets.wheel]
+packages = [
+    "kqsdk",
+    "protocol",
+    "core",
+    "config",
+    "gateway",
+    "custom_indicators",
+    "storage",
+]

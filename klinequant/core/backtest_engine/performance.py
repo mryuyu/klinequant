@@ -24,7 +24,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -41,6 +41,7 @@ class Trade:
     pnl: Decimal  # 净盈亏（扣费后）
     fee: Decimal
     bars_held: int = 0
+    strategy: str = ""  # 归属策略名（=敞口 tag；多策略回测按此拆分报表，单策略恒空）
 
 
 @dataclass

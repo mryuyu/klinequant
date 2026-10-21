@@ -25,8 +25,7 @@ from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from protocol.transport.zmq_transport import ZmqTransport
-from strategy.sdk.dist_protocol import (
+from kqsdk.dist_protocol import (
     ACTION_CANCEL,
     ACTION_FLATTEN,
     ACTION_ORDER,
@@ -43,6 +42,7 @@ from strategy.sdk.dist_protocol import (
     parse_message,
     report_to_message,  # noqa: F401  (再导出便于测试/复用)
 )
+from protocol.transport.zmq_transport import ZmqTransport
 
 if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合 notification
     from core.notification.alert_manager import AlertManager

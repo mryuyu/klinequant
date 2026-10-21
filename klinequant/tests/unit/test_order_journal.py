@@ -13,10 +13,9 @@ from decimal import Decimal
 from core.trade_engine.executors.mt5_executor import SubmitResult
 from core.trade_engine.ledger import ExposureLedger
 from core.trade_engine.resolver import UnifiedResolver
-from protocol.types import Offset, OrderKind, OrderSide, SymbolInfo
-from strategy.sdk.api import KqApi
-from strategy.sdk.order_id import OrderIdFactory
-from strategy.sdk.order_journal import (
+from kqsdk.api import KqApi
+from kqsdk.order_id import OrderIdFactory
+from kqsdk.order_journal import (
     STATE_DEAD,
     STATE_FILLED,
     STATE_IN_FLIGHT,
@@ -25,6 +24,7 @@ from strategy.sdk.order_journal import (
     InMemoryJournal,
     SqliteJournal,
 )
+from protocol.types import Offset, OrderKind, OrderSide, SymbolInfo
 
 # ─── SqliteJournal：seq ───
 

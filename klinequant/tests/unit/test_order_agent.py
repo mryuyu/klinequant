@@ -15,16 +15,16 @@ import time
 from decimal import Decimal
 from types import SimpleNamespace
 
-from protocol.messages import Message
-from protocol.types import Offset, OrderResult, OrderSide
-from strategy.sdk.dist_protocol import (
+from kqsdk.dist_protocol import (
     ACTION_CANCEL,
     ACTION_FLATTEN,
     ACTION_ORDER,
     OrderIntent,
     intent_to_message,
 )
-from strategy.sdk.order_agent import AgentDedup, OrderAgent
+from kqsdk.order_agent import AgentDedup, OrderAgent
+from protocol.messages import Message
+from protocol.types import Offset, OrderResult, OrderSide
 
 TOKEN = "agent-token"
 

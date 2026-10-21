@@ -12,17 +12,18 @@ from __future__ import annotations
 
 import logging
 import time
-from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
+from decimal import ROUND_DOWN, Decimal
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol
 
+from core.risk_engine.rules.base import RiskCheckResult
 from core.trade_engine.ledger import ExposureLedger
 from core.trade_engine.resolver import (
     OrderRequest,
-    Resolution,
     UnifiedResolver,
     VenueOrderSpec,
     derive_magic,
 )
+from kqsdk.state_store import StateStore
 from protocol.types import (
     Account,
     Offset,
@@ -35,13 +36,12 @@ from protocol.types import (
     Tick,
     Tif,
 )
-from strategy.sdk.state_store import StateStore
 
 if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合 order_journal / indicator_engine
     from core.indicator_engine.engine import IndicatorEngine
-    from strategy.sdk.broadcaster import SignalBroadcaster
-    from strategy.sdk.indic import IndicApi
-    from strategy.sdk.order_journal import Journal
+    from kqsdk.broadcaster import SignalBroadcaster
+    from kqsdk.indic import IndicApi
+    from kqsdk.order_journal import Journal
 
 logger = logging.getLogger(__name__)
 
@@ -148,9 +148,21 @@ class KqApi:
         engine_lock: Optional[Any] = None,
         periods: list[str] | None = None,
         broadcaster: Optional["SignalBroadcaster"] = None,
+        strategy_name: str = "",
+        risk_adapter: Optional[Any] = None,
+        profit_calc: Optional[Callable[[str, Decimal, Decimal], Optional[Decimal]]] = None,
     ):
         self._symbol = symbol
         self._period = period
+        # 多策略框架：策略名（≠文件名）；日志前缀 / risk_check strategy_id 用它。
+        #   未注入（旧构造路径）时回落 tag（单策略场景 tag 即身份）。
+        self._strategy_name = strategy_name or tag
+        # 风控内核（SdkRiskAdapter，runner 注入；None=risk_check 降级本地检查，
+        #   回测/单测零破坏）
+        self._risk_adapter = risk_adapter
+        # 交叉盘换算钩子 profit_calc(symbol, price_delta, volume)→账户币盈亏
+        #   （实盘 = backend.profit_calc 走 MT5 order_calc_profit；None=按 spec 名义回落）
+        self._profit_calc = profit_calc
         # M4 多周期：本 KqApi（绑定一个 symbol）可访问该 symbol 的多个 period；
         #   self._period 为主/默认周期（period=None 时的回落）。
         self._periods: list[str] = list(periods) if periods else [period]
@@ -294,7 +306,7 @@ class KqApi:
                 raise RuntimeError(
                     "api.INDIC() 需要 runner 注入 IndicatorEngine（当前未注入）"
                 )
-            from strategy.sdk.indic import IndicApi
+            from kqsdk.indic import IndicApi
             indic = IndicApi(
                 self._engine, self._feed, self._symbol, self._exchange,
                 per, lock=self._engine_lock,
@@ -678,11 +690,148 @@ class KqApi:
         finally:
             self._suppress_broadcast -= 1
 
+    # ═══════════ 资金管理 + 风控助手（策略侧，不强制拦截 send_order）═══════════
+
+    def _account_equity(self) -> Decimal:
+        """当前账户权益（账户币）= balance + 浮动盈亏。"""
+        acc = self.account()
+        return acc.total_balance + acc.unrealized_pnl
+
+    def _loss_per_unit(self, sym: str, stop_distance: Decimal) -> Decimal:
+        """每单位量（1 手 / 1 币）在 stop_distance 价格变动下的账户币损失（正数）。
+
+        优先用注入的 profit_calc（实盘 MT5 order_calc_profit 精确含交叉盘换算）；
+        无钩子或钩子失败时回落 spec 名义计算（stop_distance × contract_multiplier，
+        假设 quote≈账户币，回测/单测常见路径）。
+        """
+        if self._profit_calc is not None:
+            try:
+                profit = self._profit_calc(sym, stop_distance, Decimal("1"))
+                if profit is not None:
+                    val = abs(Decimal(str(profit)))
+                    if val > 0:
+                        return val
+            except Exception as e:  # 换算失败仅告警，回落名义计算
+                logger.warning(f"[CALC_QTY] profit_calc({sym}) failed, fallback: {e}")
+        spec = self._spec_for(sym)
+        mult = spec.contract_multiplier or Decimal("1")
+        return stop_distance * mult
+
+    def calc_qty(
+        self,
+        symbol: str = None,
+        *,
+        risk_amount: Decimal | float | str | None = None,
+        risk_pct: Decimal | float | str | None = None,
+        stop_distance: Decimal | float | str,
+    ) -> Decimal:
+        """按止损风险反推下单量（需求 5：单笔最大固定金额 / 百分比）。
+
+        风险额二选一（都给时 risk_amount 优先）：
+          - ``risk_amount``：固定金额（账户币）；
+          - ``risk_pct``：账户权益的百分比（如 1.0 = 1%）。
+
+        qty = 风险额 / 每单位止损损失，再按 ``qty_step`` 向下取整、钳制到
+        ``[min_qty, qty_max]``；不足 ``min_qty`` 返回 0（拒开，仓位太小无意义）。
+
+        Returns:
+            Decimal 下单量（0 = 风险额过小 / 参数非法，应拒开）。
+        """
+        sym = symbol or self._symbol
+        spec = self._spec_for(sym)
+        stop = Decimal(str(stop_distance))
+        if stop <= 0:
+            logger.warning(f"[CALC_QTY] {sym}: stop_distance<=0 ({stop})，返回 0")
+            return Decimal("0")
+
+        if risk_amount is not None:
+            risk = Decimal(str(risk_amount))
+        elif risk_pct is not None:
+            risk = self._account_equity() * Decimal(str(risk_pct)) / Decimal("100")
+        else:
+            raise ValueError("calc_qty 需要 risk_amount 或 risk_pct 之一")
+        if risk <= 0:
+            logger.warning(f"[CALC_QTY] {sym}: 风险额<=0 ({risk})，返回 0")
+            return Decimal("0")
+
+        loss_per_unit = self._loss_per_unit(sym, stop)
+        if loss_per_unit <= 0:
+            logger.warning(f"[CALC_QTY] {sym}: 每单位损失<=0，返回 0")
+            return Decimal("0")
+
+        raw = risk / loss_per_unit
+        step = spec.qty_step or Decimal("0")
+        if step > 0:
+            qty = (raw / step).to_integral_value(rounding=ROUND_DOWN) * step
+        else:
+            qty = raw
+
+        min_qty = spec.min_qty or Decimal("0")
+        if qty < min_qty:
+            logger.info(
+                f"[CALC_QTY] {sym}: qty {qty} < min_qty {min_qty}，拒开（返回 0）"
+            )
+            return Decimal("0")
+        if spec.qty_max and spec.qty_max > 0 and qty > spec.qty_max:
+            qty = spec.qty_max
+        return qty
+
+    def risk_check(
+        self,
+        symbol: str,
+        side: OrderSide,
+        offset: Offset,
+        qty: Decimal,
+        *,
+        kind: OrderKind = OrderKind.MARKET,
+        price: Decimal = None,
+        period: str = None,
+    ) -> RiskCheckResult:
+        """下单前风控预检（需求 7：全局风控汇总；策略侧助手，不强制拦截）。
+
+        内核 = runner 注入的共享 SdkRiskAdapter（RiskEngine + 全局状态供给）；
+        未注入时（回测/单测）降级为本地检查（qty>0 且 >= min_qty）。
+
+        策略约定：``risk_check(...).passed`` 为 True 才 ``send_order(...)``。
+        """
+        sym = symbol or self._symbol
+        tag = self._tag_for(period)
+        if self._risk_adapter is None:
+            return self._local_risk_check(sym, qty)
+        last_price = None
+        if price is None:
+            tick = self._feed.latest_tick(sym)
+            last_price = tick.last_price if tick is not None else None
+        try:
+            return self._risk_adapter.check(
+                symbol=sym, tag=tag, side=side, offset=offset, qty=qty,
+                kind=kind, price=price, last_price=last_price,
+                account=self.account(),
+            )
+        except Exception as e:  # 风控内核异常 → fail-closed（拒绝，只影响本次决策）
+            logger.error(f"[RISK] risk_check({sym}) 异常，fail-closed 拒绝: {e}", exc_info=True)
+            return RiskCheckResult.reject("risk_adapter", f"exception: {e}", "CRITICAL")
+
+    def _local_risk_check(self, sym: str, qty: Decimal) -> RiskCheckResult:
+        """无 RiskEngine 注入时的本地降级检查（回测/单测零破坏）。"""
+        if qty is None or qty <= 0:
+            return RiskCheckResult.reject("local", f"invalid qty {qty}")
+        try:
+            spec = self._spec_for(sym)
+        except KeyError:
+            return RiskCheckResult.ok("local")
+        min_qty = spec.min_qty or Decimal("0")
+        if min_qty > 0 and qty < min_qty:
+            return RiskCheckResult.reject("local", f"qty {qty} < min_qty {min_qty}")
+        return RiskCheckResult.ok("local")
+
     # ═══════════ 辅助 ═══════════
 
     def log(self, msg: str, level: str = "INFO") -> None:
-        """写策略日志（多品种共享日志时按 symbol 区分）。"""
-        getattr(logger, level.lower(), logger.info)(f"[STRATEGY:{self._symbol}] {msg}")
+        """写策略日志（带策略名 + 品种前缀，多策略/多品种共享日志时可区分）。"""
+        getattr(logger, level.lower(), logger.info)(
+            f"[STRATEGY:{self._strategy_name}:{self._symbol}] {msg}"
+        )
 
     def now(self) -> int:
         """当前时间戳（Unix ms）。"""

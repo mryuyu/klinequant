@@ -8,8 +8,8 @@ from decimal import Decimal
 import pytest
 
 from core.trade_engine.ledger import ExposureLedger
+from kqsdk.api import KqApi
 from protocol.types import Offset, OrderKind, OrderSide, SymbolInfo
-from strategy.sdk.api import KqApi
 
 
 def _spec(symbol: str, pip: str) -> SymbolInfo:

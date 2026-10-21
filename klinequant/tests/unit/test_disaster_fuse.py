@@ -19,8 +19,8 @@ from core.trade_engine.resolver import (
     UnifiedResolver,
     VenueOrderSpec,
 )
+from kqsdk.api import KqApi
 from protocol.types import Offset, OrderKind, OrderSide
-from strategy.sdk.api import KqApi
 from tests.unit.test_multi_period import _FillExec, _fx_spec, _NullFeed
 
 # ─── resolver：sl/tp 传播 ───

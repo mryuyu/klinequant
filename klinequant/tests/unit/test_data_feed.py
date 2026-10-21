@@ -9,9 +9,9 @@
 import threading
 import time
 
-from strategy.sdk.api import KqApi
-from strategy.sdk.backtest_feed import BacktestDataFeed
-from strategy.sdk.data_feed import Mt5DataFeed
+from kqsdk.api import KqApi
+from kqsdk.backtest_feed import BacktestDataFeed
+from kqsdk.data_feed import Mt5DataFeed
 
 
 class _FakeDriver:

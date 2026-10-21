@@ -16,8 +16,8 @@ from core.trade_engine.resolver import (
     UnifiedResolver,
     derive_magic,
 )
+from kqsdk.order_id import DEFAULT_MAX_LEN, OrderIdFactory
 from protocol.types import Offset, OrderKind, OrderSide, SymbolInfo
-from strategy.sdk.order_id import DEFAULT_MAX_LEN, OrderIdFactory
 
 # 币安 newClientOrderId 字符集：^[\.A-Za-z0-9_-]{1,36}$
 _BINANCE_CHARSET = re.compile(r"^[.A-Za-z0-9_-]+$")

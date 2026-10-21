@@ -289,7 +289,7 @@ def test_sign_params_default_offset_zero(loop):
 async def test_backend_sync_server_time_computes_offset():
     import time as _time
 
-    from strategy.sdk.backend import BinanceBackend
+    from kqsdk.backend import BinanceBackend
 
     backend = BinanceBackend(["BTCUSDT"], api_key="k", api_secret="s")
     fake_server = int(_time.time() * 1000) + 5000
@@ -305,7 +305,7 @@ async def test_backend_sync_server_time_computes_offset():
 
 
 async def test_backend_sync_server_time_failure_falls_back():
-    from strategy.sdk.backend import BinanceBackend
+    from kqsdk.backend import BinanceBackend
 
     backend = BinanceBackend(["BTCUSDT"], api_key="k", api_secret="s")
     client = mock.Mock()

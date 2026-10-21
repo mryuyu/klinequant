@@ -30,8 +30,8 @@ from core.backtest_engine.slippage import create_slippage_model
 from core.trade_engine.executors.mt5_executor import SubmitResult
 from core.trade_engine.resolver import VenueOrderSpec
 from gateway.market_sources.mt5_driver import TRADE_RETCODE_DONE
+from kqsdk.backtest_feed import BacktestDataFeed
 from protocol.types import DeadReason, OrderKind, OrderSide, SymbolInfo
-from strategy.sdk.backtest_feed import BacktestDataFeed
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +121,7 @@ class BacktestExecutor:
 
         self._total_fees += fee
         self._cash -= fee
-        self._apply_fill(sym, spec.side, spec.qty, fill_price, fee, info)
+        self._apply_fill(sym, spec.side, spec.qty, fill_price, fee, info, spec.tag)
 
         self._ticket_seq += 1
         logger.debug(
@@ -268,8 +268,9 @@ class BacktestExecutor:
     def _apply_fill(
         self, sym: str, side: OrderSide, qty: Decimal,
         fill_price: Decimal, fee: Decimal, info: SymbolInfo,
+        tag: str = "",
     ) -> None:
-        """更新净持仓 + 结算已实现盈亏 + 记录 Trade"""
+        """更新净持仓 + 结算已实现盈亏 + 记录 Trade（tag=归属策略名）。"""
         mult = info.contract_multiplier
         signed = qty if side == OrderSide.BUY else -qty
         pos = self._pos.get(sym)
@@ -310,6 +311,7 @@ class BacktestExecutor:
                 pnl=gross - trade_fee,
                 fee=trade_fee,
                 bars_held=max(0, cur_index - pos.entry_index),
+                strategy=tag,
             ))
             pos.qty -= closed
             pos.acc_fee -= open_fee_portion

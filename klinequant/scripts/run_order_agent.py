@@ -6,7 +6,7 @@ lead_intent_endpoint / report_endpoint / token / lead_timeout）构造 OrderAgen
 
 OrderAgent **不含任何策略代码**：只订阅 lead 广播的白名单指令（下单/撤单/清仓/心跳），
 经幂等去重 → 缩放 → 品种映射 → 本地执行 → 回报回流。信任边界见
-``strategy/sdk/dist_protocol.py``（非白名单 / token 不符 → 丢弃 + 告警，绝不执行）。
+``kqsdk/dist_protocol.py``（非白名单 / token 不符 → 丢弃 + 告警，绝不执行）。
 
 前提：
   1. lead 侧已运行（run_crypto_live.py / run_fx_live.py，账户 role=lead）。
@@ -40,11 +40,11 @@ from gateway.env import load_env  # noqa: E402
 load_env()  # 凭证从 klinequant/.env 加载（已有环境变量不覆盖）
 
 from config.accounts import AccountConfigError, resolve_account  # noqa: E402
-from strategy.sdk.dist_protocol import (  # noqa: E402
+from kqsdk.dist_protocol import (  # noqa: E402
     DEFAULT_INTENT_ENDPOINT,
     DEFAULT_REPORT_ENDPOINT,
 )
-from strategy.sdk.order_agent import OrderAgent  # noqa: E402
+from kqsdk.order_agent import OrderAgent  # noqa: E402
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -66,7 +66,7 @@ def setup_logging(verbose: bool = False) -> None:
 def _build_backend(account, symbols: list[str], args):
     """按账户 market 构造 Mt5Backend / BinanceBackend。"""
     if account.market == "crypto":
-        from strategy.sdk.backend import BinanceBackend
+        from kqsdk.backend import BinanceBackend
 
         b = account.binance
         if b is None or not b.api_key or not b.api_secret:
@@ -90,7 +90,7 @@ def _build_backend(account, symbols: list[str], args):
             account=account,
         )
     # fx
-    from strategy.sdk.backend import Mt5Backend
+    from kqsdk.backend import Mt5Backend
 
     return Mt5Backend(magic=args.magic, deviation=args.deviation, account=account)
 

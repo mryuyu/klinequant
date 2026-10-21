@@ -24,7 +24,7 @@ from gateway.routers.backtest_fx import (
     _serialize_report,
     _serialize_trade,
 )
-from strategy.sdk.backtest_runner import BacktestReport, SymbolBacktestResult
+from kqsdk.backtest_runner import BacktestReport, SymbolBacktestResult
 
 
 @pytest.fixture
@@ -118,7 +118,7 @@ class _FakeRunner:
 
 def test_run_fx_sync_serializes_results(monkeypatch):
     monkeypatch.setattr(backtest_fx, "_load_strategy", lambda name: (lambda api: None))
-    monkeypatch.setattr("strategy.sdk.backtest_runner.BacktestRunner", _FakeRunner)
+    monkeypatch.setattr("kqsdk.backtest_runner.BacktestRunner", _FakeRunner)
 
     body = FxBacktestRunRequest(
         symbols=["EURUSD"], period="1m", strategy="fx_simple_test",

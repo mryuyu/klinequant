@@ -19,10 +19,9 @@ from decimal import Decimal
 from core.trade_engine.executors.mt5_executor import SubmitResult
 from core.trade_engine.ledger import ExposureLedger
 from core.trade_engine.resolver import UnifiedResolver
-from protocol.types import Offset, OrderKind, OrderSide, SymbolInfo
-from strategy.sdk.api import KqApi
-from strategy.sdk.live_runner import LiveRunner
-from strategy.sdk.order_journal import (
+from kqsdk.api import KqApi
+from kqsdk.live_runner import LiveRunner
+from kqsdk.order_journal import (
     STATE_DEAD,
     STATE_FILLED,
     STATE_IN_FLIGHT,
@@ -30,6 +29,7 @@ from strategy.sdk.order_journal import (
     STATE_UNKNOWN,
     SqliteJournal,
 )
+from protocol.types import Offset, OrderKind, OrderSide, SymbolInfo
 
 # ─── 常量 ───
 
@@ -162,6 +162,8 @@ def _restart_runner(journal_path, executor, *, symbols=("EURUSD",), tag=TAG, acc
     runner._executor = executor
     runner._ledger = ExposureLedger()              # 重启后账本从零（内存态全丢）
     runner._apis = {s: _StubApi(s) for s in symbols}
+    # 多策略重构后 _recover 经 strat.apis 补 ticket；单策略路径共享同一扁平视图
+    runner._strategies[0].apis = runner._apis
     return runner, journal
 
 

@@ -12,9 +12,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from protocol.codec import deserialize_message, serialize_message
-from protocol.messages import Message
-from strategy.sdk.dist_protocol import (
+from kqsdk.dist_protocol import (
     ACTION_CANCEL,
     ACTION_FLATTEN,
     ACTION_ORDER,
@@ -33,6 +31,8 @@ from strategy.sdk.dist_protocol import (
     parse_message,
     report_to_message,
 )
+from protocol.codec import deserialize_message, serialize_message
+from protocol.messages import Message
 
 TOKEN = "s3cr3t-token"
 
@@ -230,5 +230,5 @@ def test_empty_payload_token_rejected():
 # topic 常量（broadcaster / agent 共用）
 # ═══════════════════════════════════════════
 def test_topic_constants_distinct():
-    from strategy.sdk.dist_protocol import TOPIC_HEARTBEAT
+    from kqsdk.dist_protocol import TOPIC_HEARTBEAT
     assert len({TOPIC_INTENT, TOPIC_HEARTBEAT, TOPIC_REPORT}) == 3

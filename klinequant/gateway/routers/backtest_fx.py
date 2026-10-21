@@ -1,6 +1,6 @@
 """FX 同构回测路由
 
-复用 strategy/sdk 的 BacktestRunner（回测/实盘同构：同一份 strategy(api: KqApi)，
+复用 kqsdk 的 BacktestRunner（回测/实盘同构：同一份 strategy(api: KqApi)，
 MT5 历史数据驱动），把绩效报告 / 资金曲线 / 交易明细暴露给前端 BacktestView。
 
 与旧 backtest.py（币安 REST + BacktestEngine + dual_ma 回调式）并存、互不影响：
@@ -119,7 +119,7 @@ def _serialize_trade(t: Any) -> Dict[str, Any]:
 
 def _run_fx_backtest_sync(task_id: str, body: FxBacktestRunRequest):
     """线程池内同步执行 BacktestRunner（内部起 MT5 子进程拉历史 + 回放）。"""
-    from strategy.sdk.backtest_runner import BacktestRunner
+    from kqsdk.backtest_runner import BacktestRunner
 
     try:
         _tasks[task_id]["status"] = "RUNNING"

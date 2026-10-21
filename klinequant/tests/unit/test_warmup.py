@@ -8,7 +8,7 @@
 """
 import time
 
-from strategy.sdk.data_feed import Mt5DataFeed
+from kqsdk.data_feed import Mt5DataFeed
 
 
 def _rows(n=5, start_sec=1_700_000_000):

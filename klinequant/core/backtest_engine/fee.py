@@ -112,8 +112,21 @@ class TieredFee(FeeModel):
         return price * quantity * rate
 
 
+def _to_decimal(v):
+    """数值参数归一为 Decimal（兼容 yaml/JSON 传入的 float/int/str；Decimal 原样返回）。
+
+    手续费模型内部以 Decimal 与价格/数量相乘，float 参数会触发
+    ``Decimal * float`` TypeError，故在工厂入口统一转换。
+    """
+    if isinstance(v, Decimal):
+        return v
+    if isinstance(v, (int, float, str)):
+        return Decimal(str(v))
+    return v
+
+
 def create_fee_model(model_type: str = "percentage", **kwargs) -> FeeModel:
-    """工厂函数：创建手续费模型"""
+    """工厂函数：创建手续费模型（数值参数统一转 Decimal，兼容 yaml/JSON 的 float/int）。"""
     models = {
         "fixed": FixedFee,
         "percentage": PercentageFee,
@@ -122,4 +135,4 @@ def create_fee_model(model_type: str = "percentage", **kwargs) -> FeeModel:
     cls = models.get(model_type)
     if cls is None:
         raise ValueError(f"Unknown fee model: {model_type}, available: {list(models.keys())}")
-    return cls(**kwargs)
+    return cls(**{k: _to_decimal(v) for k, v in kwargs.items()})

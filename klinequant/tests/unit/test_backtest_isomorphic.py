@@ -13,11 +13,11 @@ from decimal import Decimal
 from core.trade_engine.ledger import ExposureLedger
 from core.trade_engine.resolver import UnifiedResolver
 from core.trade_engine.spec_loader import load_spec_from_mt5_dict
+from kqsdk.api import KqApi
+from kqsdk.backtest_executor import BacktestExecutor
+from kqsdk.backtest_feed import BacktestDataFeed
+from kqsdk.backtest_runner import BacktestRunner
 from protocol.types import Offset, OrderKind, OrderSide
-from strategy.sdk.api import KqApi
-from strategy.sdk.backtest_executor import BacktestExecutor
-from strategy.sdk.backtest_feed import BacktestDataFeed
-from strategy.sdk.backtest_runner import BacktestRunner
 
 BASE_TS = 1_600_000_000_000
 _INFO = {

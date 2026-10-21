@@ -15,14 +15,14 @@ import pytest
 
 from core.trade_engine.executors.mt5_executor import Mt5Executor
 from core.trade_engine.ledger import ExposureLedger
-from protocol.types import Offset, OrderSide
-from strategy.sdk.backend import _reconcile_net_positions
-from strategy.sdk.live_runner import LiveRunner
-from strategy.sdk.order_journal import (
+from kqsdk.backend import _reconcile_net_positions
+from kqsdk.live_runner import LiveRunner
+from kqsdk.order_journal import (
     STATE_DEAD,
     STATE_IN_FLIGHT,
     InMemoryJournal,
 )
+from protocol.types import Offset, OrderSide
 
 # ─── 测试脚手架 ───
 
@@ -77,6 +77,8 @@ def _make_runner(executor, journal, *, symbols=("EURUSD",), tag="macd:1h",
     runner._executor = executor
     runner._ledger = ExposureLedger()
     runner._apis = {s: _StubApi(s) for s in symbols}
+    # 多策略重构后 _recover 经 strat.apis 补 ticket；单策略路径共享同一扁平视图
+    runner._strategies[0].apis = runner._apis
     return runner
 
 
