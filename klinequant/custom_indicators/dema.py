@@ -3,7 +3,7 @@
 公式：DEMA = 2*EMA(close) - EMA(EMA(close))，滞后小于普通 EMA。
 展示主图叠加（pane='main'）与单输出字段缺省命名（返回单个 Node）。
 """
-from core.indicator_engine.graph import ema, pyindicator
+from klinequant.core.indicator_engine.graph import ema, pyindicator
 
 
 @pyindicator(name="DEMA", pane="main", range="price",

@@ -20,7 +20,7 @@ from collections import defaultdict, deque
 from decimal import Decimal
 from typing import Any, Deque, Dict, Optional
 
-from core.risk_engine.rules.base import RiskCheckResult, RiskContext, RiskRule
+from klinequant.core.risk_engine.rules.base import RiskCheckResult, RiskContext, RiskRule
 
 
 class MaxOrderAmountRule(RiskRule):

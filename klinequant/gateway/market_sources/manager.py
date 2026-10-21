@@ -17,9 +17,9 @@ import asyncio
 import logging
 import time
 
-from gateway.market_sources.base import MarketSource
-from gateway.market_sources.derived import bucket_label, daily_need, is_derived, parse_tf
-from gateway.ws import ws_manager
+from klinequant.gateway.market_sources.base import MarketSource
+from klinequant.gateway.market_sources.derived import bucket_label, daily_need, is_derived, parse_tf
+from klinequant.gateway.ws import ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,7 @@ class MarketSourceManager:
         await ws_manager.publish(f"klines.{symbol}", payload)
         # IND-102：驱动指标引擎增量计算并推送 indicators.* 主题（无注册指标时零开销）
         try:
-            from gateway.indicator_service import on_bar
+            from klinequant.gateway.indicator_service import on_bar
             await on_bar(exchange, symbol, timeframe, payload)
         except Exception as e:
             logger.debug(f"Indicator bridge error: {e}")
@@ -309,10 +309,10 @@ def bootstrap_sources() -> None:
         if s.strip()
     }
     if "binance" in enabled:
-        from gateway.market_sources.binance_source import BinanceSource
+        from klinequant.gateway.market_sources.binance_source import BinanceSource
         market_manager.register(BinanceSource())
     if "mt5" in enabled:
-        from gateway.market_sources.mt5_source import Mt5Source
+        from klinequant.gateway.market_sources.mt5_source import Mt5Source
         mt5 = Mt5Source()
         if mt5.available:
             market_manager.register(mt5)
@@ -323,7 +323,7 @@ def bootstrap_sources() -> None:
             )
             market_manager.defer(mt5)
     if "ths" in enabled:
-        from gateway.market_sources.ths_source import ThsSource
+        from klinequant.gateway.market_sources.ths_source import ThsSource
         ths = ThsSource()
         if ths.available:
             market_manager.register(ths)

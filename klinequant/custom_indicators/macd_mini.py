@@ -12,7 +12,7 @@
     - mid_64x = (dif_64x+dea_64x)*0.382 在原版声明后未 plot，为死代码，丢弃
     - 与 macd_multi 同族，仅默认周期（2/5/3）与 DIF/DEA 配色不同
 """
-from core.indicator_engine.graph import ema, pyindicator
+from klinequant.core.indicator_engine.graph import ema, pyindicator
 
 
 @pyindicator(

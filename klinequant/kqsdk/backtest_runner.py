@@ -28,28 +28,28 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
-from core.backtest_engine.performance import (
+from klinequant.core.backtest_engine.performance import (
     PerformanceAnalyzer,
     PerformanceReport,
     Trade,
 )
-from core.indicator_engine.engine import IndicatorEngine
-from core.trade_engine.ledger import ExposureLedger
-from core.trade_engine.resolver import UnifiedResolver
-from core.trade_engine.spec_loader import load_spec_from_mt5
-from gateway.market_sources.mt5_driver import TF_SECONDS, TIMEFRAME_MAP, Mt5Api
-from kqsdk.api import KqApi
-from kqsdk.backtest_executor import BacktestExecutor
-from kqsdk.backtest_feed import BacktestDataFeed
-from kqsdk.backtest_pump import Gate, GatedFeed, run_lockstep
-from kqsdk.live_runner import _make_runner
-from kqsdk.order_id import OrderIdFactory
-from kqsdk.registry import StrategyContext, resolve_strategy_fn
-from kqsdk.risk_adapter import assemble_risk
-from protocol.types import SymbolInfo
+from klinequant.core.indicator_engine.engine import IndicatorEngine
+from klinequant.core.trade_engine.ledger import ExposureLedger
+from klinequant.core.trade_engine.resolver import UnifiedResolver
+from klinequant.core.trade_engine.spec_loader import load_spec_from_mt5
+from klinequant.gateway.market_sources.mt5_driver import TF_SECONDS, TIMEFRAME_MAP, Mt5Api
+from klinequant.kqsdk.api import KqApi
+from klinequant.kqsdk.backtest_executor import BacktestExecutor
+from klinequant.kqsdk.backtest_feed import BacktestDataFeed
+from klinequant.kqsdk.backtest_pump import Gate, GatedFeed, run_lockstep
+from klinequant.kqsdk.live_runner import _make_runner
+from klinequant.kqsdk.order_id import OrderIdFactory
+from klinequant.kqsdk.registry import StrategyContext, resolve_strategy_fn
+from klinequant.kqsdk.risk_adapter import assemble_risk
+from klinequant.protocol.types import SymbolInfo
 
 if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合 config
-    from config.strategy_config import RiskConfig, StrategiesConfig
+    from klinequant.config.strategy_config import RiskConfig, StrategiesConfig
 
 logger = logging.getLogger(__name__)
 

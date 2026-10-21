@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Callable, Dict, List, Optional, Tuple
 
-from protocol.types import (
+from klinequant.protocol.types import (
     Offset,
     OrderKind,
     OrderSide,

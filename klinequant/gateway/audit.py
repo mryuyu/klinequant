@@ -24,10 +24,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from klinequant import PROJECT_ROOT
+
 logger = logging.getLogger(__name__)
 
-# 审计日志存储目录
-AUDIT_LOG_DIR = Path(os.getenv("AUDIT_LOG_DIR", "logs/audit"))
+# 审计日志存储目录（env AUDIT_LOG_DIR 可覆盖；默认锚定 PROJECT_ROOT/logs/audit）
+_audit_dir_env = os.getenv("AUDIT_LOG_DIR")
+AUDIT_LOG_DIR = Path(_audit_dir_env) if _audit_dir_env else PROJECT_ROOT / "logs" / "audit"
 
 
 @dataclass

@@ -21,7 +21,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from gateway.state import state
+from klinequant.gateway.state import state
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ async def list_rules():
 @router.post("/rules")
 async def create_rule(body: RuleCreate):
     """创建告警规则"""
-    from core.notification.alert_manager import AlertLevel, AlertRule
+    from klinequant.core.notification.alert_manager import AlertLevel, AlertRule
 
     mgr = state.alert_manager
     if body.name in mgr.rules:
@@ -151,7 +151,7 @@ async def create_rule(body: RuleCreate):
 @router.patch("/rules/{rule_name}")
 async def update_rule(rule_name: str, body: RuleUpdate):
     """更新告警规则"""
-    from core.notification.alert_manager import AlertLevel
+    from klinequant.core.notification.alert_manager import AlertLevel
 
     mgr = state.alert_manager
     rules = mgr.rules
@@ -193,7 +193,7 @@ async def list_channels():
 @router.post("/channels")
 async def add_channel(body: ChannelCreate):
     """添加通知渠道"""
-    from core.notification.channels import (
+    from klinequant.core.notification.channels import (
         DingTalkChannel,
         FeishuChannel,
         TelegramChannel,
@@ -244,7 +244,7 @@ async def remove_channel(channel_name: str):
 @router.post("/test")
 async def send_test_alert(body: TestAlertRequest):
     """发送测试告警"""
-    from core.notification.alert_manager import AlertLevel
+    from klinequant.core.notification.alert_manager import AlertLevel
 
     mgr = state.alert_manager
     level = AlertLevel.from_str(body.level)

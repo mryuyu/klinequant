@@ -18,7 +18,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Dict
 
-from core.risk_engine.rules.base import RiskCheckResult, RiskContext, RiskRule
+from klinequant.core.risk_engine.rules.base import RiskCheckResult, RiskContext, RiskRule
 
 __all__ = [
     "DailyLossPctRule",

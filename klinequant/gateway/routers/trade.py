@@ -22,8 +22,8 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from gateway.audit import audit_logger
-from gateway.state import BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_REST_BASE, state
+from klinequant.gateway.audit import audit_logger
+from klinequant.gateway.state import BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_REST_BASE, state
 
 logger = logging.getLogger(__name__)
 

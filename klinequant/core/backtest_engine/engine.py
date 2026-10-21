@@ -24,15 +24,15 @@ from typing import Any, Callable, Dict, List, Optional
 
 import polars as pl
 
-from core.backtest_engine.fee import FeeModel, PercentageFee
-from core.backtest_engine.matcher import BacktestFill, Matcher
-from core.backtest_engine.performance import (
+from klinequant.core.backtest_engine.fee import FeeModel, PercentageFee
+from klinequant.core.backtest_engine.matcher import BacktestFill, Matcher
+from klinequant.core.backtest_engine.performance import (
     PerformanceAnalyzer,
     PerformanceReport,
     Trade,
 )
-from core.backtest_engine.slippage import PercentageSlippage, SlippageModel
-from protocol.types import Kline, Order, OrderSide, OrderStatus, OrderType
+from klinequant.core.backtest_engine.slippage import PercentageSlippage, SlippageModel
+from klinequant.protocol.types import Kline, Order, OrderSide, OrderStatus, OrderType
 
 logger = logging.getLogger(__name__)
 
@@ -364,9 +364,9 @@ class BacktestEngine:
         )
 
     def _create_slippage(self) -> SlippageModel:
-        from core.backtest_engine.slippage import create_slippage_model
+        from klinequant.core.backtest_engine.slippage import create_slippage_model
         return create_slippage_model(self._config.slippage_model, **self._config.slippage_params)
 
     def _create_fee(self) -> FeeModel:
-        from core.backtest_engine.fee import create_fee_model
+        from klinequant.core.backtest_engine.fee import create_fee_model
         return create_fee_model(self._config.fee_model, **self._config.fee_params)

@@ -24,9 +24,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type
 
-from core.strategy_engine.base import StrategyBase
-from core.strategy_engine.context import StrategyInfo
-from core.strategy_engine.manager import StrategyManager, StrategyStatus
+from klinequant.core.strategy_engine.base import StrategyBase
+from klinequant.core.strategy_engine.context import StrategyInfo
+from klinequant.core.strategy_engine.manager import StrategyManager, StrategyStatus
 
 logger = logging.getLogger(__name__)
 

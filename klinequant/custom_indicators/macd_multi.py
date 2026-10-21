@@ -11,7 +11,7 @@
       由前端 Series Primitive 自绘还原（bar 内水平、下一 bar 跳变）
     - 带透明度颜色（#FFA500@8%、#e01b7af6）契约只收 #RRGGBB，取实色
 """
-from core.indicator_engine.graph import ema, pyindicator
+from klinequant.core.indicator_engine.graph import ema, pyindicator
 
 
 @pyindicator(

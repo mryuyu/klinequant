@@ -28,7 +28,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from config.strategy_config import RiskConfig
+from klinequant.config.strategy_config import RiskConfig
 
 logger = logging.getLogger(__name__)
 

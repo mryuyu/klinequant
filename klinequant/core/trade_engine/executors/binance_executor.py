@@ -30,9 +30,9 @@ from urllib.parse import urlencode
 
 import httpx
 
-from core.trade_engine.executors.mt5_executor import SubmitResult
-from core.trade_engine.resolver import VenueOrderSpec
-from protocol.types import DeadReason, Offset, OrderKind, OrderSide
+from klinequant.core.trade_engine.executors.mt5_executor import SubmitResult
+from klinequant.core.trade_engine.resolver import VenueOrderSpec
+from klinequant.protocol.types import DeadReason, Offset, OrderKind, OrderSide
 
 logger = logging.getLogger(__name__)
 

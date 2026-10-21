@@ -1,12 +1,12 @@
 """rules 包 — 信号规则"""
-from core.signal_engine.rules.base import (
+from klinequant.core.signal_engine.rules.base import (
     ComparisonRule,
     CrossoverRule,
     RuleBase,
     RuleResult,
     ThresholdRule,
 )
-from core.signal_engine.rules.composite import AndRule, NotRule, OrRule
+from klinequant.core.signal_engine.rules.composite import AndRule, NotRule, OrRule
 
 __all__ = [
     "RuleBase",

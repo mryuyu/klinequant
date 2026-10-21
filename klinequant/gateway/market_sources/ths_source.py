@@ -22,8 +22,8 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from gateway.market_sources.base import MarketSource
-from gateway.market_sources.manager import market_manager
+from klinequant.gateway.market_sources.base import MarketSource
+from klinequant.gateway.market_sources.manager import market_manager
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ except ImportError as _ths_import_error:  # pragma: no cover
     # 正确做法是用项目 venv 解释器（.venv\Scripts\python.exe，内含 thsdk≥1.7）。
     logger.warning(
         "thsdk 导入失败（%s）：THS A股源不可用，品种目录/K线将回退内置默认。"
-        "请用项目 venv 解释器启动后端（.venv\\Scripts\\python.exe -m webstack），"
+        "请用项目 venv 解释器启动后端（.venv\\Scripts\\python.exe -m klinequant.webstack），"
         "该环境含 thsdk≥1.7（提供 THS 类）；全局 Python 的同名 thsdk 0.0.x 不兼容。",
         _ths_import_error,
     )

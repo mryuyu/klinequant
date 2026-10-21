@@ -14,8 +14,8 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List
 
-from protocol.types import Kline, Tick
-from core.market_engine.normalizer import align_timestamp, _to_decimal
+from klinequant.protocol.types import Kline, Tick
+from klinequant.core.market_engine.normalizer import align_timestamp, _to_decimal
 
 
 # ─── OKX 周期映射 ───

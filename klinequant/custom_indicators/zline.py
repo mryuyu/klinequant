@@ -13,7 +13,7 @@
 公式内权重 (3C+O+H+L)/6 为硬编码常量；两级 EMA 周期开放为用户可调参数：
 e_period（原版 5，三重 EMA 平滑基数）、z_period（原版 8，两重 EMA 输出平滑）。
 """
-from core.indicator_engine.graph import ema, pyindicator
+from klinequant.core.indicator_engine.graph import ema, pyindicator
 
 
 @pyindicator(

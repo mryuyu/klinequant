@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from protocol.types import Account, Order, Position
+from klinequant.protocol.types import Account, Order, Position
 
 
 @dataclass

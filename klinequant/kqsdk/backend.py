@@ -28,15 +28,15 @@ from typing import (
 from urllib.parse import urlencode
 
 if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合 config 层
-    from config.accounts import AccountConfig
+    from klinequant.config.accounts import AccountConfig
 
-from core.trade_engine.executors.mt5_executor import Mt5Executor
-from core.trade_engine.ledger import ExposureLedger
-from core.trade_engine.spec_loader import load_spec_from_mt5
-from gateway.market_sources.mt5_driver import Mt5Api
-from kqsdk.api import DataFeedProtocol, ExecutorProtocol
-from kqsdk.data_feed import Mt5DataFeed
-from protocol.types import Offset, OrderSide, SymbolInfo
+from klinequant.core.trade_engine.executors.mt5_executor import Mt5Executor
+from klinequant.core.trade_engine.ledger import ExposureLedger
+from klinequant.core.trade_engine.spec_loader import load_spec_from_mt5
+from klinequant.gateway.market_sources.mt5_driver import Mt5Api
+from klinequant.kqsdk.api import DataFeedProtocol, ExecutorProtocol
+from klinequant.kqsdk.data_feed import Mt5DataFeed
+from klinequant.protocol.types import Offset, OrderSide, SymbolInfo
 
 logger = logging.getLogger(__name__)
 
@@ -373,7 +373,7 @@ class BinanceBackend:
     async def _async_connect(self) -> None:
         import httpx
 
-        from core.market_engine.adapters.binance_futures import BinanceFuturesAdapter
+        from klinequant.core.market_engine.adapters.binance_futures import BinanceFuturesAdapter
 
         self._adapter = BinanceFuturesAdapter({
             "rest_base": self._rest_base,
@@ -448,7 +448,7 @@ class BinanceBackend:
         return self._run(self._load_specs_async(symbols), timeout=30.0)
 
     async def _load_specs_async(self, symbols: List[str]) -> Dict[str, SymbolInfo]:
-        from core.trade_engine.spec_loader import load_spec_from_binance
+        from klinequant.core.trade_engine.spec_loader import load_spec_from_binance
 
         resp = await self._client.get("/fapi/v1/exchangeInfo")
         resp.raise_for_status()
@@ -469,7 +469,7 @@ class BinanceBackend:
         return specs
 
     def make_executor(self) -> ExecutorProtocol:
-        from core.trade_engine.executors.binance_executor import BinanceExecutor
+        from klinequant.core.trade_engine.executors.binance_executor import BinanceExecutor
 
         return BinanceExecutor(
             loop=self._loop, client=self._client,
@@ -482,7 +482,7 @@ class BinanceBackend:
         self, symbols: List[str], periods: List[str],
         poll_interval: float, bar_count: int,
     ) -> DataFeedProtocol:
-        from kqsdk.binance_feed import BinanceDataFeed
+        from klinequant.kqsdk.binance_feed import BinanceDataFeed
 
         return BinanceDataFeed(
             loop=self._loop, adapter=self._adapter, symbols=symbols,

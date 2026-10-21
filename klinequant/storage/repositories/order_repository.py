@@ -11,8 +11,8 @@ import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from protocol.types import Order, OrderSide, OrderStatus, OrderType
-from storage.repositories.base import BaseRepository
+from klinequant.protocol.types import Order, OrderSide, OrderStatus, OrderType
+from klinequant.storage.repositories.base import BaseRepository
 
 
 class OrderRepository(BaseRepository):

@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from protocol.types import Account, Order, Position
+from klinequant.protocol.types import Account, Order, Position
 
 
 class Executor(ABC):

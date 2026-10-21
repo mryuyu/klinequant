@@ -12,8 +12,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Callable, Dict, List, Optional, Tuple
 
-from core.market_engine.normalizer import TIMEFRAME_MS, align_timestamp, timeframe_to_ms
-from protocol.types import Kline
+from klinequant.core.market_engine.normalizer import TIMEFRAME_MS, align_timestamp, timeframe_to_ms
+from klinequant.protocol.types import Kline
 
 
 class TimeframeEngine:

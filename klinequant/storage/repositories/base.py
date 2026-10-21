@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from storage.duckdb_manager import DuckDBManager
+from klinequant.storage.duckdb_manager import DuckDBManager
 
 
 class BaseRepository:

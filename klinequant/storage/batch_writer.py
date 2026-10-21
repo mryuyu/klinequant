@@ -17,7 +17,7 @@ import logging
 import time
 from typing import Any, List, Optional
 
-from storage.duckdb_manager import DuckDBManager
+from klinequant.storage.duckdb_manager import DuckDBManager
 
 logger = logging.getLogger(__name__)
 

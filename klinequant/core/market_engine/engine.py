@@ -18,13 +18,13 @@ import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from config.graceful_shutdown import GracefulShutdown
-from core.market_engine.adapters.base import ExchangeAdapter
-from core.market_engine.adapters.binance import BinanceAdapter
-from core.market_engine.normalizer import TIMEFRAME_MS, timeframe_to_ms
-from core.market_engine.timeframe_engine import TimeframeEngine
-from protocol.messages import Message, MessageType
-from protocol.types import Kline, Tick
+from klinequant.config.graceful_shutdown import GracefulShutdown
+from klinequant.core.market_engine.adapters.base import ExchangeAdapter
+from klinequant.core.market_engine.adapters.binance import BinanceAdapter
+from klinequant.core.market_engine.normalizer import TIMEFRAME_MS, timeframe_to_ms
+from klinequant.core.market_engine.timeframe_engine import TimeframeEngine
+from klinequant.protocol.messages import Message, MessageType
+from klinequant.protocol.types import Kline, Tick
 
 logger = logging.getLogger(__name__)
 

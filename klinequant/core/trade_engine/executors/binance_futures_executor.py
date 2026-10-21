@@ -21,8 +21,8 @@ from urllib.parse import urlencode
 
 import httpx
 
-from core.trade_engine.executors.base import Executor
-from protocol.types import (
+from klinequant.core.trade_engine.executors.base import Executor
+from klinequant.protocol.types import (
     Account,
     Order,
     OrderSide,

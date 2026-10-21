@@ -21,26 +21,23 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
-from gateway.env import load_env
+from klinequant import PROJECT_ROOT
+from klinequant.gateway.env import load_env
 
-load_env()  # 凭证等环境变量从 klinequant/.env 加载（须在路由/插件导入前）
+load_env()  # 凭证等环境变量从仓库根 .env（PROJECT_ROOT/.env）加载（须在路由/插件导入前）
 
-from gateway.errors import register_error_handlers
-from gateway.market_sources import bootstrap_sources, market_manager
-from gateway.routers import alert, backtest, backtest_fx, indicator, market, risk, strategy, system, trade
-from gateway.ws import ws_manager
+from klinequant.gateway.errors import register_error_handlers
+from klinequant.gateway.market_sources import bootstrap_sources, market_manager
+from klinequant.gateway.routers import alert, backtest, backtest_fx, indicator, market, risk, strategy, system, trade
+from klinequant.gateway.ws import ws_manager
 
 logger = logging.getLogger(__name__)
 
-# 前端页面目录（index-live.html 为默认首页与唯一迭代基线；lc-live.html 为旧基线存档）：klinequant/../frontend/mockup
-FRONTEND_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "frontend", "mockup")
-)
+# 前端页面目录（index-live.html 为默认首页与唯一迭代基线；lc-live.html 为旧基线存档）：PROJECT_ROOT/webgui/mockup
+FRONTEND_DIR = str(PROJECT_ROOT / "webgui" / "mockup")
 
-# Vue 正式版前端构建产物目录（态①：gateway 托管 dist，SPA 挂在 /app）：klinequant/../frontend/dist
-DIST_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "frontend", "dist")
-)
+# Vue 正式版前端构建产物目录（态①：gateway 托管 dist，SPA 挂在 /app）：PROJECT_ROOT/webgui/dist
+DIST_DIR = str(PROJECT_ROOT / "webgui" / "dist")
 
 
 class _NoCacheStaticFiles(StaticFiles):
@@ -156,7 +153,7 @@ def create_app() -> FastAPI:
                     return FileResponse(cand)
             return FileResponse(dist_index, headers=_NO_CACHE)
     else:
-        logger.warning(f"Vue dist not found, /app disabled (run 'npm run build' in frontend/): {DIST_DIR}")
+        logger.warning(f"Vue dist not found, /app disabled (run 'npm run build' in webgui/): {DIST_DIR}")
 
     @app.on_event("startup")
     async def on_startup():
@@ -222,7 +219,7 @@ def create_app() -> FastAPI:
         boot = getattr(app.state, "bootstrap_task", None)
         if boot is not None and not boot.done():
             boot.cancel()   # 初始化未完成即退出：取消后台任务防悬挂
-        from gateway.state import state
+        from klinequant.gateway.state import state
         await state.close()
 
     return app

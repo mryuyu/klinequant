@@ -13,7 +13,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
-from protocol.types import Kline
+from klinequant.protocol.types import Kline
 
 
 # ─── 周期 → 毫秒映射 ───

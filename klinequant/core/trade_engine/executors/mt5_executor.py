@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 
-from core.trade_engine.resolver import VenueOrderSpec
-from gateway.market_sources.mt5_driver import (
+from klinequant.core.trade_engine.resolver import VenueOrderSpec
+from klinequant.gateway.market_sources.mt5_driver import (
     Mt5Api,
     ORDER_FILLING_FOK,
     ORDER_FILLING_IOC,
@@ -48,7 +48,7 @@ from gateway.market_sources.mt5_driver import (
     TRADE_RETCODE_REQUOTE,
     TRADE_RETCODE_TIMEOUT,
 )
-from protocol.types import (
+from klinequant.protocol.types import (
     Account,
     DeadReason,
     Offset,

@@ -21,7 +21,7 @@ import polars as pl
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from gateway.state import HTTP_PROXY, BINANCE_REST_BASE, state
+from klinequant.gateway.state import HTTP_PROXY, BINANCE_REST_BASE, state
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ async def _fetch_klines(symbol: str, timeframe: str, limit: int) -> pl.DataFrame
 
 def _run_backtest_sync(task_id: str, body: BacktestRunRequest, data: pl.DataFrame):
     """同步执行回测（在线程池中运行）"""
-    from core.backtest_engine.engine import BacktestConfig, BacktestEngine
+    from klinequant.core.backtest_engine.engine import BacktestConfig, BacktestEngine
 
     try:
         _tasks[task_id]["status"] = "RUNNING"

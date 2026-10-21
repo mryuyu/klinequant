@@ -18,7 +18,7 @@
     - 字段输出顺序与 style 位置对齐（1x→16x→32x→64x→256x→1024x）；
       fields 取 def 返回 dict 插入序（dsl.py），顺序错位会致颜色映射旋转错配
 """
-from core.indicator_engine.graph import (
+from klinequant.core.indicator_engine.graph import (
     ema,
     pyindicator,
     rolling_max,

@@ -15,16 +15,16 @@ import time
 from decimal import ROUND_DOWN, Decimal
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol
 
-from core.risk_engine.rules.base import RiskCheckResult
-from core.trade_engine.ledger import ExposureLedger
-from core.trade_engine.resolver import (
+from klinequant.core.risk_engine.rules.base import RiskCheckResult
+from klinequant.core.trade_engine.ledger import ExposureLedger
+from klinequant.core.trade_engine.resolver import (
     OrderRequest,
     UnifiedResolver,
     VenueOrderSpec,
     derive_magic,
 )
-from kqsdk.state_store import StateStore
-from protocol.types import (
+from klinequant.kqsdk.state_store import StateStore
+from klinequant.protocol.types import (
     Account,
     Offset,
     OrderKind,
@@ -38,10 +38,10 @@ from protocol.types import (
 )
 
 if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合 order_journal / indicator_engine
-    from core.indicator_engine.engine import IndicatorEngine
-    from kqsdk.broadcaster import SignalBroadcaster
-    from kqsdk.indic import IndicApi
-    from kqsdk.order_journal import Journal
+    from klinequant.core.indicator_engine.engine import IndicatorEngine
+    from klinequant.kqsdk.broadcaster import SignalBroadcaster
+    from klinequant.kqsdk.indic import IndicApi
+    from klinequant.kqsdk.order_journal import Journal
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +209,43 @@ class KqApi:
         self._broadcaster = broadcaster
         self._suppress_broadcast = 0
 
+    # ══════════ 前端 web 栈开关（态③）══════════
+
+    def web(
+        self,
+        run: bool = True,
+        *,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        open_browser: bool = True,
+        open_path: str = "/app/",
+    ) -> None:
+        """策略运行时是否拉起前端 web 栈（态③ = 策略 + GUI；态② = headless）。
+
+        用法（策略函数内）::
+
+            def strategy(api: KqApi):
+                api.web(run=True)     # 跑策略同时后台起 gateway + 前端
+                while api.wait_update():
+                    ...
+
+        - run=True：后台线程幂等拉起 gateway（复用 webstack，进程级单例，
+          多策略/多 KqApi 共享同一栈，不会重复占端口）；策略主循环继续自驱动。
+        - run=False：若已拉起则优雅关停，否则无操作（headless）。
+        - 惰性导入 webstack：run=False 的 headless 策略不会拉入 uvicorn/fastapi。
+
+        信号约束：后台 web 栈不注册信号处理器（_NoSignalServer），策略主线程的
+        SIGINT/SIGTERM 仍由 LiveRunner 统一管理。
+        """
+        from klinequant import webstack
+
+        if run:
+            webstack.ensure_background(
+                host, port, open_browser=open_browser, open_path=open_path
+            )
+        else:
+            webstack.stop_background()
+
     # ═════════ M4 多周期记账：tag / magic 派生 ═════════
 
     def _tag_for(self, period: str | None = None) -> str:
@@ -306,7 +343,7 @@ class KqApi:
                 raise RuntimeError(
                     "api.INDIC() 需要 runner 注入 IndicatorEngine（当前未注入）"
                 )
-            from kqsdk.indic import IndicApi
+            from klinequant.kqsdk.indic import IndicApi
             indic = IndicApi(
                 self._engine, self._feed, self._symbol, self._exchange,
                 per, lock=self._engine_lock,

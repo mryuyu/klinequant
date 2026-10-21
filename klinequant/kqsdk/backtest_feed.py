@@ -20,8 +20,8 @@ import logging
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from gateway.market_sources.mt5_driver import TF_SECONDS
-from protocol.types import Tick
+from klinequant.gateway.market_sources.mt5_driver import TF_SECONDS
+from klinequant.protocol.types import Tick
 
 logger = logging.getLogger(__name__)
 

@@ -17,13 +17,13 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
-from core.risk_engine.engine import RiskEngine
-from core.risk_engine.rules.base import RiskContext
-from core.trade_engine.executors.base import Executor
-from core.trade_engine.executors.simulator import Simulator
-from core.trade_engine.order_manager import OrderManager
-from core.trade_engine.position_manager import PositionManager
-from protocol.types import (
+from klinequant.core.risk_engine.engine import RiskEngine
+from klinequant.core.risk_engine.rules.base import RiskContext
+from klinequant.core.trade_engine.executors.base import Executor
+from klinequant.core.trade_engine.executors.simulator import Simulator
+from klinequant.core.trade_engine.order_manager import OrderManager
+from klinequant.core.trade_engine.position_manager import PositionManager
+from klinequant.protocol.types import (
     Account,
     Order,
     OrderSide,

@@ -9,8 +9,8 @@ from typing import Any, Dict, Optional, Tuple
 
 import polars as pl
 
-from core.indicator_engine.base import IndicatorBase
-from core.indicator_engine.registry import register_indicator
+from klinequant.core.indicator_engine.base import IndicatorBase
+from klinequant.core.indicator_engine.registry import register_indicator
 
 
 @register_indicator

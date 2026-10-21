@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 
-from protocol.types import Offset, OrderSide, Position
+from klinequant.protocol.types import Offset, OrderSide, Position
 
 logger = logging.getLogger(__name__)
 

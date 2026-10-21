@@ -7,7 +7,7 @@
 
 网关启动时调 manager.bootstrap_sources() 按 KQ_MARKET_SOURCES 注册启用插件。
 """
-from gateway.market_sources.base import MarketSource
-from gateway.market_sources.manager import bootstrap_sources, market_manager
+from klinequant.gateway.market_sources.base import MarketSource
+from klinequant.gateway.market_sources.manager import bootstrap_sources, market_manager
 
 __all__ = ["MarketSource", "market_manager", "bootstrap_sources"]

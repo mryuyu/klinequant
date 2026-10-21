@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import polars as pl
 
-from core.backtest_engine.engine import BacktestConfig, BacktestEngine, BacktestResult
+from klinequant.core.backtest_engine.engine import BacktestConfig, BacktestEngine, BacktestResult
 
 logger = logging.getLogger(__name__)
 

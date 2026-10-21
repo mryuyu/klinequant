@@ -17,8 +17,8 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from gateway.audit import audit_logger
-from gateway.state import state
+from klinequant.gateway.audit import audit_logger
+from klinequant.gateway.state import state
 
 router = APIRouter(prefix="/api/risk", tags=["risk"])
 logger = logging.getLogger(__name__)

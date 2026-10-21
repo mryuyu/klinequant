@@ -23,9 +23,9 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from core.trade_engine.executors.base import Executor
-from core.market_engine.okx_normalizer import normalize_symbol, denormalize_symbol
-from protocol.types import (
+from klinequant.core.trade_engine.executors.base import Executor
+from klinequant.core.market_engine.okx_normalizer import normalize_symbol, denormalize_symbol
+from klinequant.protocol.types import (
     Account,
     Order,
     OrderSide,

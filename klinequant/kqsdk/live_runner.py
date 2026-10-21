@@ -55,26 +55,26 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
-from core.indicator_engine.engine import IndicatorEngine
-from core.trade_engine.ledger import ExposureLedger
-from core.trade_engine.resolver import UnifiedResolver, derive_magic
-from kqsdk.api import DataFeedProtocol, ExecutorProtocol, KqApi
-from kqsdk.backend import MarketBackend
-from kqsdk.order_id import OrderIdFactory
-from kqsdk.order_journal import STATE_DEAD, STATE_FILLED, STATE_IN_FLIGHT
-from kqsdk.registry import (
+from klinequant.core.indicator_engine.engine import IndicatorEngine
+from klinequant.core.trade_engine.ledger import ExposureLedger
+from klinequant.core.trade_engine.resolver import UnifiedResolver, derive_magic
+from klinequant.kqsdk.api import DataFeedProtocol, ExecutorProtocol, KqApi
+from klinequant.kqsdk.backend import MarketBackend
+from klinequant.kqsdk.order_id import OrderIdFactory
+from klinequant.kqsdk.order_journal import STATE_DEAD, STATE_FILLED, STATE_IN_FLIGHT
+from klinequant.kqsdk.registry import (
     StrategyContext,
     resilient,
     resolve_strategy_fn,
 )
-from kqsdk.risk_adapter import SdkRiskAdapter, assemble_risk
-from kqsdk.state_store import StateBackend, StateStore
-from protocol.types import Offset, OrderSide, SymbolInfo
+from klinequant.kqsdk.risk_adapter import SdkRiskAdapter, assemble_risk
+from klinequant.kqsdk.state_store import StateBackend, StateStore
+from klinequant.protocol.types import Offset, OrderSide, SymbolInfo
 
 if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合 order_journal / broadcaster / config
-    from config.strategy_config import RiskConfig, StrategiesConfig
-    from kqsdk.broadcaster import SignalBroadcaster
-    from kqsdk.order_journal import Journal
+    from klinequant.config.strategy_config import RiskConfig, StrategiesConfig
+    from klinequant.kqsdk.broadcaster import SignalBroadcaster
+    from klinequant.kqsdk.order_journal import Journal
 
 logger = logging.getLogger(__name__)
 

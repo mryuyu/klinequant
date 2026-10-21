@@ -6,7 +6,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from storage.repositories.base import BaseRepository
+from klinequant.storage.repositories.base import BaseRepository
 
 
 class RiskLogRepository(BaseRepository):

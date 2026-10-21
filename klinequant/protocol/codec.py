@@ -10,8 +10,8 @@ from typing import Any, Dict, Type
 
 import msgpack
 
-from protocol.messages import Message
-from protocol.types import (
+from klinequant.protocol.messages import Message
+from klinequant.protocol.types import (
     Account,
     IndicatorValue,
     Kline,

@@ -18,10 +18,10 @@ import psutil
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from gateway.audit import audit_logger
-from gateway.auth import create_token
-from gateway.state import state
-from gateway.ws import ws_manager
+from klinequant.gateway.audit import audit_logger
+from klinequant.gateway.auth import create_token
+from klinequant.gateway.state import state
+from klinequant.gateway.ws import ws_manager
 
 router = APIRouter(prefix="/api", tags=["system"])
 

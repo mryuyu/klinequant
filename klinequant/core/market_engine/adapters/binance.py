@@ -22,16 +22,16 @@ import httpx
 import websockets
 import websockets.exceptions
 
-from core.market_engine.adapters.base import (
+from klinequant.core.market_engine.adapters.base import (
     ExchangeAdapter,
     KlineCallback,
     TickCallback,
 )
-from core.market_engine.normalizer import (
+from klinequant.core.market_engine.normalizer import (
     normalize_binance_kline,
     normalize_binance_klines,
 )
-from protocol.types import Kline, Tick
+from klinequant.protocol.types import Kline, Tick
 
 logger = logging.getLogger(__name__)
 
@@ -414,7 +414,7 @@ class BinanceAdapter(ExchangeAdapter):
             return klines
 
         # 检测时间跳跃
-        from core.market_engine.normalizer import timeframe_to_ms
+        from klinequant.core.market_engine.normalizer import timeframe_to_ms
         expected_interval = timeframe_to_ms(interval)
         now_ms = int(time.time() * 1000)
         missing_start = latest.timestamp + expected_interval

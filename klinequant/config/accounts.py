@@ -2,7 +2,7 @@
 
 设计约束（对齐《SDK 阶段实施规划 v1.3》Phase 0 + 用户 2026-10-08 定案）：
   - 多账户走配置层：一个策略进程绑定一个账户，多账户 = 多进程实例。
-  - 凭证安全：yaml 只存 ``${ENV_VAR}`` 引用，真实值在 ``klinequant/.env``，
+  - 凭证安全：yaml 只存 ``${ENV_VAR}`` 引用，真实值在仓库根 ``.env``，
     明文绝不落本文件 / 日志 / 记忆。
   - 插值语义：``${VAR}`` 严格模式（VAR 未设置即报错，绝不回退空串，避免静默
     用错凭证）；``${VAR:-default}`` 允许缺省（用于全可选的 MT5 连接参数）。
@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from klinequant import PACKAGE_DIR
 
 __all__ = [
     "AccountConfigError",
@@ -63,7 +65,7 @@ def _interpolate(value: Any) -> Any:
             if var not in os.environ:
                 raise AccountConfigError(
                     f"账户配置引用的环境变量 ${{{var}}} 未设置"
-                    f"（请在 klinequant/.env 配置，或改用 ${{{var}:-默认值}} 形式）"
+                    f"（请在仓库根 .env 配置，或改用 ${{{var}:-默认值}} 形式）"
                 )
             return os.environ[var]
 
@@ -187,7 +189,10 @@ def _load_raw(config_path: Path | None = None) -> list[dict[str, Any]]:
     name/market/main/role 均为字面量，无需插值即可用于账户选择，故此处不展开
     凭证占位符——避免某账户缺失的严格凭证影响其它账户的选择。
     """
-    config_path = config_path or Path("config/accounts.yaml")
+    config_path = config_path or PACKAGE_DIR / "config/accounts.yaml"
+    config_path = Path(config_path)
+    if not config_path.is_absolute():
+        config_path = PACKAGE_DIR / config_path
     if not config_path.exists():
         return []
     with open(config_path, encoding="utf-8") as f:

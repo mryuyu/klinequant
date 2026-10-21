@@ -1,6 +1,6 @@
 """notification 包 — 告警通知系统"""
-from core.notification.alert_manager import AlertManager, AlertRule, AlertLevel
-from core.notification.channels import (
+from klinequant.core.notification.alert_manager import AlertManager, AlertRule, AlertLevel
+from klinequant.core.notification.channels import (
     NotificationChannel,
     DingTalkChannel,
     FeishuChannel,

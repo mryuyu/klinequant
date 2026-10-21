@@ -22,8 +22,8 @@ import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from gateway.market_sources.mt5_driver import TF_SECONDS
-from protocol.types import Kline, Tick
+from klinequant.gateway.market_sources.mt5_driver import TF_SECONDS
+from klinequant.protocol.types import Kline, Tick
 
 logger = logging.getLogger(__name__)
 

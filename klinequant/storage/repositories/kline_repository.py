@@ -12,8 +12,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import List, Optional
 
-from protocol.types import Kline
-from storage.repositories.base import BaseRepository
+from klinequant.protocol.types import Kline
+from klinequant.storage.repositories.base import BaseRepository
 
 
 class KlineRepository(BaseRepository):

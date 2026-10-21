@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from protocol.types import SignalDirection
+from klinequant.protocol.types import SignalDirection
 
-from core.signal_engine.rules.base import RuleBase, RuleResult
+from klinequant.core.signal_engine.rules.base import RuleBase, RuleResult
 
 
 class AndRule(RuleBase):

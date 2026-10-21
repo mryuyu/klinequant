@@ -16,9 +16,11 @@ from typing import Optional
 
 from loguru import logger
 
+from klinequant import PROJECT_ROOT
 
-# 默认日志目录
-_DEFAULT_LOG_DIR = Path("logs")
+
+# 默认日志目录（锚定 PROJECT_ROOT，与运行 CWD 解耦）
+_DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
 
 
 def setup_logging(

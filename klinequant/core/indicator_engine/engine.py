@@ -22,9 +22,9 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple
 
 import polars as pl
 
-from core.indicator_engine.base import IndicatorBase
-from core.indicator_engine.registry import IndicatorRegistry, get_registry
-from protocol.types import IndicatorValue, Kline
+from klinequant.core.indicator_engine.base import IndicatorBase
+from klinequant.core.indicator_engine.registry import IndicatorRegistry, get_registry
+from klinequant.protocol.types import IndicatorValue, Kline
 
 logger = logging.getLogger(__name__)
 

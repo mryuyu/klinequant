@@ -4,7 +4,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import List, Optional
 
-from storage.repositories.base import BaseRepository
+from klinequant.storage.repositories.base import BaseRepository
 
 
 class FillRepository(BaseRepository):

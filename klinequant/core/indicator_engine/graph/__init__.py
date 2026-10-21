@@ -2,7 +2,7 @@
 
 作者面导出：原语函数 + @pyindicator 注册装饰器。
 """
-from core.indicator_engine.graph.dsl import (
+from klinequant.core.indicator_engine.graph.dsl import (
     GraphDef,
     GraphIndicator,
     abs_,
@@ -19,7 +19,7 @@ from core.indicator_engine.graph.dsl import (
     sma,
     where,
 )
-from core.indicator_engine.graph.nodes import Graph, Node
+from klinequant.core.indicator_engine.graph.nodes import Graph, Node
 
 __all__ = [
     "Graph",

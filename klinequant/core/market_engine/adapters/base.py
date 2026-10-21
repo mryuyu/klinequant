@@ -13,7 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from protocol.types import Kline, Tick
+from klinequant.protocol.types import Kline, Tick
 
 
 # 数据回调类型

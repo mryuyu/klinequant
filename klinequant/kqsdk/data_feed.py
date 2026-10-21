@@ -17,8 +17,8 @@ import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from gateway.market_sources.mt5_driver import TF_SECONDS, TIMEFRAME_MAP, Mt5Api
-from protocol.types import Tick
+from klinequant.gateway.market_sources.mt5_driver import TF_SECONDS, TIMEFRAME_MAP, Mt5Api
+from klinequant.protocol.types import Tick
 
 logger = logging.getLogger(__name__)
 

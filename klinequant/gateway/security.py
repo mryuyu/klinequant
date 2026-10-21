@@ -18,10 +18,13 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from klinequant import PACKAGE_DIR
+
 logger = logging.getLogger(__name__)
 
-# 加密存储文件路径
-SECRETS_FILE = Path(os.getenv("SECRETS_FILE", "config/secrets.enc"))
+# 加密存储文件路径（env SECRETS_FILE 可覆盖；默认锚定 PACKAGE_DIR/config/secrets.enc）
+_secrets_env = os.getenv("SECRETS_FILE")
+SECRETS_FILE = Path(_secrets_env) if _secrets_env else PACKAGE_DIR / "config" / "secrets.enc"
 
 # PBKDF2 参数
 PBKDF2_ITERATIONS = 100_000

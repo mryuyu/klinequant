@@ -18,9 +18,9 @@ import time
 from enum import Enum
 from typing import Any, Dict, List, Optional, Type
 
-from core.strategy_engine.base import StrategyBase
-from core.strategy_engine.clients import MarketClient, TradeClient
-from core.strategy_engine.context import StrategyContext, StrategyInfo
+from klinequant.core.strategy_engine.base import StrategyBase
+from klinequant.core.strategy_engine.clients import MarketClient, TradeClient
+from klinequant.core.strategy_engine.context import StrategyContext, StrategyInfo
 
 logger = logging.getLogger(__name__)
 

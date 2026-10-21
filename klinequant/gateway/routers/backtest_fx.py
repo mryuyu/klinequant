@@ -20,11 +20,12 @@ import math
 import time
 import uuid
 from decimal import Decimal
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
+from klinequant import PROJECT_ROOT
 
 router = APIRouter(prefix="/api/backtest/fx", tags=["backtest-fx"])
 logger = logging.getLogger(__name__)
@@ -32,8 +33,8 @@ logger = logging.getLogger(__name__)
 # 回测任务内存存储（进程级，重启即失）
 _tasks: Dict[str, dict] = {}
 
-# strategies/ 目录（klinequant/strategies）
-_STRATEGIES_DIR = Path(__file__).resolve().parents[2] / "strategies"
+# strategies/ 目录（仓库根 PROJECT_ROOT/strategies）
+_STRATEGIES_DIR = PROJECT_ROOT / "strategies"
 
 
 class FxBacktestRunRequest(BaseModel):
@@ -119,7 +120,7 @@ def _serialize_trade(t: Any) -> Dict[str, Any]:
 
 def _run_fx_backtest_sync(task_id: str, body: FxBacktestRunRequest):
     """线程池内同步执行 BacktestRunner（内部起 MT5 子进程拉历史 + 回放）。"""
-    from kqsdk.backtest_runner import BacktestRunner
+    from klinequant.kqsdk.backtest_runner import BacktestRunner
 
     try:
         _tasks[task_id]["status"] = "RUNNING"

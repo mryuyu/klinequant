@@ -24,8 +24,8 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from gateway.audit import audit_logger
-from gateway.state import state
+from klinequant.gateway.audit import audit_logger
+from klinequant.gateway.state import state
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ async def create_strategy(body: StrategyCreate):
         )
 
     strategy_id = f"str_{uuid.uuid4().hex[:8]}"
-    from core.strategy_engine.context import StrategyInfo
+    from klinequant.core.strategy_engine.context import StrategyInfo
     info = StrategyInfo(
         strategy_id=strategy_id,
         name=body.name,

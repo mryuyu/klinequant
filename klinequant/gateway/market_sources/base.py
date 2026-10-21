@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from gateway.market_sources.derived import DERIVED_FIXED
+from klinequant.gateway.market_sources.derived import DERIVED_FIXED
 
 
 def price_decimals(values, cap: int = 8) -> int:

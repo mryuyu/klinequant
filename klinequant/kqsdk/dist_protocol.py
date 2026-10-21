@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from protocol.messages import Message
+from klinequant.protocol.messages import Message
 
 __all__ = [
     # topics

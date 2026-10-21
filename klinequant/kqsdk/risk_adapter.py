@@ -26,13 +26,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
-from config.strategy_config import RiskConfig
-from core.risk_engine.engine import RiskEngine
-from core.risk_engine.rules.base import RiskCheckResult, RiskContext
-from core.risk_engine.rules.rules import create_default_rules
-from core.trade_engine.ledger import ExposureLedger
-from kqsdk.risk_rules import create_sdk_rules
-from protocol.types import (
+from klinequant.config.strategy_config import RiskConfig
+from klinequant.core.risk_engine.engine import RiskEngine
+from klinequant.core.risk_engine.rules.base import RiskCheckResult, RiskContext
+from klinequant.core.risk_engine.rules.rules import create_default_rules
+from klinequant.core.trade_engine.ledger import ExposureLedger
+from klinequant.kqsdk.risk_rules import create_sdk_rules
+from klinequant.protocol.types import (
     Account,
     Offset,
     Order,

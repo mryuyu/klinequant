@@ -18,13 +18,13 @@ from collections import defaultdict
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from protocol.types import (
+from klinequant.protocol.types import (
     IndicatorValue,
     Signal,
     SignalDirection,
     SignalStrength,
 )
-from core.signal_engine.rules.base import RuleBase, RuleResult
+from klinequant.core.signal_engine.rules.base import RuleBase, RuleResult
 
 logger = logging.getLogger(__name__)
 

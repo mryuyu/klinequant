@@ -4,8 +4,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import List
 
-from protocol.types import Tick
-from storage.repositories.base import BaseRepository
+from klinequant.protocol.types import Tick
+from klinequant.storage.repositories.base import BaseRepository
 
 
 class TickRepository(BaseRepository):

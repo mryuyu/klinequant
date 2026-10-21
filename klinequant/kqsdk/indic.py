@@ -28,10 +28,10 @@ import polars as pl
 
 # 导入即注册全部内置 + def 式自定义指标到全局注册表（IND-110），
 # 确保 ensure_indicator/create 前注册表已就绪（与 gateway.state 同源）。
-import core.indicator_engine.indicators  # noqa: F401
-import custom_indicators  # noqa: F401
-from core.indicator_engine.engine import IndicatorEngine
-from protocol.types import Kline
+import klinequant.core.indicator_engine.indicators  # noqa: F401
+import klinequant.custom_indicators  # noqa: F401
+from klinequant.core.indicator_engine.engine import IndicatorEngine
+from klinequant.protocol.types import Kline
 
 __all__ = ["IndicApi", "IndicatorView", "FieldView"]
 

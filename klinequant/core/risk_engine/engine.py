@@ -17,8 +17,8 @@ import logging
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from core.risk_engine.rules.base import RiskCheckResult, RiskContext, RiskRule
-from core.risk_engine.rules.rules import create_default_rules
+from klinequant.core.risk_engine.rules.base import RiskCheckResult, RiskContext, RiskRule
+from klinequant.core.risk_engine.rules.rules import create_default_rules
 
 logger = logging.getLogger(__name__)
 

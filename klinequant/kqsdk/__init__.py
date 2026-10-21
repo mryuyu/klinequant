@@ -1,8 +1,8 @@
 """kqsdk —— KlineQuant 策略 SDK 的公开入口（扁平门面）。
 
-外部 ``pip install kqsdk`` 之后，策略作者只需从本包一次性拿到全部公开符号::
+外部 ``from klinequant import kqsdk`` 之后，策略作者只需从本包一次性拿到全部公开符号::
 
-    from kqsdk import strategy, KqApi, StrategyContext, OrderSide, Offset, OrderKind
+    from klinequant.kqsdk import strategy, KqApi, StrategyContext, OrderSide, Offset, OrderKind
 
     @strategy("dualma-eur")           # 策略名自定义（≠ 文件名）
     def dual_ma(api: KqApi, ctx: StrategyContext) -> None:
@@ -22,9 +22,9 @@
 """
 from __future__ import annotations
 
-from kqsdk.api import KqApi
-from kqsdk.indic import FieldView, IndicApi, IndicatorView
-from kqsdk.registry import (
+from klinequant.kqsdk.api import KqApi
+from klinequant.kqsdk.indic import FieldView, IndicApi, IndicatorView
+from klinequant.kqsdk.registry import (
     StrategyContext,
     StrategyLoadError,
     clear_registry,
@@ -34,7 +34,7 @@ from kqsdk.registry import (
     resolve_strategy_fn,
     strategy,
 )
-from protocol.types import (
+from klinequant.protocol.types import (
     Offset,
     OrderKind,
     OrderSide,

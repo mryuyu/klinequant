@@ -14,9 +14,9 @@ from typing import Any, Dict, List, Tuple
 
 import polars as pl
 
-from core.indicator_engine.engine import IndicatorEngine
-import core.indicator_engine.indicators  # noqa: F401 导入即注册全部内置指标
-from core.strategy_engine.base import StrategyBase
+from klinequant.core.indicator_engine.engine import IndicatorEngine
+import klinequant.core.indicator_engine.indicators  # noqa: F401 导入即注册全部内置指标
+from klinequant.core.strategy_engine.base import StrategyBase
 
 # 参数名 → slug 缩写（避免 signal/slow 首字母冲突：g 取 siGnal）
 _PARAM_ALIASES = {

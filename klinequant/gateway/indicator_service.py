@@ -19,11 +19,11 @@ from typing import Any, Dict, Optional
 
 import polars as pl
 
-from gateway.market_sources import kline_cache
-from gateway.market_sources.kline_cache import cached_klines
-from gateway.state import state
-from gateway.ws import ws_manager
-from protocol.types import Kline
+from klinequant.gateway.market_sources import kline_cache
+from klinequant.gateway.market_sources.kline_cache import cached_klines
+from klinequant.gateway.state import state
+from klinequant.gateway.ws import ws_manager
+from klinequant.protocol.types import Kline
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ async def _missed_bars(engine, exchange: str, symbol: str, timeframe: str, tail:
     eng_ts = engine.kline_cache_ts(symbol, exchange, timeframe, tail)
     if not eng_ts:
         return False
-    from gateway.market_sources.manager import market_manager
+    from klinequant.gateway.market_sources.manager import market_manager
     source = market_manager.get(exchange)
     if source is None:
         return False
@@ -117,7 +117,7 @@ async def ensure_warmed(
     # cached_klines 命中存量时开销极小、源确已到头时 warmup 幂等无副作用，故只要还有
     # 缺口就按 need+min_periods 重拉，不再设迟滞（实时 bar 走 on_bar 增量，不经此路径）。
 
-    from gateway.market_sources.manager import market_manager
+    from klinequant.gateway.market_sources.manager import market_manager
     source = market_manager.get(exchange)
     if source is None:
         logger.warning(f"Indicator warmup skipped: unknown market source {exchange}")

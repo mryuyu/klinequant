@@ -16,9 +16,9 @@ from typing import Any, Callable, Coroutine, Dict, Optional
 import zmq
 import zmq.asyncio
 
-from protocol.codec import deserialize_message, serialize_message
-from protocol.messages import Message
-from protocol.transport.base import MessageHandler, Transport
+from klinequant.protocol.codec import deserialize_message, serialize_message
+from klinequant.protocol.messages import Message
+from klinequant.protocol.transport.base import MessageHandler, Transport
 
 logger = logging.getLogger(__name__)
 

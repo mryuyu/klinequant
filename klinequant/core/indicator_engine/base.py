@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 import polars as pl
 
-from protocol.types import IndicatorValue
+from klinequant.protocol.types import IndicatorValue
 
 
 class IndicatorBase(ABC):

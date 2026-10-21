@@ -76,7 +76,7 @@ def _lock(key: tuple) -> asyncio.Lock:
 
 async def _fetch_page(source, symbol: str, tf: str, limit: int, end_time=None) -> list[dict]:
     """单页拉取：派生周期走聚合入口，原生直连源插件"""
-    from gateway.market_sources.derived import fetch_derived_klines, is_derived
+    from klinequant.gateway.market_sources.derived import fetch_derived_klines, is_derived
     if is_derived(tf):
         return await fetch_derived_klines(source, symbol, tf, limit=limit, end_time=end_time)
     return await source.fetch_klines(symbol, tf, limit=limit, end_time=end_time)
@@ -104,7 +104,7 @@ def _merge_tail(entry: _Entry, page: list[dict]) -> None:
 
 def _interval_ms(timeframe: str) -> int | None:
     """原生周期 → 单根跨度(ms)。派生档（1M/1Q/1Y 及 Nd/Nw/NM 自定义倍率）返回 None。"""
-    from gateway.market_sources.derived import is_derived
+    from klinequant.gateway.market_sources.derived import is_derived
     if is_derived(timeframe):
         return None
     m = _TF_RE.match(timeframe or "")

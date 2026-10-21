@@ -1,10 +1,10 @@
 """Web 栈启动器 — 运行模式态①/态③ 共享（详见《KlineQuant 迭代计划》六·六节）。
 
 态①（纯行情看板 + 回测工作台，无策略）：
-    python -m webstack            # 前台起 gateway（托管 index-live.html + Vue /app + API）并开浏览器
+    python -m klinequant.webstack # 前台起 gateway（index-live.html + Vue /app + API）并开浏览器
 
 态③（策略研究带 GUI，--webgui，WEBGUI-L1）：
-    from webstack import start_in_background
+    from klinequant.webstack import start_in_background
     start_in_background()         # 后台线程起同一 gateway，策略进程继续在主线程跑 LiveRunner
 
 设计要点：
@@ -25,13 +25,14 @@ import webbrowser
 
 logger = logging.getLogger("webstack")
 
-ROOT = os.path.dirname(os.path.abspath(__file__))          # klinequant/
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))     # .../klinequant（包目录）
+PROJECT_ROOT = os.path.dirname(PACKAGE_DIR)                  # 仓库根（klinequant 的父目录）
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
-APP_IMPORT = "gateway.app:app"
+APP_IMPORT = "klinequant.gateway.app:app"
 
-if ROOT not in sys.path:                                    # 确保 gateway.app 可被 uvicorn 导入
-    sys.path.insert(0, ROOT)
+if PROJECT_ROOT not in sys.path:  # 确保 klinequant.gateway.app 可被 uvicorn 导入
+    sys.path.insert(0, PROJECT_ROOT)
 
 
 def _wait_ready(host: str, port: int, timeout: float = 30.0) -> bool:
@@ -111,6 +112,45 @@ def start_in_background(
             target=_open_browser_when_ready, args=(host, port, open_path), daemon=True
         ).start()
     return server, thread
+
+
+# ─── 态③后台 web 栈进程级单例 ───
+# 多策略 / 多 KqApi 实例共享同一后台 gateway，避免同端口重复启动冲突。
+_bg_server = None
+_bg_thread = None
+
+
+def is_background_running() -> bool:
+    """后台 web 栈是否在运行。"""
+    return _bg_thread is not None and _bg_thread.is_alive()
+
+
+def ensure_background(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    *,
+    open_browser: bool = True,
+    open_path: str = "/app/",
+):
+    """幂等拉起后台 web 栈（态③）；已在运行则直接返回现有 (server, thread)。"""
+    global _bg_server, _bg_thread
+    if is_background_running():
+        return _bg_server, _bg_thread
+    _bg_server, _bg_thread = start_in_background(
+        host, port, open_browser=open_browser, open_path=open_path
+    )
+    return _bg_server, _bg_thread
+
+
+def stop_background(timeout: float = 5.0) -> None:
+    """优雅关停后台 web 栈（设 should_exit 并等待线程退出；未运行则无操作）。"""
+    global _bg_server, _bg_thread
+    if _bg_server is not None:
+        _bg_server.should_exit = True
+    if _bg_thread is not None:
+        _bg_thread.join(timeout=timeout)
+    _bg_server = None
+    _bg_thread = None
 
 
 def main(argv: list[str] | None = None) -> int:

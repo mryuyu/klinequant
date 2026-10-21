@@ -25,16 +25,16 @@ import httpx
 import websockets
 import websockets.exceptions
 
-from core.market_engine.adapters.base import (
+from klinequant.core.market_engine.adapters.base import (
     ExchangeAdapter,
     KlineCallback,
     TickCallback,
 )
-from core.market_engine.normalizer import (
+from klinequant.core.market_engine.normalizer import (
     normalize_binance_kline,
     normalize_binance_klines,
 )
-from protocol.types import Kline, Tick, FundingRate, FuturesPosition, MarginMode
+from klinequant.protocol.types import Kline, Tick, FundingRate, FuturesPosition, MarginMode
 
 logger = logging.getLogger(__name__)
 

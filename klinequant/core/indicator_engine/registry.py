@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Type
 
-from core.indicator_engine.base import IndicatorBase
+from klinequant.core.indicator_engine.base import IndicatorBase
 
 
 class IndicatorRegistry:

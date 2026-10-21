@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from core.backtest_engine.fee import FeeModel, PercentageFee
-from core.backtest_engine.slippage import PercentageSlippage, SlippageModel
-from protocol.types import Kline, Order, OrderSide, OrderStatus, OrderType
+from klinequant.core.backtest_engine.fee import FeeModel, PercentageFee
+from klinequant.core.backtest_engine.slippage import PercentageSlippage, SlippageModel
+from klinequant.protocol.types import Kline, Order, OrderSide, OrderStatus, OrderType
 
 logger = logging.getLogger(__name__)
 

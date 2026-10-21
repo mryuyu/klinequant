@@ -12,7 +12,7 @@
     - Pine 原版 M_16x/E_16x 标题重复（113 与 50 两组），
       113 组重命名为 M_STOP/E_STOP，50 组保留 M_16X/E_16X
 """
-from core.indicator_engine.graph import ema, pyindicator, rolling_std, sma
+from klinequant.core.indicator_engine.graph import ema, pyindicator, rolling_std, sma
 
 
 @pyindicator(

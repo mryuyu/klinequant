@@ -3,7 +3,7 @@
 公式：TRIX = (EMA3 - EMA3前值) / EMA3前值 * 100，其中 EMA3 为对 close
 连续三次 EMA 平滑。展示递推原语（ema）+ 向前引用（shift）+ 四则组合。
 """
-from core.indicator_engine.graph import ema, pyindicator, shift
+from klinequant.core.indicator_engine.graph import ema, pyindicator, shift
 
 
 @pyindicator(name="TRIX", pane="sub", range="zero_symmetric",

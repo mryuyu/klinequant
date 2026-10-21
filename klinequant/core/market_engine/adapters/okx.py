@@ -23,12 +23,12 @@ import httpx
 import websockets
 import websockets.exceptions
 
-from core.market_engine.adapters.base import (
+from klinequant.core.market_engine.adapters.base import (
     ExchangeAdapter,
     KlineCallback,
     TickCallback,
 )
-from core.market_engine.okx_normalizer import (
+from klinequant.core.market_engine.okx_normalizer import (
     TIMEFRAME_TO_OKX,
     normalize_okx_kline,
     normalize_okx_klines,
@@ -39,7 +39,7 @@ from core.market_engine.okx_normalizer import (
     timeframe_to_okx_bar,
     okx_bar_to_timeframe,
 )
-from protocol.types import Kline, Tick
+from klinequant.protocol.types import Kline, Tick
 
 logger = logging.getLogger(__name__)
 
@@ -457,7 +457,7 @@ class OKXAdapter(ExchangeAdapter):
                 self._latest_kline[cache_key] = klines[-1]
             return klines
 
-        from core.market_engine.normalizer import timeframe_to_ms
+        from klinequant.core.market_engine.normalizer import timeframe_to_ms
         expected_interval = timeframe_to_ms(interval)
         now_ms = int(time.time() * 1000)
         missing_start = latest.timestamp + expected_interval

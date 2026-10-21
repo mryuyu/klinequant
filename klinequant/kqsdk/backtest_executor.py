@@ -24,14 +24,14 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Dict, List, Optional
 
-from core.backtest_engine.fee import create_fee_model
-from core.backtest_engine.performance import Trade
-from core.backtest_engine.slippage import create_slippage_model
-from core.trade_engine.executors.mt5_executor import SubmitResult
-from core.trade_engine.resolver import VenueOrderSpec
-from gateway.market_sources.mt5_driver import TRADE_RETCODE_DONE
-from kqsdk.backtest_feed import BacktestDataFeed
-from protocol.types import DeadReason, OrderKind, OrderSide, SymbolInfo
+from klinequant.core.backtest_engine.fee import create_fee_model
+from klinequant.core.backtest_engine.performance import Trade
+from klinequant.core.backtest_engine.slippage import create_slippage_model
+from klinequant.core.trade_engine.executors.mt5_executor import SubmitResult
+from klinequant.core.trade_engine.resolver import VenueOrderSpec
+from klinequant.gateway.market_sources.mt5_driver import TRADE_RETCODE_DONE
+from klinequant.kqsdk.backtest_feed import BacktestDataFeed
+from klinequant.protocol.types import DeadReason, OrderKind, OrderSide, SymbolInfo
 
 logger = logging.getLogger(__name__)
 

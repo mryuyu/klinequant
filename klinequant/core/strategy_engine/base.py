@@ -14,8 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
 
-from core.strategy_engine.clients import MarketClient, TradeClient
-from core.strategy_engine.context import StrategyContext
+from klinequant.core.strategy_engine.clients import MarketClient, TradeClient
+from klinequant.core.strategy_engine.context import StrategyContext
 
 
 class StrategyBase(ABC):

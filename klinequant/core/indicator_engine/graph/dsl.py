@@ -2,7 +2,7 @@
 
 作者只写一个普通 Python 函数：
 
-    from core.indicator_engine.graph import pyindicator, ema, shift
+    from klinequant.core.indicator_engine.graph import pyindicator, ema, shift
 
     @pyindicator(name="TRIX", pane="sub", range="zero_symmetric")
     def trix(close, period=12):
@@ -29,8 +29,8 @@ from typing import Any, Callable, Dict, List, Optional, Type
 
 import polars as pl
 
-from core.indicator_engine.base import IndicatorBase
-from core.indicator_engine.registry import get_registry
+from klinequant.core.indicator_engine.base import IndicatorBase
+from klinequant.core.indicator_engine.registry import get_registry
 
 from .nodes import (
     AbsNode,

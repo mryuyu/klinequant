@@ -18,9 +18,9 @@ import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from gateway.market_sources.base import MarketSource
-from gateway.market_sources.manager import market_manager
-from gateway.market_sources.mt5_driver import (
+from klinequant.gateway.market_sources.base import MarketSource
+from klinequant.gateway.market_sources.manager import market_manager
+from klinequant.gateway.market_sources.mt5_driver import (
     Mt5Api,
     TIMEFRAME_MAP,
     TF_SECONDS,

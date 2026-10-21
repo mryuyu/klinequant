@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from klinequant import PACKAGE_DIR
+
 __all__ = [
     "DefaultsConfig",
     "RiskConfig",
@@ -147,8 +149,14 @@ class StrategiesConfig(BaseModel):
 
 
 def load_strategies_config(path: str | Path) -> StrategiesConfig:
-    """加载并校验 strategies.yaml（Pydantic 校验失败统一包装为 StrategyConfigError）。"""
+    """加载并校验 strategies.yaml（Pydantic 校验失败统一包装为 StrategyConfigError）。
+
+    相对路径锚定 PACKAGE_DIR（随包分发的 config/ 目录），与运行 CWD 解耦；
+    传入绝对路径则原样使用。
+    """
     p = Path(path)
+    if not p.is_absolute():
+        p = PACKAGE_DIR / p
     if not p.exists():
         raise StrategyConfigError(f"策略配置文件不存在: {p}")
     try:

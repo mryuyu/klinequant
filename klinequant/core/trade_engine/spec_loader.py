@@ -9,7 +9,7 @@ import logging
 from decimal import Decimal
 from typing import Optional
 
-from protocol.types import SymbolInfo
+from klinequant.protocol.types import SymbolInfo
 
 logger = logging.getLogger(__name__)
 

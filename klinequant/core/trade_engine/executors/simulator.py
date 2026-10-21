@@ -15,8 +15,8 @@ import uuid
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from core.trade_engine.executors.base import Executor
-from protocol.types import (
+from klinequant.core.trade_engine.executors.base import Executor
+from klinequant.protocol.types import (
     Account,
     Order,
     OrderSide,

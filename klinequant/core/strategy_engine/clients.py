@@ -14,7 +14,7 @@ import logging
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from protocol.types import Kline, Order, OrderSide, OrderType, Position
+from klinequant.protocol.types import Kline, Order, OrderSide, OrderType, Position
 
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,7 @@ import time
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
-from protocol.types import FundingRate, FundingFee, FuturesPosition
+from klinequant.protocol.types import FundingRate, FundingFee, FuturesPosition
 
 logger = logging.getLogger(__name__)
 

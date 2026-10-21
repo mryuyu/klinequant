@@ -19,10 +19,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import duckdb
 
+from klinequant import PROJECT_ROOT
+
 logger = logging.getLogger(__name__)
 
-# 默认数据库路径（项目根目录下 data/klinequant.duckdb）
-_DEFAULT_DB_PATH = Path("data/klinequant.duckdb")
+# 默认数据库路径（锚定 PROJECT_ROOT/data/klinequant.duckdb，与运行 CWD 解耦）
+_DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "klinequant.duckdb"
 
 
 class DuckDBManager:
@@ -94,7 +96,7 @@ class DuckDBManager:
         )
 
         # 执行 Schema 迁移
-        from storage.schema import run_migrations
+        from klinequant.storage.schema import run_migrations
         await self._execute_raw(run_migrations())
 
         self._initialized = True

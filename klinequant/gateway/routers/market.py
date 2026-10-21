@@ -18,10 +18,10 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, Query
 
-from gateway.market_sources.binance_source import BINANCE_REST_BASE, HTTP_PROXY
-from gateway.market_sources.derived import is_derived
-from gateway.market_sources.kline_cache import cached_klines
-from gateway.market_sources.manager import market_manager
+from klinequant.gateway.market_sources.binance_source import BINANCE_REST_BASE, HTTP_PROXY
+from klinequant.gateway.market_sources.derived import is_derived
+from klinequant.gateway.market_sources.kline_cache import cached_klines
+from klinequant.gateway.market_sources.manager import market_manager
 
 logger = logging.getLogger(__name__)
 

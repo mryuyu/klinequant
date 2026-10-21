@@ -15,6 +15,20 @@ from typing import Any, Dict, List, Optional
 import yaml
 from pydantic import BaseModel, Field
 
+from klinequant import PACKAGE_DIR, PROJECT_ROOT
+
+
+def _resolve_config_path(p: str | Path) -> Path:
+    """只读配置文件（随包分发）：相对路径锚定 PACKAGE_DIR。"""
+    pp = Path(p)
+    return pp if pp.is_absolute() else PACKAGE_DIR / pp
+
+
+def _resolve_data_path(p: str | Path) -> Path:
+    """可变数据（data/logs 等）：相对路径锚定 PROJECT_ROOT（可用 KLINEQUANT_HOME 覆盖）。"""
+    pp = Path(p)
+    return pp if pp.is_absolute() else PROJECT_ROOT / pp
+
 
 # ─── 配置模型 ───
 
@@ -128,7 +142,7 @@ def load_settings(
     Returns:
         Settings 实例
     """
-    config_path = config_path or Path("config/settings.yaml")
+    config_path = _resolve_config_path(config_path or Path("config/settings.yaml"))
 
     # 从 yaml 加载
     yaml_data: Dict[str, Any] = {}
@@ -147,7 +161,13 @@ def load_settings(
     # 合并
     merged = _deep_merge(yaml_data, env_overrides)
 
-    return Settings(**merged)
+    settings = Settings(**merged)
+    # 路径锚定：使配置与运行 CWD 解耦
+    #   只读 config/*.yaml → PACKAGE_DIR；可变 data/logs → PROJECT_ROOT
+    settings.exchanges_config = str(_resolve_config_path(settings.exchanges_config))
+    settings.database.duckdb.path = str(_resolve_data_path(settings.database.duckdb.path))
+    settings.logging.log_dir = str(_resolve_data_path(settings.logging.log_dir))
+    return settings
 
 
 def _set_nested(d: Dict, parts: List[str], value: Any) -> None:
@@ -177,7 +197,7 @@ def load_exchanges_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     Returns:
         交易所配置字典
     """
-    config_path = config_path or Path("config/exchanges.yaml")
+    config_path = _resolve_config_path(config_path or Path("config/exchanges.yaml"))
     if not config_path.exists():
         return {"exchanges": {}, "subscriptions": {}}
 

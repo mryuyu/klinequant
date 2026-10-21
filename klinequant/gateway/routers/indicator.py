@@ -15,9 +15,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Query
 
-from gateway.indicator_service import ensure_warmed
-from gateway.market_sources.manager import market_manager
-from gateway.state import state
+from klinequant.gateway.indicator_service import ensure_warmed
+from klinequant.gateway.market_sources.manager import market_manager
+from klinequant.gateway.state import state
 
 logger = logging.getLogger(__name__)
 

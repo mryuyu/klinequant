@@ -15,15 +15,16 @@ import time
 
 import httpx
 
-from gateway.market_sources.base import MarketSource
-from gateway.market_sources.manager import market_manager
+from klinequant import PROJECT_ROOT
+from klinequant.gateway.market_sources.base import MarketSource
+from klinequant.gateway.market_sources.manager import market_manager
 
 logger = logging.getLogger(__name__)
 # 诊断用：gateway 主日志未配置 stdlib logging handler，额外写一份文件日志
 if not logger.handlers:
     try:
         _fh = logging.FileHandler(
-            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs", "ws_kline.log"),
+            str(PROJECT_ROOT / "logs" / "ws_kline.log"),
             encoding="utf-8",
         )
         _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))

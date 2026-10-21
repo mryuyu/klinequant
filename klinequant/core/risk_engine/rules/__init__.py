@@ -1,6 +1,6 @@
 """rules 包 — 风控规则"""
-from core.risk_engine.rules.base import RiskCheckResult, RiskContext, RiskRule
-from core.risk_engine.rules.rules import (
+from klinequant.core.risk_engine.rules.base import RiskCheckResult, RiskContext, RiskRule
+from klinequant.core.risk_engine.rules.rules import (
     AvailableBalanceRule,
     ConsecutiveLossRule,
     MaxDailyLossRule,

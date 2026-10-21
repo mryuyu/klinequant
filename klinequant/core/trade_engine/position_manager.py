@@ -15,7 +15,7 @@ import time
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
-from protocol.types import Position
+from klinequant.protocol.types import Position
 
 logger = logging.getLogger(__name__)
 

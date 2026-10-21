@@ -45,7 +45,7 @@ class AppState:
     def alert_manager(self):
         """延迟初始化 AlertManager"""
         if self._alert_manager is None:
-            from core.notification.alert_manager import AlertManager
+            from klinequant.core.notification.alert_manager import AlertManager
             self._alert_manager = AlertManager()
             self._alert_manager.setup_default_rules()
         return self._alert_manager
@@ -54,7 +54,7 @@ class AppState:
     def strategy_manager(self):
         """延迟初始化 StrategyManager，并注册内置策略"""
         if self._strategy_manager is None:
-            from core.strategy_engine.manager import StrategyManager
+            from klinequant.core.strategy_engine.manager import StrategyManager
             from strategies.dual_ma import DualMAStrategy
             self._strategy_manager = StrategyManager()
             self._strategy_manager.register_strategy("dual_ma", DualMAStrategy)
@@ -64,7 +64,7 @@ class AppState:
     def risk_engine(self):
         """延迟初始化 RiskEngine（默认 12 条规则）"""
         if self._risk_engine is None:
-            from core.risk_engine.engine import RiskEngine
+            from klinequant.core.risk_engine.engine import RiskEngine
             self._risk_engine = RiskEngine()
             self._risk_engine.start()
         return self._risk_engine
@@ -73,9 +73,9 @@ class AppState:
     def indicator_engine(self):
         """延迟初始化 IndicatorEngine（导入 indicators 包触发内置指标注册）"""
         if self._indicator_engine is None:
-            from core.indicator_engine.engine import IndicatorEngine
-            import core.indicator_engine.indicators  # noqa: F401
-            import custom_indicators  # noqa: F401  def 式自定义指标自动注册（IND-110）
+            from klinequant.core.indicator_engine.engine import IndicatorEngine
+            import klinequant.core.indicator_engine.indicators  # noqa: F401
+            import klinequant.custom_indicators  # noqa: F401  def 式自定义指标自动注册（IND-110）
             self._indicator_engine = IndicatorEngine(max_cache_size=30000)   # 对齐前端 PRELOAD_HARD_CAP：深历史指标序列不被截断
             self._indicator_engine.start()
         return self._indicator_engine

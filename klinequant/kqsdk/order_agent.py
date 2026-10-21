@@ -31,10 +31,11 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core.trade_engine.ledger import ExposureLedger
-from core.trade_engine.resolver import UnifiedResolver
-from kqsdk.api import KqApi
-from kqsdk.dist_protocol import (
+from klinequant import PROJECT_ROOT
+from klinequant.core.trade_engine.ledger import ExposureLedger
+from klinequant.core.trade_engine.resolver import UnifiedResolver
+from klinequant.kqsdk.api import KqApi
+from klinequant.kqsdk.dist_protocol import (
     ACTION_CANCEL,
     ACTION_FLATTEN,
     DEFAULT_INTENT_ENDPOINT,
@@ -48,13 +49,13 @@ from kqsdk.dist_protocol import (
     parse_message,
     report_to_message,
 )
-from kqsdk.order_id import OrderIdFactory
-from protocol.transport.zmq_transport import ZmqTransport
-from protocol.types import Offset, OrderKind, OrderSide, Tif
+from klinequant.kqsdk.order_id import OrderIdFactory
+from klinequant.protocol.transport.zmq_transport import ZmqTransport
+from klinequant.protocol.types import Offset, OrderKind, OrderSide, Tif
 
 if TYPE_CHECKING:  # 仅类型标注，避免运行期耦合
-    from core.notification.alert_manager import AlertManager
-    from kqsdk.backend import MarketBackend
+    from klinequant.core.notification.alert_manager import AlertManager
+    from klinequant.kqsdk.backend import MarketBackend
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +211,7 @@ class OrderAgent:
         self._source = source
 
         dedup_path = dedup_path or (
-            Path("data") / "agent_dedup" / f"{follower_account}.db"
+            PROJECT_ROOT / "data" / "agent_dedup" / f"{follower_account}.db"
         )
         self._dedup = AgentDedup(dedup_path)
 

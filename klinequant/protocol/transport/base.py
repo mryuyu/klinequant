@@ -8,7 +8,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Coroutine
 
-from protocol.messages import Message
+from klinequant.protocol.messages import Message
 
 
 # 消息处理回调类型
