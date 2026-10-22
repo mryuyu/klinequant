@@ -16,9 +16,11 @@ import pytest
 
 from klinequant.gateway.market_sources.manager import market_manager
 from klinequant.gateway.market_sources.ths_source import (
+    ThsApi,
     ThsSource,
     _bucket_label,
     _display_code,
+    _is_conn_dead,
     _m1_label,
     _normalize_code,
 )
@@ -288,3 +290,63 @@ async def test_week_bar_seed_and_delta(monkeypatch):
     assert wk["open"] == 9.5                                   # 周开盘保持种子值
     assert wk["high"] == 10.8 and wk["close"] == 10.6
     assert wk["volume"] == 50000 + (1000 - 800)                # 种子量 + 当日增量（扣除基线）
+
+
+# ─── 断连自愈：传输层连接死亡必须丢弃连接触发重连 ───
+
+_WSASEND_ERR = (
+    "[thsdk]QueryData 错误:write tcp 192.168.1.254:1828->119.3.43.91:9602: "
+    "wsasend: An established connection was aborted by the software in your host machine."
+)
+
+
+def test_is_conn_dead_matches_transport_errors_only():
+    assert _is_conn_dead(_WSASEND_ERR)                         # 实测会话中止错误串
+    assert _is_conn_dead("read tcp 1.2.3.4:9602: reset by peer")
+    assert _is_conn_dead("i/o timeout")
+    assert _is_conn_dead("unexpected EOF")
+    # 业务级错误不得误判为断连（否则无谓重连风暴）
+    assert not _is_conn_dead("请求太快")
+    assert not _is_conn_dead("限频")
+    assert not _is_conn_dead("无数据")
+    assert not _is_conn_dead("代码非法")
+
+
+def test_call_drops_dead_connection_on_transport_error():
+    """连接被中止的错误必须丢弃连接（connected=False/_ths=None），
+    令下次调用经冷却重连；否则死 socket 被永久复用，K 线久不自愈（只能重启进程）。"""
+
+    class _Res:
+        success = False
+        error = _WSASEND_ERR
+        data = None
+
+    class _FakeThs:
+        def klines(self, *a, **k):
+            return _Res()
+
+    api = ThsApi()
+    api.connected = True
+    api._ths = _FakeThs()
+    assert api._call(lambda t: t.klines("USHA600519")) is None
+    assert api.connected is False and api._ths is None          # 死连接已丢弃
+
+
+def test_call_keeps_connection_on_business_error():
+    """业务级失败（非断连）不得误丢连接，避免无谓重登录"""
+
+    class _Res:
+        success = False
+        error = "请求太快，请稍后再试"
+        data = None
+
+    class _FakeThs:
+        def klines(self, *a, **k):
+            return _Res()
+
+    api = ThsApi()
+    api.connected = True
+    ths = _FakeThs()
+    api._ths = ths
+    assert api._call(lambda t: t.klines("USHA600519"), retries=0) is None
+    assert api.connected is True and api._ths is ths            # 连接保留

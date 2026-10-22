@@ -58,6 +58,21 @@ _CONNECT_TIMEOUT = 15.0     # 登录超时（秒）：劣化后重连登录可�
 _MIN_PREC = 2               # A 股最小价格变动 0.01 元，精度下限 2 位
 _MAX_CHUNK = 8000           # thsdk 单次拉取实测上限（超出截断），更深历史靠区间分页拼接
 
+# 传输层连接死亡特征：thsdk 把底层 Go net 错误原样透传（会话被本机/网络中止时形如
+# “QueryData 错误:write tcp ...: wsasend: An established connection was aborted ...”）。
+# 命中即视为死连接，必须丢弃并重连；不含业务级错误（太快/限频/无数据/代码非法），避免误重连。
+_CONN_DEAD_KEYS = frozenset({
+    "wsasend", "wsarecv", "write tcp", "read tcp", "aborted",
+    "reset by peer", "broken pipe", "i/o timeout", "connection reset",
+    "connection aborted", "connection refused", "unexpected eof", "eof",
+})
+
+
+def _is_conn_dead(err: str) -> bool:
+    """错误串是否为传输层连接死亡（需丢弃连接触发重连），而非业务级失败"""
+    low = err.lower()
+    return any(k in low for k in _CONN_DEAD_KEYS)
+
 # 前端周期 → thsdk klines interval（thsdk 原生：1m/5m/15m/30m/60m/day/week）
 INTERVAL_MAP = {
     "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
@@ -263,6 +278,16 @@ class ThsApi:
                         continue
                 if "未登录" in err or "未连接" in err:
                     self._mark_broken()
+                elif _is_conn_dead(err):
+                    # 会话被网络/本机中止（wsasend aborted 等）：死 socket 若继续标记为已连接，
+                    # 后续每次调用都原样复用它并原样失败，永不重连（只能重启进程）——正是
+                    # “点股票品种报未返回 K 线数据”久不自愈的根因；stream_loop 的 _try_reconnect
+                    # 也因 connected=True 在 _ensure_locked 处短路而无法自愈。此处丢弃连接，
+                    # 令下次调用经冷却重新登录。不走 _mark_broken：其 disconnect() 对已中止的
+                    # socket 可能挂死并持锁堵死全部请求，同超时路径直接丢引用任其自然关闭。
+                    logger.warning("THS connection dead (%s), dropping for reconnect", err[:120])
+                    self.connected = False
+                    self._ths = None
                 logger.debug(f"THS call failed: {err}")
                 return None
             return None  # pragma: no cover
