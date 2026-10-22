@@ -148,6 +148,11 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .modal input.ind-fvis-chk { width:13px; height:13px; margin:0; padding:0; border:none; background:none; border-radius:0; cursor:pointer; accent-color:var(--accent); flex:none; }
 .legend-row span.lg-off { opacity:.35; }
 .legend-row.row-off > *:not(.ind-vis-chk) { opacity:.45; }
+/* 指标选中态：点中带数值的指标线后对应图例行高亮（左键选中 / 右键命中均触发） */
+.legend-row.ind-sel { background:rgba(41,98,255,0.16); box-shadow:inset 0 0 0 1px var(--accent); }
+/* 图例数值悬停提示浮层：图例行 pointer-events:none（保十字光标穿透）致原生 title 失效，用自定义浮层恢复“悬停显示参数名” */
+.lg-tip { position:fixed; z-index:9999; display:none; padding:4px 8px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:4px; font-size:11px; color:var(--text); white-space:nowrap; pointer-events:none; box-shadow:0 2px 10px rgba(0,0,0,0.35); }
+.lg-tip.show { display:block; }
 /* 指标弹窗：线条样式区（色板 + 线型选择，逐线配置） */
 .ind-style-sec { margin-top:2px; }
 .ind-style-row { display:flex; align-items:center; gap:8px; padding:4px 0; flex-wrap:wrap; }
@@ -671,6 +676,14 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
   <div class="ctx-row ctx-action" id="draw-ctx-lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg><span>锁定</span></div>
   <div class="ctx-sep"></div>
   <div class="ctx-row ctx-action" id="draw-ctx-del"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6M14 11v6"/></svg><span>删除</span></div>
+</div>
+
+<!-- 指标右键菜单（命中带数值的指标线时弹出：指标设置/显示隐藏/移除；复用 .ctx-menu 样式） -->
+<div class="ctx-menu" id="ind-ctx-menu">
+  <div class="ctx-row ctx-action" id="ind-ctx-setting"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33 1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82 1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg><span>指标设置</span></div>
+  <div class="ctx-row ctx-action" id="ind-ctx-vis"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span>隐藏指标</span></div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-row ctx-action" id="ind-ctx-del"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6M14 11v6"/></svg><span>移除</span></div>
 </div>
 
 <!-- 分组头右键菜单（卡片式：添加品种 / 重命名；复用 .ctx-menu 样式） -->
@@ -1828,6 +1841,7 @@ function cleanupEmptyPanes() {
 }
 /* 全量重建：销毁全部指标实例后按 indLayout 重建（增删/改参后调用） */
 function rebuildIndicators() {
+  selectedIndId = null;   // 实例即将全部重建（id 变更），先清除指标选中态
   indInstances.forEach(destroyInstance);
   indInstances = [];
   maColorIdx = 0;
@@ -2657,6 +2671,7 @@ const ctxMb = document.getElementById('ctx-mb');
 document.getElementById('chart').addEventListener('contextmenu', e => {
   e.preventDefault();
   if (openDrawCtxMenu(e.clientX, e.clientY)) return;   // 右键命中画线 → 画线专属菜单（样式/删除），不弹图表菜单
+  if (openIndCtxMenu(e.clientX, e.clientY)) return;    // 右键命中带数值的指标线 → 指标菜单（设置/显隐/移除），不弹图表菜单
   ctxRo.value = curRightOffset;
   ctxPs.value = firstScreenBars;
   ctxMt.value = scaleTopPct;
@@ -4162,6 +4177,7 @@ let selectedId = null;
 let lastClient = { x: 0, y: 0 };
 let ctrlHeld = false;   // Ctrl 磁吸：按住时锚点吸附到所在 bar 的高/低极值（精确定位）
 let cursorPt = null;    // 主图最近十字线坐标（供磁吸光标引导）
+let cursorTime = null;  // 主图最近十字线所在 bar 的准确 time（crosshair 同源；锚点定位锁定光标，防 coordinateToLogical 舍入偏右一根）
 let dragState = null;   // 拖拽态：{mode:'anchor'|'body', id, idx?, start?, lgStart?, priceStart?}
 let hoverKind = null;   // 悬停命中类型：'anchor' | 'body' | null（决定光标形状）
 /* 画线偏好：默认样式 + 磁吸开关 + 连续绘制（独立持久化键 kq-draw-pref） */
@@ -4195,15 +4211,23 @@ function updateCursor() {   // 光标形状：工具态 crosshair / 拖拽或悬
   if (dragState) { container.style.cursor = dragState.mode === 'anchor' ? 'nwse-resize' : 'move'; return; }
   container.style.cursor = hoverKind === 'anchor' ? 'nwse-resize' : (hoverKind === 'body' ? 'move' : '');
 }
-function pointToAnchor(pt) {   // 面板媒体坐标 → {time(吸附最近bar), price}；按住 Ctrl 时 price 再吸附该 bar 高/低极值
+function pointToAnchor(pt, timeHint) {   // 面板媒体坐标 → {time(锁定光标所在bar), price}；按住 Ctrl 时 price 再吸附该 bar 高/低极值
   if (!pt) return null;
-  const lg = chart.timeScale().coordinateToLogical(pt.x);
-  if (lg == null || !klines.length) return null;
-  const ci = Math.max(0, Math.min(klines.length - 1, Math.round(lg)));
+  /* 锚点 time 锁定光标（crosshair）所在 bar：优先用 lwc 事件亲测的 e.time，无则用
+     coordinateToTime（与 crosshair 同一 timeScale 映射）。弃用 coordinateToLogical+round：
+     实时推送触发 timeScale 重算时其舍入会跨 .5 边界、比光标偏右一根（2026-10-22 实证）。 */
+  let time = (timeHint != null) ? timeHint : chart.timeScale().coordinateToTime(pt.x);
+  if (!klines.length) return null;
+  let ci = (time != null) ? barIndexOfTime(time) : -1;   // 二分精确命中 klines（供磁吸取该 bar OHLC）
+  if (ci < 0) {   // time 为空（如最右侧空白区）或未命中：退回最近逻辑索引 bar（clamp 保留原落锚便利）
+    const lg = chart.timeScale().coordinateToLogical(pt.x);
+    if (lg == null) return null;
+    ci = Math.max(0, Math.min(klines.length - 1, Math.round(lg)));
+    time = klines[ci].time;
+  }
   const bar = klines[ci];
-  const time = bar.time;
   let price = candleSeries.coordinateToPrice(pt.y);
-  if (time == null || price == null) return null;
+  if (price == null) return null;
   if (magnetActive() && bar) {   // 磁吸（磁铁开关或按住 Ctrl）：取该 bar OHLC 中最接近光标价格者
     const cands = [bar.open, bar.high, bar.low, bar.close].filter(v => typeof v === 'number');
     if (cands.length) price = cands.reduce((a, b) => Math.abs(b - price) < Math.abs(a - price) ? b : a);
@@ -4211,7 +4235,7 @@ function pointToAnchor(pt) {   // 面板媒体坐标 → {time(吸附最近bar),
   return { time, price };
 }
 function updateSnapGuide() {   // 工具激活或磁吸激活且有光标位置时显示吸附目标引导：strong=磁吸/Ctrl（横线+实心点），weak=仅工具态（竖线+空心点，预告锚点将落的 bar）
-  if (cursorPt && (activeTool || magnetActive())) drawPrim.setSnap(pointToAnchor(cursorPt), magnetActive());
+  if (cursorPt && (activeTool || magnetActive())) drawPrim.setSnap(pointToAnchor(cursorPt, cursorTime), magnetActive());
   else drawPrim.setSnap(null);
 }
 function shapeHit(sh, pt) {
@@ -4370,11 +4394,17 @@ container.addEventListener('pointerdown', e => {
   const pt = clientToMedia(e);
   const ha = hitAnchor(pt, true);
   if (ha) {
+    setSelectedInd(null);   // 命中画线锚点：清除指标选中态
     selectedId = ha.id; drawPrim.setSelected(selectedId);
     dragState = { mode: 'anchor', id: ha.id, idx: ha.idx };
   } else {
     const hid = hitTest(pt, true);
-    if (!hid) { selectedId = null; drawPrim.setSelected(null); return; }   // 未命中：不禁用平移，交还图表
+    if (!hid) {   // 未命中画线：点中带数值的指标线则选中、空白处取消；均不禁用平移，交还图表
+      selectedId = null; drawPrim.setSelected(null);
+      setSelectedInd(hitIndicator(pt));
+      return;
+    }
+    setSelectedInd(null);   // 命中画线身：清除指标选中态
     const sh = drawings.find(d => d.id === hid);
     selectedId = hid; drawPrim.setSelected(selectedId);
     dragState = {
@@ -4429,7 +4459,7 @@ container.addEventListener('dblclick', e => {
 chart.subscribeClick(e => {
   if (e.paneIndex != null && e.paneIndex !== 0) return;
   if (!activeTool || !e.point) return;
-  const a = pointToAnchor(e.point); if (!a) return;
+  const a = pointToAnchor(e.point, e.time); if (!a) return;
   if (activeTool === 'text') { placePts = []; promptText(a); return; }
   placePts.push(a);
   if (placePts.length >= (TOOL_ANCHORS[activeTool] || 1)) commitShape();
@@ -4438,11 +4468,12 @@ chart.subscribeClick(e => {
 chart.subscribeCrosshairMove(e => {
   const inMain = (e.paneIndex == null || e.paneIndex === 0);
   cursorPt = (inMain && e.point) ? e.point : null;
+  cursorTime = (inMain && e.point) ? e.time : null;
   updateSnapGuide();
   if (dragState) { drawPrim.setPreview(null); drawPrim.setHover(null); return; }   // 拖拽中不做预览/悬停
   if (!inMain) { drawPrim.setPreview(null); drawPrim.setHover(null); hoverKind = null; updateCursor(); return; }
   if (activeTool && activeTool !== 'text' && e.point) {
-    const need = TOOL_ANCHORS[activeTool] || 1, a = pointToAnchor(e.point);
+    const need = TOOL_ANCHORS[activeTool] || 1, a = pointToAnchor(e.point, e.time);
     if (a) {
       const pts = need === 1 ? [a] : (placePts.length === 1 ? [placePts[0], a] : null);
       if (pts) { const ds = drawPref.defaultStyle || {}; drawPrim.setPreview({ type: activeTool, points: pts, style: { color: ds.color || DRAW_COLOR, lineWidth: ds.lineWidth || 1, lineStyle: 2 } }); hoverKind = null; updateCursor(); return; }
@@ -4630,6 +4661,132 @@ document.getElementById('draw-ctx-lock').addEventListener('click', e => { e.stop
 document.getElementById('draw-ctx-del').addEventListener('click', e => { e.stopPropagation(); closeDrawCtxMenu(); deleteSelected(); });
 document.addEventListener('click', e => { if (!drawCtxMenu.contains(e.target)) closeDrawCtxMenu(); });
 window.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawCtxMenu(); });
+
+/* ═══ 指标选中 + 右键菜单（点中带数值的指标线选中，右键弹「指标设置/显示隐藏/移除」）═══
+   命中检测：鼠标 x 经 coordinateToTime 定位最近 bar（与光标同源、防偏一根），对该 bar±1 三点用
+   series.dataByIndex 取值、priceToCoordinate 得 pane 局部 y（副图 +窗格 top 与鼠标同系）做线段邻近判定；
+   副图指标仅在其窗格 y 区间内命中，整指标隐藏(off)/逐线隐藏字段跳过。阈值 6px 与画线一致。 */
+let selectedIndId = null;
+function distPtSeg(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1e-6;
+  let t = ((px - ax) * dx + (py - ay) * dy) / L2; t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+function hitIndicator(pt) {
+  if (!pt || !klines.length || !indInstances.length) return null;
+  let t = chart.timeScale().coordinateToTime(pt.x);   // 与光标同源的坐标→bar 映射
+  let ci = (t != null) ? barIndexOfTime(t) : -1;
+  if (ci < 0) {   // 兜底：最右侧空白区等 time 未命中时退回最近逻辑索引
+    const lg = chart.timeScale().coordinateToLogical(pt.x);
+    if (lg == null) return null;
+    ci = Math.max(0, Math.min(klines.length - 1, Math.round(lg)));
+  }
+  const ts = chart.timeScale(), TH = 6, regs = paneRegions() || [];
+  let best = null, bestD = TH;
+  for (const inst of indInstances) {
+    if (inst.off) continue;   // 整指标隐藏：不参与命中
+    const reg = regs.find(r => r.idx === inst.pane);
+    const paneTop = reg ? reg.top : 0;
+    if (reg && (pt.y < reg.top - TH || pt.y > reg.bottom + TH)) continue;   // 副图仅自身窗格内命中
+    const ly = pt.y - paneTop;   // 鼠标在该 pane 内的局部 y（priceToCoordinate 同为 pane 局部）
+    inst.series.forEach((s, si) => {
+      if (fieldHidden(inst, si)) return;   // 逐线隐藏字段跳过
+      const P = [];
+      for (let k = ci - 1; k <= ci + 1; k++) {
+        if (k < 0) { P.push(null); continue; }
+        const d = s.dataByIndex(k);
+        if (!d || d.value == null) { P.push(null); continue; }
+        const x = ts.timeToCoordinate(d.time), y = s.priceToCoordinate(d.value);
+        P.push((x == null || y == null) ? null : { x, y });
+      }
+      for (let m = 0; m < P.length - 1; m++) {   // 相邻有效点线段邻近
+        const a = P[m], b = P[m + 1];
+        if (a && b) { const dd = distPtSeg(pt.x, ly, a.x, a.y, b.x, b.y); if (dd < bestD) { bestD = dd; best = inst.id; } }
+      }
+      if (P[1]) { const dd = Math.hypot(pt.x - P[1].x, ly - P[1].y); if (dd < bestD) { bestD = dd; best = inst.id; } }   // 中间点邻近（稀疏/端点兜底）
+    });
+  }
+  return best;
+}
+function setSelectedInd(id) {   // 切换选中指标：对应图例行加/去 .ind-sel 高亮
+  if (selectedIndId === id) return;
+  const mark = (iid, on) => { const o = instById(iid); if (o && o.legendEl) { const r = o.legendEl.querySelector('.legend-row') || o.legendEl; r.classList.toggle('ind-sel', on); } };
+  if (selectedIndId) mark(selectedIndId, false);
+  selectedIndId = id;
+  if (id) mark(id, true);
+}
+const indCtxMenu = document.getElementById('ind-ctx-menu');
+let indCtxTarget = null;
+function closeIndCtxMenu() { indCtxMenu.classList.remove('show'); }
+function openIndCtxMenu(clientX, clientY) {
+  const pt = clientToMedia({ clientX, clientY });
+  const id = hitIndicator(pt);
+  if (!id) { closeIndCtxMenu(); return false; }   // 未命中指标线：交回图表菜单
+  indCtxTarget = id; setSelectedInd(id);   // 右键即选中高亮
+  const inst = instById(id);
+  const visSpan = document.querySelector('#ind-ctx-vis span');
+  if (visSpan) visSpan.textContent = (inst && inst.off) ? '显示指标' : '隐藏指标';
+  ctxMenu.classList.remove('show'); closeDrawCtxMenu();
+  indCtxMenu.style.left = Math.min(clientX, window.innerWidth - 200) + 'px';
+  indCtxMenu.style.top = Math.min(clientY, window.innerHeight - 140) + 'px';
+  indCtxMenu.classList.add('show');
+  return true;
+}
+document.getElementById('ind-ctx-setting').addEventListener('click', e => { e.stopPropagation(); closeIndCtxMenu(); if (indCtxTarget) openIndModal(indCtxTarget); });
+document.getElementById('ind-ctx-vis').addEventListener('click', e => {
+  e.stopPropagation(); closeIndCtxMenu();
+  const inst = instById(indCtxTarget); if (!inst) return;
+  inst.off = !inst.off;   // 复用图例显隐语义：off 取反 + 回写 indLayout + 同步勾选框 + 就地生效
+  const ref = layoutRef(inst); if (ref) ref.off = inst.off;
+  const chk = inst.legendEl.querySelector('.ind-vis-chk'); if (chk) chk.checked = !inst.off;
+  applyInstVisibility(inst); saveLayout();
+});
+document.getElementById('ind-ctx-del').addEventListener('click', e => {
+  e.stopPropagation(); closeIndCtxMenu();
+  const inst = instById(indCtxTarget); if (!inst) return;
+  const li = indLayout.indexOf(layoutRef(inst));   // 复用弹窗移除语义：从 indLayout 删除后全量重建（副图窗格自动回收）
+  if (li >= 0) indLayout.splice(li, 1);
+  if (selectedIndId === indCtxTarget) selectedIndId = null;
+  rebuildIndicators(); saveLayout();
+});
+document.addEventListener('click', e => { if (!indCtxMenu.contains(e.target)) closeIndCtxMenu(); });
+window.addEventListener('keydown', e => { if (e.key === 'Escape') { closeIndCtxMenu(); setSelectedInd(null); } });
+
+/* ── 图例数值悬停提示（恢复“悬停数值显示参数名”）─────────────────────
+   图例行 pointer-events:none（保十字光标穿透：若行捕获指针，光标移到图例时图表
+   mouseleave、十字光标消失），名/值片段的原生 title 因此不触发。改用 mousemove 命中
+   检测 .legend-row 内带 title 的名/值 span + 自定义浮层显示，两全：悬停显示参数名，
+   图例仍穿透（十字光标不受影响）。rAF 节流 + 行 rect 粗筛控性能。 */
+const lgTipEl = document.createElement('div');
+lgTipEl.className = 'lg-tip';
+document.body.appendChild(lgTipEl);
+let lgTipRaf = 0, lgTipX = 0, lgTipY = 0;
+function lgTipScan() {
+  lgTipRaf = 0;
+  let hit = null;
+  for (const row of document.querySelectorAll('.legend-row')) {
+    const rr = row.getBoundingClientRect();
+    if (lgTipX < rr.left || lgTipX > rr.right || lgTipY < rr.top || lgTipY > rr.bottom) continue;
+    for (const sp of row.querySelectorAll('span[title]')) {
+      const sr = sp.getBoundingClientRect();
+      if (lgTipX >= sr.left && lgTipX <= sr.right && lgTipY >= sr.top && lgTipY <= sr.bottom) { hit = sp; break; }
+    }
+    if (hit) break;
+  }
+  const t = hit && hit.getAttribute('title');
+  if (t) {
+    lgTipEl.textContent = t;
+    lgTipEl.style.left = (lgTipX + 14) + 'px';
+    lgTipEl.style.top = (lgTipY + 16) + 'px';
+    lgTipEl.classList.add('show');
+  } else {
+    lgTipEl.classList.remove('show');
+  }
+}
+document.addEventListener('mousemove', e => {
+  lgTipX = e.clientX; lgTipY = e.clientY;
+  if (!lgTipRaf) lgTipRaf = requestAnimationFrame(lgTipScan);
+});
 
 reloadDrawingsForView(); syncToolUI();
 
