@@ -344,19 +344,14 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 #draw-style-modal input.draw-color-custom { width:34px; height:22px; padding:0; border:1px solid var(--border); border-radius:4px; background:none; cursor:pointer; flex:none; }
 .draw-style-preview { margin-top:12px; height:26px; border-radius:6px; background:var(--bg-base); display:flex; align-items:center; overflow:hidden; }
 .draw-style-preview > div { width:100%; }
-/* 斐波那契级别编辑器：每行两栏（左=文本说明+文本色 | 右=比例+线色+线型）；
-   控件全部定宽 flex:none——弹窗全局 .modal input{width:100%} 与 flex 伸缩叠加曾把左栏挤为 0 宽，定宽后免疫 */
+/* 斐波那契级别编辑器：比例两列排布（同 TV：勾选+比例+线色，行尾 × 删除），线宽/线型为整组全局设置置于列表上方；
+   控件定宽 flex:none（比例输入框 flex:1 吃列宽）——弹窗全局 .modal input{width:100%} 曾把控件撑满，定宽后免疫 */
 #draw-style-modal .fib-wrap { max-height:332px; overflow-y:auto; padding-right:2px; }
-.fib-head, .fib-row { display:flex; align-items:center; gap:6px; padding:3px 0; }
-.fib-head { color:var(--text-sub); font-size:11px; border-bottom:1px solid var(--border); margin-bottom:4px; padding-bottom:5px; }
-.fib-head span { white-space:nowrap; overflow:hidden; }
-.fib-grp-l, .fib-grp-r { display:flex; align-items:center; gap:6px; flex:none; }
-.fib-grp-r { border-left:1px solid var(--border); padding-left:8px; }
-#draw-style-modal input.fib-on { width:15px; height:15px; margin:0; padding:0; border:none; border-radius:3px; background:none; flex:none; }   /* 重置 .modal input 全局 width:100%（否则勾选框被撑宽、钩子居中致与文本列间距巨大） */
-#draw-style-modal input.fib-text { width:110px; flex:none; padding:4px 6px; font-size:12px; }
-#draw-style-modal input.fib-ratio { width:110px; flex:none; padding:4px 6px; font-size:12px; font-family:var(--font-mono); }
+.fib-cols { display:grid; grid-template-columns:1fr 1fr; column-gap:16px; }
+.fib-row { display:flex; align-items:center; gap:6px; padding:3px 0; }
+#draw-style-modal input.fib-on { width:15px; height:15px; margin:0; padding:0; border:none; border-radius:3px; background:none; flex:none; }   /* 重置 .modal input 全局 width:100%（否则勾选框被撑宽、钩子居中致间距巨大） */
+#draw-style-modal input.fib-ratio { flex:1; min-width:0; padding:4px 6px; font-size:12px; font-family:var(--font-mono); }
 #draw-style-modal input.fib-color { width:26px; height:20px; padding:0; border:1px solid var(--border); border-radius:4px; background:none; cursor:pointer; flex:none; }
-#draw-style-modal .fib-row .ind-line-sel { width:92px; flex:none; }
 .fib-del { width:18px; background:none; border:none; color:var(--text-sub); cursor:pointer; font-size:13px; padding:0; flex:none; }
 .fib-del:hover { color:var(--down); }
 .fib-add { margin-top:8px; width:100%; padding:6px 0; background:var(--bg-elevated); border:1px dashed var(--border-light); border-radius:6px; color:var(--text-sub); font-size:12px; cursor:pointer; }
@@ -4068,26 +4063,26 @@ function infoStats(sh) {   // 信息线统计：返回卡片两行文案（行1 
   };
 }
 
-/* 斐波那契级别：每级 {on,ratio,text,textColor,color,lineStyle}；价格 = p1 + (p0-p1)*ratio（0=终点/第二锚点，1=起点/第一锚点，>1 越起点延伸；
+/* 斐波那契级别：每级 {on,ratio,color}（线头标签文本直接用比例，线型为整组全局设置）；价格 = p1 + (p0-p1)*ratio（0=终点/第二锚点，1=起点/第一锚点，>1 越起点延伸；
    即低点拉高点时高点为 0、低点为 1，同 TV 回撤读法）。默认级别取 TV 常用回调/延伸位；存档缺 levels 的旧 fib 图形回落默认表（防御）。 */
 const FIB_TEXT_COLOR = '#d1d4dc';
 /* 出厂默认级别（TV 常用回调/延伸位）——级别弹窗「恢复默认」按钮回填此表 */
 function fibFactoryLevels() {
   return [
-    { on: true, ratio: 0,     text: '0',     textColor: FIB_TEXT_COLOR, color: '#90a4ae', lineStyle: 1 },
-    { on: true, ratio: 0.236, text: '0.236', textColor: FIB_TEXT_COLOR, color: '#90a4ae', lineStyle: 1 },
-    { on: true, ratio: 0.382, text: '0.382', textColor: FIB_TEXT_COLOR, color: '#90a4ae', lineStyle: 1 },
-    { on: true, ratio: 0.5,   text: '0.5',   textColor: FIB_TEXT_COLOR, color: '#90a4ae', lineStyle: 1 },
-    { on: true, ratio: 0.618, text: '0.618', textColor: FIB_TEXT_COLOR, color: '#f5c542', lineStyle: 1 },
-    { on: true, ratio: 0.786, text: '0.786', textColor: FIB_TEXT_COLOR, color: '#b39ddb', lineStyle: 1 },
-    { on: true, ratio: 1,     text: '1',     textColor: FIB_TEXT_COLOR, color: '#f6465d', lineStyle: 1 },
-    { on: true, ratio: 1.618, text: '1.618', textColor: FIB_TEXT_COLOR, color: '#0ecb81', lineStyle: 1 },
-    { on: true, ratio: 2.618, text: '2.618', textColor: FIB_TEXT_COLOR, color: '#42a5f5', lineStyle: 1 },
-    { on: true, ratio: 4.236, text: '4.236', textColor: FIB_TEXT_COLOR, color: '#0ecb81', lineStyle: 1 },
+    { on: true, ratio: 0,     color: '#90a4ae' },
+    { on: true, ratio: 0.236, color: '#90a4ae' },
+    { on: true, ratio: 0.382, color: '#90a4ae' },
+    { on: true, ratio: 0.5,   color: '#90a4ae' },
+    { on: true, ratio: 0.618, color: '#f5c542' },
+    { on: true, ratio: 0.786, color: '#b39ddb' },
+    { on: true, ratio: 1,     color: '#f6465d' },
+    { on: true, ratio: 1.618, color: '#0ecb81' },
+    { on: true, ratio: 2.618, color: '#42a5f5' },
+    { on: true, ratio: 4.236, color: '#0ecb81' },
   ];
 }
 /* fib 级别模板永久记忆：级别弹窗确认后把该级别表存为默认模板（kq-fib-levels），
-   此后新建 fib 一律沿用——比例/文本/颜色/线型跨刷新、跨品种周期记住；无存档时回退出厂 10 级。 */
+   此后新建 fib 一律沿用——比例/颜色/显隐跨刷新、跨品种周期记住（线宽/线型随图形样式存档）；无存档时回退出厂 10 级。 */
 const FIB_LEVELS_KEY = 'kq-fib-levels';
 function fibSavedLevels() {
   try { const a = JSON.parse(localStorage.getItem(FIB_LEVELS_KEY) || 'null'); if (Array.isArray(a) && a.length) return a; } catch (e) {}
@@ -4096,6 +4091,8 @@ function fibSavedLevels() {
 function fibDefaultLevels() { return fibSavedLevels() || fibFactoryLevels(); }
 function saveFibLevels(levels) { try { localStorage.setItem(FIB_LEVELS_KEY, JSON.stringify(levels)); } catch (e) {} }
 const fibLevelsOf = sh => (Array.isArray(sh.levels) && sh.levels.length) ? sh.levels : fibDefaultLevels();
+/* fib 整组线型：线型为全局设置存 sh.style.lineStyle；旧存档级别自带 lineStyle 的回落首级线型（再回落虚线 1），保证旧图形观感不变 */
+const fibLineStyleOf = sh => (sh.style && sh.style.lineStyle != null) ? sh.style.lineStyle : ((fibLevelsOf(sh)[0] || {}).lineStyle ?? 1);
 const fibLevelPrice = (sh, r) => sh.points[1].price + (sh.points[0].price - sh.points[1].price) * r;
 
 /* 跨周期锚点时间解析：sh.tf 为创建周期，非当前周期时把锚点 time 对齐到当前周期「包含它的 bar」
@@ -4227,6 +4224,7 @@ class DrawingPrimitive {
         const xL = Math.min(x0, x1);
         const prec = (typeof curPrec === 'number' && curPrec > 0) ? curPrec : 2;
         const prevDash = (sh === this._preview) ? 2 : null;   // 橡皮筋预览整组虚线
+        const ls = fibLineStyleOf(sh);   // 整组共用线型（全局设置）
         for (const lv of fibLevelsOf(sh)) {
           if (!lv.on) continue;
           const pr = pts[1].price + (pts[0].price - pts[1].price) * lv.ratio;
@@ -4234,12 +4232,12 @@ class DrawingPrimitive {
           if (py == null) continue;
           ctx.strokeStyle = lv.color || col;
           ctx.lineWidth = Math.max(1, Math.floor(((sh === this._preview) ? 1 : (st.lineWidth || 1)) * hpr));   // 参考线性质：悬停/选中不加粗（同 TV），预览橡皮筋恒 1
-          ctx.setLineDash((DRAW_DASH[prevDash ?? (lv.lineStyle || 0)] || []).map(x => x * hpr));
+          ctx.setLineDash((DRAW_DASH[prevDash ?? ls] || []).map(x => x * hpr));
           ctx.beginPath(); ctx.moveTo(xL, py); ctx.lineTo(W, py); ctx.stroke();
           ctx.setLineDash([]);
-          ctx.fillStyle = lv.textColor || FIB_TEXT_COLOR;
+          ctx.fillStyle = FIB_TEXT_COLOR;
           ctx.font = `${Math.round(11 * vpr)}px sans-serif`; ctx.textBaseline = 'bottom';
-          ctx.fillText(`${(lv.text != null && lv.text !== '') ? lv.text : lv.ratio} (${pr.toFixed(prec)})`, xL + 4 * hpr, py - 2 * vpr);
+          ctx.fillText(`${lv.ratio} (${pr.toFixed(prec)})`, xL + 4 * hpr, py - 2 * vpr);   // 标签文本直接用比例（文本说明字段已移除）
         }
         break;
       }
@@ -4832,27 +4830,26 @@ function updateStylePreview() {
   pv.style.borderTop = `${Math.max(1, styleDraft.lineWidth) + 1}px ${dashName} ${styleDraft.color}`;
 }
 function syncSwatchActive() { drawStyleBody.querySelectorAll('.ind-sw').forEach(b => b.classList.toggle('active', b.dataset.c === styleDraft.color)); }
-function renderFibModal() {   // 斐波那契级别编辑器：行内两栏（左=文本说明+文本色 | 右=比例+线色+线型），勾选显隐，可增删级别
+function renderFibModal() {   // 斐波那契级别编辑器：线宽/线型全局置于上方，比例两列排布（同 TV：勾选+比例+线色），行尾 × 删除
   const rowHtml = (lv, i) =>
     `<div class="fib-row" data-fi="${i}">` +
       `<input type="checkbox" class="fib-on"${lv.on ? ' checked' : ''} title="显示/隐藏此级别">` +
-      `<div class="fib-grp-l"><input type="text" class="fib-text" value="${fibEsc(lv.text)}" title="级别文本说明（线头显示）">` +
-      `<input type="color" class="fib-color fib-tc" value="${fibEsc(lv.textColor || FIB_TEXT_COLOR)}" title="文本颜色"></div>` +
-      `<div class="fib-grp-r"><input type="number" step="any" class="fib-ratio" value="${lv.ratio}" title="级别比例（0=终点 1=起点 >1 越起点延伸）">` +
+      `<input type="number" step="any" class="fib-ratio" value="${lv.ratio}" title="级别比例（0=终点 1=起点 >1 越起点延伸）">` +
       `<input type="color" class="fib-color fib-lc" value="${fibEsc(lv.color || DRAW_COLOR)}" title="线颜色">` +
-      lineStyleSel(lv.lineStyle || 0) +
-      `<button type="button" class="fib-del" title="删除此级别">×</button></div>` +
+      `<button type="button" class="fib-del" title="删除此级别">×</button>` +
     `</div>`;
+  const half = Math.ceil(fibDraft.length / 2);   // 两列按列优先切分（左列前半、右列后半，同 TV 视觉）；data-fi 保留原草稿索引
   drawStyleBody.innerHTML =
     `<div class="ind-style-row"><span class="ind-style-name">线宽</span><select class="ind-line-sel draw-lw-sel" id="draw-lw">` +
       [1, 2, 3, 4].map(w => `<option value="${w}"${w === styleDraft.lineWidth ? ' selected' : ''}>${w} px</option>`).join('') +
     `</select></div>` +
-    `<div class="fib-wrap">` +
-      `<div class="fib-head"><input type="checkbox" disabled style="visibility:hidden">` +
-      `<div class="fib-grp-l"><span style="width:142px">文本说明 / 文本颜色</span></div>` +
-      `<div class="fib-grp-r"><span style="width:264px">比例 / 线颜色 / 线型</span></div></div>` +
-      fibDraft.map(rowHtml).join('') +
-    `</div>` +
+    `<div class="ind-style-row"><span class="ind-style-name">线型</span><select class="ind-line-sel" id="draw-ls" style="font-family:var(--font-mono); letter-spacing:1px;">` +
+      IND_LINE_STYLES.map(([v, n]) => `<option value="${v}" title="${n}"${v === styleDraft.lineStyle ? ' selected' : ''}>${LINE_STYLE_GLYPH[v]}</option>`).join('') +
+    `</select></div>` +
+    `<div class="fib-wrap"><div class="fib-cols">` +
+      `<div class="fib-col">${fibDraft.slice(0, half).map((lv, i) => rowHtml(lv, i)).join('')}</div>` +
+      `<div class="fib-col">${fibDraft.slice(half).map((lv, j) => rowHtml(lv, half + j)).join('')}</div>` +
+    `</div></div>` +
     `<button type="button" class="fib-add" id="fib-add">＋ 增加比例</button>` +
     `<button type="button" class="fib-add fib-reset" id="fib-reset" title="恢复出厂默认 10 级">↺ 恢复默认级别</button>` +
     (styleTargetId ? `<div class="ind-style-row" style="margin-top:6px"><span class="ind-style-name">周期</span>` +
@@ -4867,8 +4864,9 @@ function openStyleModal(shapeId) {
   styleTargetIsText = !!(target && target.type === 'text') || (!target && !shapeId && activeTool === 'text');
   const src = (target ? target.style : null) || (shapeId ? {} : defaultStyleFor(activeTool));
   styleDraft = { color: src.color || DRAW_COLOR, lineWidth: src.lineWidth || 1, lineStyle: src.lineStyle || 0, fontSize: src.fontSize || 12, tfAll: target ? (target.tfAll !== false) : true };
+  if (styleTargetIsFib && target && (target.style || {}).lineStyle == null) styleDraft.lineStyle = fibLineStyleOf(target);   // 线型全局化：旧存档无 style.lineStyle 时回落级别首级线型
   fibDraft = styleTargetIsFib ? JSON.parse(JSON.stringify(fibLevelsOf(target))) : [];
-  drawStyleModal.querySelector('.modal').style.width = styleTargetIsFib ? '560px' : '300px';
+  drawStyleModal.querySelector('.modal').style.width = styleTargetIsFib ? '440px' : '300px';
   document.getElementById('draw-style-title').textContent = styleTargetIsFib ? '斐波那契级别' : (shapeId ? '编辑画线样式' : '默认画线样式');
   renderStyleModal();
   drawStyleModal.classList.add('show');
@@ -4878,10 +4876,10 @@ function applyStyleModal() {
   if (styleTargetIsFib && styleTargetId) {   // fib：级别草稿 + 线宽 + 跨周期开关写回 shape
     const sh = drawById(styleTargetId);
     if (sh) {
-      sh.levels = fibDraft.map(l => Object.assign({}, l));
-      sh.style = Object.assign({}, sh.style, { lineWidth: styleDraft.lineWidth });
+      sh.levels = fibDraft.map(l => ({ on: l.on !== false, ratio: +l.ratio || 0, color: l.color || DRAW_COLOR }));   // 级别只留 显隐/比例/线色（标签文本=比例、线型为整组全局）
+      sh.style = Object.assign({}, sh.style, { lineWidth: styleDraft.lineWidth, lineStyle: styleDraft.lineStyle });
       sh.tfAll = styleDraft.tfAll !== false;
-      saveFibLevels(sh.levels);   // 记住为默认模板：此后新建 fib 沿用此比例/颜色/线型
+      saveFibLevels(sh.levels);   // 记住为默认模板：此后新建 fib 沿用此比例/颜色/显隐
       saveDrawings(); refreshDrawView();
     }
     closeStyleModal(); return;
@@ -4921,7 +4919,7 @@ drawStyleBody.addEventListener('change', onStyleField);
 drawStyleBody.addEventListener('click', e => {
   if (!styleTargetIsFib) return;
   if (e.target.id === 'fib-add') {
-    fibDraft.push({ on: true, ratio: 0.5, text: '0.5', textColor: FIB_TEXT_COLOR, color: IND_SWATCHES[fibDraft.length % IND_SWATCHES.length], lineStyle: 1 });
+    fibDraft.push({ on: true, ratio: 0.5, color: IND_SWATCHES[fibDraft.length % IND_SWATCHES.length] });
     renderFibModal(); return;
   }
   if (e.target.id === 'fib-reset') { fibDraft = fibFactoryLevels(); renderFibModal(); return; }   // 回退出厂 10 级（需再点确认才生效并覆写默认模板）
@@ -4938,11 +4936,8 @@ function onFibField(e) {
   const row = t.closest ? t.closest('.fib-row') : null; if (!row) return;
   const lv = fibDraft[+row.dataset.fi]; if (!lv) return;
   if (t.classList.contains('fib-on')) lv.on = t.checked;
-  else if (t.classList.contains('fib-text')) lv.text = t.value;
-  else if (t.classList.contains('fib-tc')) lv.textColor = t.value;
   else if (t.classList.contains('fib-lc')) lv.color = t.value;
   else if (t.classList.contains('fib-ratio')) { const v = parseFloat(t.value); if (!Number.isNaN(v)) lv.ratio = v; }
-  else if (t.classList.contains('ind-line-sel')) lv.lineStyle = +t.value || 0;
 }
 drawStyleBody.addEventListener('input', onFibField);
 drawStyleBody.addEventListener('change', onFibField);
