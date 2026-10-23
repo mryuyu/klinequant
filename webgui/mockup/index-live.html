@@ -143,13 +143,14 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .gear-btn svg { width:12px; height:12px; }
 /* 显隐勾选框：图例行首（整指标显隐，TV 眼睛图标等价）+ 弹窗「样式」页每条线/柱行首（隐藏该条线/柱）；
    隐藏线图例值置灰但保留宽度（防行宽抖动）；整指标隐藏时整行置灰（勾选框除外） */
-.ind-vis-chk { width:12px; height:12px; margin:0 2px 0 0; vertical-align:middle; cursor:pointer; accent-color:var(--accent); flex:none; }
-/* 弹窗样式行内勾选框须以 .modal input.ind-fvis-chk 提升特异性，压过 .modal input 的 width:100%/padding/border，否则撑成整行 */
-.modal input.ind-fvis-chk { width:13px; height:13px; margin:0; padding:0; border:none; background:none; border-radius:0; cursor:pointer; accent-color:var(--accent); flex:none; }
+.kq-chk { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; margin:0 2px 0 0; vertical-align:middle; cursor:pointer; flex:none; border:1px solid #4a4f5e; border-radius:3px; background:#262b38; color:transparent; font-size:10px; line-height:1; user-select:none; box-sizing:border-box; }
+.kq-chk::after { content:'✓'; font-size:10px; line-height:1; }
+.kq-chk.on { background:var(--accent); border-color:var(--accent); color:#0b0e14; }
+/* 自绘勾选框（.kq-chk）：替代原生 checkbox（选中态发蓝且跨浏览器不可控）——未选中暗灰底、选中 accent 高亮底+深色对勾；图例行首/弹窗样式行首/斐波级别/画线跨周期开关共用 */
 .legend-row span.lg-off { opacity:.35; }
 .legend-row.row-off > *:not(.ind-vis-chk) { opacity:.45; }
 /* 指标选中态：点中带数值的指标线后对应图例行高亮（左键选中 / 右键命中均触发） */
-.legend-row.ind-sel { background:rgba(41,98,255,0.16); box-shadow:inset 0 0 0 1px var(--accent); }
+.legend-row.ind-sel { background:rgba(0,212,170,0.14); box-shadow:inset 0 0 0 1px var(--accent); }
 /* 图例数值悬停提示浮层：图例行 pointer-events:none（保十字光标穿透）致原生 title 失效，用自定义浮层恢复“悬停显示参数名” */
 .lg-tip { position:fixed; z-index:9999; display:none; padding:4px 8px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:4px; font-size:11px; color:var(--text); white-space:nowrap; pointer-events:none; box-shadow:0 2px 10px rgba(0,0,0,0.35); }
 .lg-tip.show { display:block; }
@@ -198,10 +199,12 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 #ind-pick-list { max-height:52vh; overflow-y:auto; padding-right:4px; }
 .ind-tab.active { color:var(--text); border-bottom-color:var(--accent); font-weight:600; }
 /* 副图右上角最大化/还原按钮（TradingView 式：默认隐藏，悬停所属副图淡入；与图例同层级） */
-.pane-max-btn { position:absolute; z-index:6; width:22px; height:20px; border:none; border-radius:4px; background:rgba(30,34,45,0.78); color:var(--text-sub); cursor:pointer; display:flex; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity .15s; }
-.pane-max-btn.show { opacity:1; pointer-events:auto; }
-.pane-max-btn:hover { color:var(--accent); background:var(--bg-elevated); }
-.pane-max-btn svg { width:13px; height:13px; }
+/* 副图右上角按钮组（折叠 + 最大化）：悬停所属副图淡入，组内按钮共享底板 */
+.pane-btn-grp { position:absolute; z-index:6; right:0; display:flex; gap:2px; padding:1px; border-radius:5px; background:rgba(30,34,45,0.78); opacity:0; pointer-events:none; transition:opacity .15s; }
+.pane-btn-grp.show { opacity:1; pointer-events:auto; }
+.pane-btn { width:20px; height:20px; border:none; border-radius:4px; background:none; color:var(--text-sub); cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.pane-btn:hover { color:var(--accent); background:var(--bg-elevated); }
+.pane-btn svg { width:13px; height:13px; }
 /* 右键菜单（TV 风格：深色卡片 + 较高行高 + 浅灰标签 + 左图标 + 分组分隔线） */
 .ctx-menu { position:fixed; z-index:200; display:none; min-width:216px; background:var(--bg-base); border:1px solid var(--border-light); border-radius:6px; padding:4px 0; box-shadow:0 10px 30px rgba(0,0,0,.6); font-size:13px; }
 .ctx-menu.show { display:block; }
@@ -225,6 +228,7 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .price-tag { position:absolute; right:0; z-index:6; display:none; flex-direction:column; align-items:center; gap:1px; padding:3px 4px 4px; border-radius:2px; pointer-events:none; white-space:nowrap; font-family:var(--font-mono); box-sizing:border-box; background:#787b86; }
 .price-tag .pt-price { font-size:13px; color:#131722; line-height:1.15; }   /* 与 layout.fontSize（坐标栏字号）一致、不加粗（同坐标栏刻度观感） */
 .price-tag .pt-cd { font-size:11px; color:rgba(19,23,34,.8); line-height:1; }
+.time-tag { position:absolute; z-index:6; display:none; padding:4px 6px; border-radius:2px; pointer-events:none; white-space:nowrap; font-family:'Trebuchet MS', Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif; font-size:13px; line-height:1.2; background:#2a2e39; color:#ffffff; transform:translate(-50%,-50%); box-sizing:border-box; }   /* 空白区十字光标时间标签：与有数据区 lwc 十字线时间标签完全一致（背景=labelBackgroundColor #2a2e39、白字、layout.fontSize 13、格式=timeFormatter 中式） */
 
 /* 底部持仓（高度可拖拽 + 可折叠隐藏） */
 .positions-bar { border-top:1px solid var(--border); background:var(--bg-panel); height:var(--pos-h,150px); display:flex; flex-direction:column; }
@@ -449,7 +453,6 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
         <!-- 组① 线类 -->
         <button class="draw-btn" data-tool="trend" title="线段"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.6"/><circle cx="19" cy="5" r="1.6"/></svg></button>
         <button class="draw-btn" data-tool="sray" title="趋势线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="19" r="1.6"/><path d="M6.2 17.8L18 6"/><path d="M12 6h6v6"/></svg></button>
-        <button class="draw-btn" data-tool="ray" title="水平射线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h12"/><path d="M15 8l5 4-5 4"/></svg></button>
         <button class="draw-btn" data-tool="hline" title="水平线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h18"/></svg></button>
         <button class="draw-btn" data-tool="vline" title="垂直线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18"/></svg></button>
         <button class="draw-btn" data-tool="info" title="信息线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20L20 4"/><circle cx="4" cy="20" r="1.4"/><circle cx="20" cy="4" r="1.4"/><rect x="9.5" y="8.5" width="7" height="4.5" rx="0.8"/></svg></button>
@@ -509,6 +512,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
         </div>
         <div id="ind-legends"></div>
         <div class="price-tag" id="price-tag"><span class="pt-price"></span><span class="pt-cd"></span></div>
+        <div class="time-tag" id="time-tag"></div>
         <div id="chart"></div>
         <!-- 清空画线确认卡片（图表内：工具栏清空按钮触发，替代浏览器弹窗） -->
         <div class="draw-confirm" id="draw-confirm">
@@ -912,8 +916,8 @@ const IND_LAYOUT_DEFAULT = [
 let indLayout = [];
 if (savedLayout && Array.isArray(savedLayout.indLayout) && savedLayout.indLayout.every(x => IND_CATALOG[x.type] || (x.type === 'custom' && x.name))) {
   indLayout = savedLayout.indLayout.map(x => x.type === 'custom'
-    ? { type: 'custom', name: x.name, params: { ...x.params }, styleUI: x.styleUI ?? null, fieldHidden: null, off: !!x.off }
-    : { type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params }, styleUI: x.styleUI ?? null, fieldHidden: null, off: !!x.off });   // styleUI 与整指标 off 须随条目恢复；fieldHidden（逐线/柱隐藏）仅会话内有效（重载丢弃，用户预期刷新后默认全显），会话内切周期/重建仍经 saveLayout 条目携带
+    ? { type: 'custom', name: x.name, params: { ...x.params }, styleUI: x.styleUI ?? null, fieldHidden: null, off: !!x.off, collapsed: !!x.collapsed }
+    : { type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params }, styleUI: x.styleUI ?? null, fieldHidden: null, off: !!x.off, collapsed: !!x.collapsed });   // styleUI 与整指标 off/副图折叠 collapsed 须随条目恢复；fieldHidden（逐线/柱隐藏）仅会话内有效（重载丢弃，用户预期刷新后默认全显），会话内切周期/重建仍经 saveLayout 条目携带
 } else {
   indLayout = IND_LAYOUT_DEFAULT.map(x => ({ type: x.type, params: { ...x.params } }));
   if (savedLayout && savedLayout.indParams) {
@@ -1108,7 +1112,7 @@ const chart = createChart(container, {
   grid: { vertLines: { color: '#1c2030' }, horzLines: { color: '#1c2030' } },
   crosshair: {
     mode: 0,
-    vertLine: { color: '#758696', width: 1, style: 3, labelBackgroundColor: '#2a2e39' },
+    vertLine: { color: '#758696', width: 1, style: 3, labelBackgroundColor: '#2a2e39', labelVisible: false },   // 内置时间标签关闭：改由自定义 #time-tag 统一承担数据区+空白区，保证跨边界位置不跳变
     horzLine: { color: '#758696', width: 1, style: 3, labelBackgroundColor: '#2a2e39' },
   },
   rightPriceScale: { borderColor: '#2a2e39', minimumWidth: 90, scaleMargins: { top: scaleTopPct / 100, bottom: scaleBottomPct / 100 } },
@@ -1364,7 +1368,7 @@ function buildInstance(it, styleUI, opts = {}) {
   const id = nextIndId(it.type);
   const cat = catOf(it);
   const inst = { id, type: it.type, name: it.name, params: { ...it.params }, series: [], legendVals: {}, pane: 0, styleUI: styleUI || null,
-    fieldHidden: Array.isArray(it.fieldHidden) ? it.fieldHidden : [], off: !!it.off };   // 显隐态：逐线/柱隐藏字段索引集 + 整指标 off
+    fieldHidden: Array.isArray(it.fieldHidden) ? it.fieldHidden : [], off: !!it.off, collapsed: !!it.collapsed };   // 显隐态：逐线/柱隐藏字段索引集 + 整指标 off；collapsed：副图窗格折叠态（持久化于 indLayout 条目）
   if (opts.baseColors) inst.baseColors = [...opts.baseColors];   // 单实例重建：继承原 MA 色，避免颜色漂移（见 indSeriesStyle consume 分支）
   /* 副图窗格索引：原位重建（opts.pane）复用旧索引，避免新增空窗格/窗格错位；新建走 chart.panes().length 追加。
      主图指标（ma/boll 及 custom main）恒为 pane 0，不经此路径 */
@@ -1453,7 +1457,7 @@ function buildInstance(it, styleUI, opts = {}) {
      移到值 span 的 title 悬停提示（鼠标移到指标名/数值上显示对应参数）——避免图例过宽。
      .legend-row overflow:hidden 会裁掉 CSS 伪元素提示，故统一用原生 title（OS 渲染不受裁剪） */
   const ps = indParams(it), nameTip = ps ? `(${ps})` : '';   // 指标名悬停提示：参数带括号，如 (5,20)
-  const rowHtml = `<input type="checkbox" class="ind-vis-chk" data-ind-id="${id}" title="显示/隐藏指标"${inst.off ? '' : ' checked'}>` +
+  const rowHtml = `<span class="kq-chk ind-vis-chk${inst.off ? '' : ' on'}" data-ind-id="${id}" title="显示/隐藏指标"></span>` +
     `<button class="gear-btn" data-ind-id="${id}" title="调整参数"></button>` +
     `<span class="muted" id="lg-label-${id}" title="${nameTip}">${indBaseName(it)}</span>` +
     parts.map(p => `<span style="color:${p.color}" title="${p.label}"><span id="lg-${id}-${p.key}">--</span></span>`).join(' ');   // 值用 span（非 <b>）：字重与指标名一致、不再加粗
@@ -1635,7 +1639,7 @@ function indStyleUI(inst) {
           `<input type="color" class="ind-color" value="${toHexColor(cur)}" title="自定义颜色（选色即退出跟随涨跌）">` +
           `</div>`;
       }).join('');
-      return `<div class="ind-style-row hist-wrap" data-si="${i}"><div class="hist-head"><input type="checkbox" class="ind-fvis-chk" data-si="${i}" title="取消勾选隐藏此柱"${fieldHidden(inst, i) ? '' : ' checked'}><span class="ind-style-name">${label}</span></div>${subs}</div>`;
+      return `<div class="ind-style-row hist-wrap" data-si="${i}"><div class="hist-head"><span class="kq-chk ind-fvis-chk${fieldHidden(inst, i) ? '' : ' on'}" data-si="${i}" title="取消勾选隐藏此柱"></span><span class="ind-style-name">${label}</span></div>${subs}</div>`;
     }
     if (isDirField(inst, i)) {
       /* 变色线字段（def 式 plot:dirline）：两个子行各一条色板（上升/下降），无线型选项；
@@ -1647,13 +1651,13 @@ function indStyleUI(inst) {
           `<input type="color" class="ind-color" value="${toHexColor(cur)}" title="${name}颜色">` +
           `</div>`;
       }).join('');
-      return `<div class="ind-style-row hist-wrap" data-si="${i}"><div class="hist-head"><input type="checkbox" class="ind-fvis-chk" data-si="${i}" title="取消勾选隐藏此线"${fieldHidden(inst, i) ? '' : ' checked'}><span class="ind-style-name">${label}</span></div>${subs}</div>`;
+      return `<div class="ind-style-row hist-wrap" data-si="${i}"><div class="hist-head"><span class="kq-chk ind-fvis-chk${fieldHidden(inst, i) ? '' : ' on'}" data-si="${i}" title="取消勾选隐藏此线"></span><span class="ind-style-name">${label}</span></div>${subs}</div>`;
     }
     const s = inst.styleUI?.[i] || {};
     const cur = s.color || indSeriesStyle(inst, i, false).color;
     const curStyle = s.lineStyle != null ? s.lineStyle : (inst.type === 'boll' && i === 1 ? 2 : (backendFieldStyle(inst, i)?.line_style ?? 0));
     return `<div class="ind-style-row" data-si="${i}">` +
-      `<input type="checkbox" class="ind-fvis-chk" data-si="${i}" title="取消勾选隐藏此线"${fieldHidden(inst, i) ? '' : ' checked'}>` +
+      `<span class="kq-chk ind-fvis-chk${fieldHidden(inst, i) ? '' : ' on'}" data-si="${i}" title="取消勾选隐藏此线"></span>` +
       `<span class="ind-style-name">${label}</span>` +
       `<input type="color" class="ind-color" value="${toHexColor(cur)}" title="${label}颜色">` +
       `${lineStyleSel(curStyle)}</div>`;
@@ -1811,7 +1815,7 @@ function applyInstVisibility(inst) {
   rowEl.classList.toggle('row-off', !!inst.off);
   const keys = Object.keys(inst.legendVals);
   inst.series.forEach((s, i) => {
-    const vis = !inst.off && !fieldHidden(inst, i);
+    const vis = !inst.off && !inst.collapsed && !fieldHidden(inst, i);   // 窗格折叠与整指标隐藏同口径：series/自绘 primitive 一并隐藏（图例名称+数值保留）
     s.applyOptions({ visible: vis });
     const prim = inst.stepPrims?.[i] || inst.dirPrims?.[i];
     if (prim) prim.setVisible(vis);   // 阶梯线/变色线自绘不受 series.visible 控制，须同步
@@ -1860,7 +1864,7 @@ function rebuildIndicators() {
   }
   /* 新副图窗格应用目标高度（首屏未就绪时留给 applyPaneHeights 统一处理） */
   subPaneTargets = subPending;
-  if (panesSized && subPending.length) setTimeout(() => applyPaneHeights(), 50);
+  if (panesSized && subPending.length) setTimeout(() => { applyCollapsedPanes(); }, 50);   // 副图高度按折叠态应用（折叠窗格压到细条，其余回目标高）
   if (klines.length) renderIndData();
   layoutPaneLegends();
 }
@@ -1918,6 +1922,25 @@ function applyPaneHeights() {
   /* 各副图回目标高，主图(pane 0)吃余额 */
   applyPaneStretch((i, total) => i === 0 ? Math.max(60, total - subSum) : (subH.get(i) || SUB_PANE_H));
 }
+/* 副图窗格折叠：折叠窗格压到细条（series 隐藏、图例名称+数值保留在覆盖层），主图吃余额；无折叠时等价 applyPaneHeights */
+const COLLAPSED_PANE_H = 30;
+const paneCollapsed = p => indInstances.some(i => i.pane === p && i.collapsed);
+function applyCollapsedPanes() {
+  if (!subPaneTargets.length) return;
+  const subH = new Map(subPaneTargets.map(t => [t.pane, paneCollapsed(t.pane) ? COLLAPSED_PANE_H : t.h]));
+  let subSum = 0; subH.forEach(h => { subSum += h; });
+  applyPaneStretch((i, total) => i === 0 ? Math.max(60, total - subSum) : (subH.get(i) || SUB_PANE_H));
+}
+/* 窗格 → 实例（当前每副图窗格恰好一个实例：buildInstance 副图恒新建窗格） */
+function paneInstOf(p) { return indInstances.find(i => i.pane === p) || null; }
+function togglePaneCollapse(p) {
+  const inst = paneInstOf(p); if (!inst) return;
+  inst.collapsed = !inst.collapsed;
+  const ref = layoutRef(inst); if (ref) ref.collapsed = inst.collapsed;   // 随 indLayout 持久化（重建/刷新后恢复）
+  applyInstVisibility(inst);   // series/primitive 显隐就地生效，图例名称+数值保留实时刷新
+  applyCollapsedPanes();
+  syncPaneBtns(); layoutPaneLegends(); saveLayout();
+}
 
 /* 只在变化时写 display，避免 300ms 轮询频繁触发样式重算（与 __lastTop 同思路） */
 function setDisplay(el, d) { if (el && el.__disp !== d) { el.__disp = d; el.style.display = d; } }
@@ -1944,6 +1967,7 @@ function layoutPaneLegends() {
   setDisplay(ohlc && ohlc.closest('.legend'), subMaximized ? 'none' : '');
   setDisplay(wrap.querySelector('.watermark'), subMaximized ? 'none' : '');
   setDisplay(document.getElementById('price-tag'), subMaximized ? 'none' : '');
+  setDisplay(document.getElementById('time-tag'), subMaximized ? 'none' : '');
   for (const inst of indInstances) {
     if (inst.pane === 0 || inst.pane >= panes.length) continue;
     const el = inst.legendEl;
@@ -1965,10 +1989,14 @@ function layoutPaneLegends() {
 let maxPane = -1;   // 当前最大化的窗格索引（-1=无，0=主图，>0=对应副图）
 let hoverPane = 0;   // 当前悬停的副图索引（按钮显示态随它切换，TradingView 式悬停淡入）
 const paneBtnCache = new Map();   // pane 索引 → 按钮元素（窗格增删后按当前索引重建）
-const MAX_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="12" height="12" rx="1"/><path d="M16 8h3a1 1 0 011 1v10a1 1 0 01-1 1H9a1 1 0 01-1-1v-3"/></svg>';
-const RESTORE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="1"/><path d="M4 16V5a1 1 0 011-1h11"/></svg>';
-/* 副图右上角按钮：随副图图例同套定位机制跟随窗格（缓存失效时重建）；
-   水平位置紧贴右侧价格刻度区左缘（动态读轴宽），不遮挡坐标数值 */
+/* TV 风格窗格控制图标（细描边、极简）：折叠=chevron 压向基线 / 展开=chevron 离开基线；最大化=四角外扩（全屏）/ 还原=四角内收 */
+const MAX_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 9V5a1 1 0 011-1h4"/><path d="M20 9V5a1 1 0 00-1-1h-4"/><path d="M4 15v4a1 1 0 001 1h4"/><path d="M20 15v4a1 1 0 01-1 1h-4"/></svg>';
+const RESTORE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 4v4a1 1 0 01-1 1H4"/><path d="M15 4v4a1 1 0 001 1h4"/><path d="M9 20v-4a1 1 0 00-1-1H4"/><path d="M15 20v-4a1 1 0 011-1h4"/></svg>';
+const COLLAPSE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9l6 6 6-6"/><path d="M5 19h14"/></svg>';
+const EXPAND_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 15l6-6 6 6"/><path d="M5 5h14"/></svg>';
+/* 副图右上角按钮组（折叠 + 最大化）：随副图图例同套定位机制跟随窗格（缓存失效时重建）；
+   水平位置紧贴右侧价格刻度区左缘（动态读轴宽），不遮挡坐标数值；
+   垂直位置与图例数值行居中对齐（图例行 top=窗格顶+8、行高≈22 → 组 top=窗格顶+9，按钮高 20） */
 function syncPaneBtns() {
   const panes = chart.panes();
   const ht = chart.timeScale().height();
@@ -1977,29 +2005,41 @@ function syncPaneBtns() {
   const maximized = maxPane >= 0 && maxPane < panes.length;   // 含主图最大化：此时全部副图窗格隐藏，其按钮也须隐藏
   for (let p = 1; p < panes.length; p++) {
     seen.add(p);
-    let btn = paneBtnCache.get(p);
-    if (!btn || !btn.isConnected) {
-      btn = document.createElement('button');
-      btn.className = 'pane-max-btn';
-      btn.title = '最大化 / 还原';
-      btn.addEventListener('click', () => togglePaneMax(p));
-      document.querySelector('.chart-wrap').appendChild(btn);
-      paneBtnCache.set(p, btn);
+    let grp = paneBtnCache.get(p);
+    if (!grp || !grp.isConnected) {
+      grp = document.createElement('div');
+      grp.className = 'pane-btn-grp';
+      const cbtn = document.createElement('button');
+      cbtn.className = 'pane-btn pane-collapse-btn';
+      cbtn.addEventListener('click', () => togglePaneCollapse(p));
+      const mbtn = document.createElement('button');
+      mbtn.className = 'pane-btn pane-max-btn';
+      mbtn.title = '最大化 / 还原';
+      mbtn.addEventListener('click', () => togglePaneMax(p));
+      grp.append(cbtn, mbtn);
+      document.querySelector('.chart-wrap').appendChild(grp);
+      paneBtnCache.set(p, grp);
     }
-    btn.innerHTML = p === maxPane ? RESTORE_ICON : MAX_ICON;
-    btn.style.right = Math.round(axisW + 8) + 'px';   // 绘图区右上角，让开价格刻度区（悬停自身时保持可见由 :hover/.show 保证）
-    if (maximized && p !== maxPane) { setDisplay(btn, 'none'); continue; }   // 其余窗格按钮随窗格隐藏
-    setDisplay(btn, '');
+    const [cbtn, mbtn] = [grp.querySelector('.pane-collapse-btn'), grp.querySelector('.pane-max-btn')];
+    const col = paneCollapsed(p);
+    const cIco = (maximized && p === maxPane) ? EXPAND_ICON : (col ? EXPAND_ICON : COLLAPSE_ICON);
+    const mIco = p === maxPane ? RESTORE_ICON : MAX_ICON;
+    if (cbtn.__ico !== cIco) { cbtn.__ico = cIco; cbtn.innerHTML = cIco; }
+    if (mbtn.__ico !== mIco) { mbtn.__ico = mIco; mbtn.innerHTML = mIco; }
+    cbtn.title = (maximized && p === maxPane) ? '展开窗格' : (col ? '展开窗格（恢复指标显示）' : '折叠窗格（仅保留指标名称与数值）');
+    grp.style.right = Math.round(axisW + 8) + 'px';   // 绘图区右上角，让开价格刻度区（悬停自身时保持可见由 :hover/.show 保证）
+    if (maximized && p !== maxPane) { setDisplay(grp, 'none'); continue; }   // 其余窗格按钮随窗格隐藏
+    setDisplay(grp, '');
     let top = 6;   // 最大化：还原按钮固定在右上角
     if (!maximized) {
       let below = ht;
       for (let j = p; j < panes.length; j++) below += panes[j].getHeight();
-      top = Math.round(container.clientHeight - below + 6);
+      top = Math.round(container.clientHeight - below + 9);   // +9：与图例数值行（top+8、行高≈22）垂直居中对齐
     }
-    btn.style.top = top + 'px';
+    grp.style.top = top + 'px';
   }
-  for (const [p, btn] of [...paneBtnCache]) {
-    if (!seen.has(p)) { btn.remove(); paneBtnCache.delete(p); }
+  for (const [p, grp] of [...paneBtnCache]) {
+    if (!seen.has(p)) { grp.remove(); paneBtnCache.delete(p); }
   }
   updatePaneBtnVis();   // 统一定显隐（含 :hover 判断）：不在循环内逐个 toggle，否则 300ms 重算会剥掉悬停中按钮的 show 类
 }
@@ -2045,9 +2085,9 @@ function togglePaneMax(pane) {
   /* 统一从「全部窗格可见」起步（切换目标/还原都先复位，避免残留隐藏行） */
   panes.forEach(p => setPaneRowHidden(p, false));
   if (target < 0) {
-    /* 还原：各副图回目录默认高度，主图吃余额 */
+    /* 还原：各副图回目录默认高度（折叠窗格压细条），主图吃余额 */
     subPaneTargets = indInstances.filter(i => i.pane > 0).map(inst => ({ pane: inst.pane, h: catOf(inst).h || SUB_PANE_H }));
-    applyPaneHeights();
+    applyCollapsedPanes();
     syncPaneBtns();
     layoutPaneLegends();
     return;
@@ -2058,9 +2098,13 @@ function togglePaneMax(pane) {
   syncPaneBtns();
   layoutPaneLegends();
 }
-/* 双击切换（命中副图区域才响应；双击缩放已关闭，避免与图表默认双击冲突） */
+/* 双击切换（命中副图区域才响应；双击缩放已关闭，避免与图表默认双击冲突）；
+   命中画线（锚点/线身）时不触发：否则双击画线开样式弹窗的同时窗格被最大化（BUG 修复，与下方画线 dblclick 处理器同口径命中检测） */
 container.addEventListener('dblclick', e => {
+  if (activeTool) return;
   const rect = container.getBoundingClientRect();
+  const dpt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  if (hitAnchor(dpt, true) || hitTest(dpt, true)) return;   // 函数声明提升，此处可安全引用画线命中检测
   const p = paneAtY(e.clientY - rect.top);
   if (p >= 0) togglePaneMax(p);   // 主图(0)与副图(>0)均可双击最大化/还原；-1=分隔条/空白不响应
 });
@@ -2421,7 +2465,7 @@ function finalizeLoad(gen, prec) {
   const span = lvr ? lvr.to - lvr.from : null;
   renderChart(true);
   reloadDrawingsForView();   // 切视图后重载该 exchange:symbol:tf 的画线
-  if (!panesSized) { panesSized = true; setTimeout(applyPaneHeights, 200); }   // 首屏就绪后应用副图高度（等 autoSize 布局稳定）
+  if (!panesSized) { panesSized = true; setTimeout(() => { applyPaneHeights(); applyCollapsedPanes(); }, 200); }   // 首屏就绪后应用副图高度（等 autoSize 布局稳定；折叠窗格随即压细条）
   const isFirst = firstFit;
   if (isFirst) {   // 首屏：默认间距铺首屏K线数量 + 右侧留白（与「重置图表」同一口径）；此后切换保持原比例 + 最新 K 线右对齐
     firstFit = false;
@@ -2621,6 +2665,12 @@ document.getElementById('ctx-reset').addEventListener('click', () => {
   if (!klines.length) return;
   const to = klines.length - 1 + curRightOffset;
   chart.timeScale().setVisibleLogicalRange({ from: klines.length - firstScreenBars - 0.5, to });   // 与首屏同口径（残页留左空白不拉满）
+  /* 副图价格轴竖向缩放复位：拖拽价格轴会关 autoScale 并写死固定区间，之后无法自回原比例；
+     重置时逐副图恢复自适应（与 lwc 双击价格轴复位同口径：autoScale:true）；主图价格轴/窗格高度/折叠/最大化不动 */
+  for (const inst of indInstances) {
+    if (!inst.series || inst.pane === 0) continue;
+    for (const s of inst.series) { try { s.priceScale().setAutoScale(true); } catch (e) {} }
+  }
 });
 /* ═══ 侧边栏：画线工具栏 + 系统模块卡片弹层 ═══
    原侧边模块导航（行情/交易/…/告警）回收进「系统」按钮，点击以小卡片弹出；
@@ -2816,13 +2866,14 @@ document.addEventListener('click', e => {
   const btn = e.target.closest('.gear-btn');
   if (btn && btn.dataset.indId) openIndModal(btn.dataset.indId);
 });
-/* 图例行首显隐勾选框：即时生效 + 布局持久化（不弹窗；TV 眼睛图标等价） */
-document.addEventListener('change', e => {
+/* 图例行首显隐勾选框（自绘 .kq-chk）：即时生效 + 布局持久化（不弹窗；TV 眼睛图标等价） */
+document.addEventListener('click', e => {
   const chk = e.target.closest('.ind-vis-chk');
   if (!chk || !chk.dataset.indId) return;
   const inst = instById(chk.dataset.indId);
   if (!inst) return;
-  inst.off = !chk.checked;
+  inst.off = !inst.off;
+  chk.classList.toggle('on', !inst.off);
   const ref = layoutRef(inst);
   if (ref) ref.off = inst.off;
   applyInstVisibility(inst);
@@ -2856,7 +2907,7 @@ document.getElementById('ind-ok').addEventListener('click', () => {
   }
   const styleUI = collectIndStyles(inst);
   /* 逐线/柱显隐采集：样式页每行行首勾选框，取消勾选的字段索引存入 fieldHidden（会话内有效） */
-  const hiddenFields = [...document.querySelectorAll('#ind-style-ui .ind-fvis-chk')].filter(c => !c.checked).map(c => +c.dataset.si);
+  const hiddenFields = [...document.querySelectorAll('#ind-style-ui .ind-fvis-chk')].filter(c => !c.classList.contains('on')).map(c => +c.dataset.si);
   const ref = layoutRef(inst);
   const sameParams = ref && JSON.stringify(ref.params) === JSON.stringify(next);
   /* 回写 indLayout 同源条目；仅样式变化时就地应用不重建（避免后端指标重拉与窗格高度动画重跑） */
@@ -2876,16 +2927,42 @@ document.getElementById('ind-ok').addEventListener('click', () => {
   indModal.classList.remove('show');
   saveLayout();
 });
-/* 移除指标：从 indLayout 删除后重建（副图窗格自动回收） */
+/* 移除指标：从 indLayout 摘除后就地移除单实例（不重建其余指标、不重拉任何历史；副图窗格自动回收） */
 document.getElementById('ind-remove').addEventListener('click', () => {
   const inst = instById(curIndEdit);
   indModal.classList.remove('show');
   if (!inst) return;
   const li = indLayout.indexOf(layoutRef(inst));
   if (li >= 0) indLayout.splice(li, 1);
-  rebuildIndicators();
+  removeInstanceInPlace(inst);
   saveLayout();
 });
+/* 单实例就地移除：仅销毁被移实例；其副图窗格变空时由 lwc removeSeries 自动回收（索引前移），
+   随后重映射其余实例 pane/maxPane/subPaneTargets 并按移除前高度快照复位（被移窗格高度归主图）。
+   全程不调 rebuildIndicators、不重拉任何指标历史（修复「移除副图指标导致所有指标重算」） */
+function removeInstanceInPlace(inst) {
+  const idx = indInstances.indexOf(inst);
+  if (idx < 0) return rebuildIndicators();   // 定位失败时回退全量重建（indLayout 已先行摘除，重建结果一致）
+  const pane = inst.pane;
+  const heights = chart.panes().map(p => p.getHeight());   // 移除前快照：复位其余窗格用
+  if (selectedIndId === inst.id) selectedIndId = null;
+  destroyInstance(inst);   // 副图窗格 series 清空时 lwc 自动移除该窗格，其后窗格索引前移一位
+  indInstances.splice(idx, 1);
+  if (pane > 0) {
+    indInstances.forEach(i => { if (i.pane > pane) i.pane -= 1; });
+    subPaneTargets = subPaneTargets.filter(t => t.pane !== pane).map(t => t.pane > pane ? { pane: t.pane - 1, h: t.h } : t);
+    if (maxPane === pane) maxPane = -1;
+    else if (maxPane > pane) maxPane -= 1;
+  }
+  /* 按快照复位剩余窗格高度（快照[0]=主图，其后为存活副图原高；权重之和==当前总高 → 精确复位，被移窗格高度自然归主图） */
+  const nPanes = chart.panes().length;
+  applyPaneStretch((i, total) => {
+    const snap = i < heights.length ? heights[i] : null;
+    return Math.max(1, snap != null ? Math.round(snap) : Math.round(total / nPanes));
+  });
+  paneBtnCache.forEach(b => b.remove()); paneBtnCache.clear();   // 窗格索引已变，按钮组缓存作废重建
+  layoutPaneLegends();
+}
 /* 实例 ↔ indLayout 条目映射（重建后实例重新生成，按顺序+类型定位） */
 function layoutRef(inst) {
   if (inst.type === 'custom') {
@@ -3195,6 +3272,25 @@ function updatePriceTag() {
   priceTag.querySelector('.pt-cd').textContent = cdText();
   priceTag.style.display = 'flex';
   priceTag.style.top = (y - priceTag.offsetHeight / 2) + 'px';   // 标签框垂直居中于当前价坐标（随价格联动）
+}
+/* ═══ 空白区十字光标时间标签（自定义：lwc 在最右空白区 e.time 为空、内置轴标签不显示）═══ */
+const timeTag = document.getElementById('time-tag');
+let crossX = null;        // 十字线 x（图表容器坐标，任意窗格共享）；lwc 内置时间标签已关，统一由本标签承担，数据区/空白区同一位置公式不跳变
+let crossTagTime = null;  // 十字线所在 bar 时间（空白区为 null → 外推虚拟时间）
+function updateTimeTag() {
+  if (crossX == null || !klines.length || (maxPane > 0 && maxPane < panes.length)) { timeTag.style.display = 'none'; return; }   // 副图最大化时隐藏（同 price-tag）
+  const ts = chart.timeScale();
+  let t = crossTagTime;
+  if (t == null) {   // 空白区：按逻辑索引外推虚拟时间
+    const lg = ts.coordinateToLogical(crossX);
+    if (lg == null || lg <= klines.length - 1) { timeTag.style.display = 'none'; return; }
+    t = klines[klines.length - 1].time + (lg - (klines.length - 1)) * tfDurSecFull(curTf);
+  }
+  const tsH = (ts.height && ts.height()) || 26;
+  timeTag.textContent = fmtTimeCn(t, tfIsDateOnly(curTf));
+  timeTag.style.display = 'block';
+  timeTag.style.left = crossX + 'px';
+  timeTag.style.top = (container.clientHeight - tsH / 2) + 'px';   // 垂直居中于底部时间轴
 }
 /* 当前价虚线：LC 内置价线已关（其轴标签会与自定义标签重复），手动维护且隐藏轴标签 */
 let curPriceLine = null;
@@ -3934,8 +4030,17 @@ const DRAW_LS_KEY = 'kq-drawings-live';
 const DRAW_PREF_KEY = 'kq-draw-pref';
 const DRAW_COLOR = '#2962ff';
 const DRAW_DASH = { 0: [], 1: [2, 3], 2: [5, 4], 3: [9, 5] };   // lineStyle→canvas dash（×pixelRatio）
-const TOOL_ANCHORS = { trend: 2, sray: 2, ray: 1, hline: 1, vline: 1, rect: 2, text: 1, info: 2, fib: 2 };
+const TOOL_ANCHORS = { trend: 2, sray: 2, hline: 1, vline: 1, rect: 2, text: 1, info: 2, fib: 2 };   // ray（水平射线）已下线：与水平线功能重叠，仅存档图形兼容渲染/命中
 const genDrawId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+/* 周期时长（秒）：覆盖 tfDurSec 未处理的 w/M/Q/Y（近似值，仅供锚点外推/跨周期 bar 包含判定） */
+const tfDurSecFull = tf => {
+  const n = parseInt(tf, 10) || 1;
+  if (tf.endsWith('w')) return n * 7 * 86400;
+  if (tf.endsWith('M')) return n * 30 * 86400;
+  if (tf.endsWith('Q')) return n * 91 * 86400;
+  if (tf.endsWith('Y')) return n * 365 * 86400;
+  return tfDurSec(tf);
+};
 
 function barIndexOfTime(t) {   // 锚点 time 为真实 bar time，二分精确命中
   let lo = 0, hi = klines.length - 1;
@@ -3949,10 +4054,10 @@ function fmtDurSec(sec) {
   if (h) return `${h}小时${m}分`;
   return `${m}分`;
 }
-function infoStats(sh) {   // 信息线统计：返回卡片两行文案（行1 价差+涨跌%；行2 bar 数+时间跨度）
+function infoStats(sh) {   // 信息线统计：返回卡片两行文案（行1 价差+涨跌%；行2 bar 数+时间跨度）；跨周期/空白区锚点按当前周期解析后统计
   const p1 = sh.points[0], p2 = sh.points[1];
   const dp = p2.price - p1.price, pct = p1.price ? (dp / p1.price) * 100 : 0;
-  const i1 = barIndexOfTime(p1.time), i2 = barIndexOfTime(p2.time);
+  const i1 = barIndexOfTime(resolveAnchorTime(sh, p1.time)), i2 = barIndexOfTime(resolveAnchorTime(sh, p2.time));
   const bars = (i1 >= 0 && i2 >= 0) ? Math.abs(i2 - i1) + 1 : null;   // 含端点的 K 线根数（非索引差）：相邻两根=2、同一根=1
   const sgn = dp >= 0 ? '+' : '';
   const prec = (typeof curPrec === 'number' && curPrec > 0) ? curPrec : 2;
@@ -3993,6 +4098,61 @@ function saveFibLevels(levels) { try { localStorage.setItem(FIB_LEVELS_KEY, JSON
 const fibLevelsOf = sh => (Array.isArray(sh.levels) && sh.levels.length) ? sh.levels : fibDefaultLevels();
 const fibLevelPrice = (sh, r) => sh.points[1].price + (sh.points[0].price - sh.points[1].price) * r;
 
+/* 跨周期锚点时间解析：sh.tf 为创建周期，非当前周期时把锚点 time 对齐到当前周期「包含它的 bar」
+   （time <= t < time+周期长）；越出当前 klines 范围取首/末 bar；末 bar 之后的虚拟时间（空白区锚点）原样保留由坐标外推 */
+function resolveAnchorTime(sh, t) {
+  if (!sh || !sh.tf || sh.tf === curTf || !klines.length) return t;
+  const dur = tfDurSecFull(curTf);
+  if (t < klines[0].time) return klines[0].time;
+  const last = klines[klines.length - 1];
+  if (t >= last.time + dur) return last.time;
+  let lo = 0, hi = klines.length - 1;
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1;
+    if (klines[m].time > t) hi = m - 1;
+    else if (klines[m].time + dur <= t) lo = m + 1;
+    else return klines[m].time;
+  }
+  return klines[Math.max(0, Math.min(klines.length - 1, hi))].time;
+}
+/* 每根 K 线的像素宽（barSpacing）：本版本 lwc 的 timeScale() 无 barSpacing() 方法（探针实证 TypeError），
+   改用相邻两根真实 K 线的 timeToCoordinate 差值；不足两根/不可见时回退可见逻辑区间换算 */
+function barSpacingPx(ts) {
+  if (klines.length >= 2) {
+    const a = ts.timeToCoordinate(klines[klines.length - 2].time);
+    const b = ts.timeToCoordinate(klines[klines.length - 1].time);
+    if (a != null && b != null && b !== a) return b - a;
+  }
+  const vr = (ts.getVisibleLogicalRange && ts.getVisibleLogicalRange()) || null;
+  if (vr && vr.to > vr.from && container.clientWidth) return container.clientWidth / (vr.to - vr.from);
+  return 0;
+}
+/* 锚点 time → x 坐标（媒体像素）：命中 bar 走 timeToCoordinate；末 bar 之后的虚拟时间（空白区锚点）按 barSpacing 线性外推 */
+function anchorXCoord(ts, t) {
+  const c = ts.timeToCoordinate(t);
+  if (c != null) return c;
+  if (!klines.length) return null;
+  const lastT = klines[klines.length - 1].time;
+  if (t > lastT) {
+    const lc = ts.timeToCoordinate(lastT), sp = barSpacingPx(ts);
+    if (lc != null && sp) return lc + ((t - lastT) / tfDurSecFull(curTf)) * sp;
+  }
+  return null;
+}
+/* 图形全部锚点的屏幕坐标（跨周期解析 + 空白区外推 + 价格映射）：渲染/命中/吸附引导统一口径，
+   消除「渲染在、命中不在」的偏差；结果同时缓存到 sh.__xy（shapeHit 文本测宽复用）。
+   性能：同一「渲染纪元」xyVer 内只解析一次并缓存，hitAnchor/hitTest/_draw 三处共享——
+   修复每次鼠标移动对全部图形重复解析坐标（~3N 次）导致的主图卡顿/光标延迟。
+   _draw 每帧自增 xyVer，保证价格/时间映射变化（平移缩放/新数据/折叠改高）后坐标必然重算，无陈旧风险。 */
+let xyVer = 0;
+function shapeXY(sh) {
+  if (sh && sh.__xy && sh.__xyVer === xyVer) return sh.__xy;   // 纪元内命中缓存，直接复用
+  const ts = chart.timeScale();
+  const P = (sh.points || []).map(p => ({ x: anchorXCoord(ts, resolveAnchorTime(sh, p.time)), y: candleSeries.priceToCoordinate(p.price) }));
+  if (sh && typeof sh === 'object') { sh.__xy = P; sh.__xyVer = xyVer; }
+  return P;
+}
+
 class DrawingPrimitive {
   constructor() {
     this._series = null; this._chart = null; this._invalidate = null; this._drawErrLogged = false;
@@ -4004,42 +4164,52 @@ class DrawingPrimitive {
   detached() { this._series = null; this._chart = null; this._invalidate = null; }
   paneViews() { return this._paneViews; }
   setShapes(a) { this._shapes = a || []; this.invalidate(); }
-  setPreview(s) { this._preview = s; this.invalidate(); }
+  /* 预览/吸附引导：值未变则不 invalidate——crosshairMove 每次鼠标移动都会调 setPreview(null)/setSnap(null)，
+     若无条件重绘会导致每帧全量重绘（叠加重构后 _draw 对全部图形重算坐标→主图卡顿）；null→null 及同值吸附直接跳过 */
+  setPreview(s) { const ns = s || null; if (!ns && !this._preview) return; this._preview = ns; this.invalidate(); }
   setHover(id) { if (this._hoverId !== id) { this._hoverId = id; this.invalidate(); } }
   setSelected(id) { if (this._selId !== id) { this._selId = id; this.invalidate(); } }
-  setSnap(a, strong) { this._snap = a ? { time: a.time, price: a.price, strong: !!strong } : null; this.invalidate(); }
+  setSnap(a, strong) {
+    if (!a) { if (!this._snap) return; this._snap = null; this.invalidate(); return; }
+    const s = this._snap;
+    if (s && s.time === a.time && s.price === a.price && s.strong === !!strong) return;   // 吸附目标未变（光标仍在同一 bar/价）不重绘
+    this._snap = { time: a.time, price: a.price, strong: !!strong }; this.invalidate();
+  }
   invalidate() { if (this._invalidate) this._invalidate(); }
   _draw(target) {
     const s = this._series, ch = this._chart;
     if (!s || !ch) return;
     const list = this._shapes, prev = this._preview, snap = this._snap;
     if ((!list || !list.length) && !prev && !snap) return;
+    xyVer++;   // 进入新一轮渲染纪元：使上一帧缓存的 shapeXY 坐标失效，本帧按最新映射重算（此后到下一帧之间的 hitAnchor/hitTest 复用本帧结果）
+    const ts = ch.timeScale();
     target.useBitmapCoordinateSpace(scope => {
       const ctx = scope.context, hpr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
       const W = scope.bitmapSize.width, H = scope.bitmapSize.height;
-      const ts = ch.timeScale();
-      const bx = t => { const c = ts.timeToCoordinate(t); return c == null ? null : c * hpr; };
-      const by = p => { const c = s.priceToCoordinate(p); return c == null ? null : c * vpr; };
+      /* 锚点坐标先经媒体空间统一解析（跨周期对齐 + 空白区外推），再乘像素比；shapeXY 同时缓存 __xy 供命中检测复用 */
+      const mapXY = sh => shapeXY(sh).map(q => ({ x: q.x == null ? null : q.x * hpr, y: q.y == null ? null : q.y * vpr }));
       ctx.save();
-      for (const sh of list) this._drawShape(ctx, sh, W, H, bx, by, hpr, vpr, sh.id === this._selId || sh.id === this._hoverId);
-      if (prev) this._drawShape(ctx, prev, W, H, bx, by, hpr, vpr, true);
-      if (snap) this._drawSnap(ctx, snap, W, H, bx, by, hpr, vpr);   // 吸附目标引导（竖线+圆点；磁吸态加横线）
-      ctx.restore();
+      try {
+        for (const sh of list) { try { this._drawShape(ctx, sh, mapXY(sh), W, H, hpr, vpr, sh.id === this._selId || sh.id === this._hoverId); } catch (_) { /* 单个图形渲染异常隔离：不拖垮其余图形 */ } }
+        if (prev) this._drawShape(ctx, prev, mapXY(prev), W, H, hpr, vpr, true);
+        if (snap) this._drawSnap(ctx, snap, W, H, ts, s, hpr, vpr);   // 吸附目标引导（竖线+圆点；磁吸态加横线）
+      } finally { ctx.restore(); }   // 无论是否抛异常都恢复 canvas 状态，防 globalAlpha/裁剪残留污染同窗格后续绘制（含十字光标）
     });
   }
-  _drawShape(ctx, sh, W, H, bx, by, hpr, vpr, emph) {
+  _drawShape(ctx, sh, XY, W, H, hpr, vpr, emph) {
     const pts = sh.points || []; if (!pts.length) return;
+    const s0 = this._series;   // 宿主 series（fib 级别线价格映射用）
     const st = sh.style || {}, col = st.color || DRAW_COLOR;
     ctx.strokeStyle = col; ctx.fillStyle = col;
     ctx.lineWidth = Math.max(1, Math.floor((st.lineWidth || 1) * hpr)) + (emph ? 1 : 0);
     ctx.setLineDash((DRAW_DASH[st.lineStyle || 0] || []).map(x => x * hpr));
     ctx.beginPath();
-    const x0 = bx(pts[0].time), y0 = by(pts[0].price);
-    const x1 = pts[1] ? bx(pts[1].time) : null, y1 = pts[1] ? by(pts[1].price) : null;
+    const x0 = XY[0] ? XY[0].x : null, y0 = XY[0] ? XY[0].y : null;
+    const x1 = XY[1] ? XY[1].x : null, y1 = XY[1] ? XY[1].y : null;
     switch (sh.type) {
       case 'hline': if (y0 == null) return; ctx.moveTo(0, y0); ctx.lineTo(W, y0); ctx.stroke(); break;
       case 'vline': if (x0 == null) return; ctx.moveTo(x0, 0); ctx.lineTo(x0, H); ctx.stroke(); break;
-      case 'ray': if (y0 == null) return; ctx.moveTo(x0 == null ? 0 : x0, y0); ctx.lineTo(W, y0); ctx.stroke(); break;
+      case 'ray': if (y0 == null) return; ctx.moveTo(x0 == null ? 0 : x0, y0); ctx.lineTo(W, y0); ctx.stroke(); break;   // 水平射线已下线，仅存档兼容渲染
       case 'trend': if (x0==null||y0==null||x1==null||y1==null) return; ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke(); break;
       case 'sray': {
         if (x0==null||y0==null||x1==null||y1==null) return;
@@ -4060,7 +4230,7 @@ class DrawingPrimitive {
         for (const lv of fibLevelsOf(sh)) {
           if (!lv.on) continue;
           const pr = pts[1].price + (pts[0].price - pts[1].price) * lv.ratio;
-          const py = by(pr);
+          const pc = s0 ? s0.priceToCoordinate(pr) : null; const py = pc == null ? null : pc * vpr;   // 级别线价格→像素（s0=宿主 series）
           if (py == null) continue;
           ctx.strokeStyle = lv.color || col;
           ctx.lineWidth = Math.max(1, Math.floor(((sh === this._preview) ? 1 : (st.lineWidth || 1)) * hpr));   // 参考线性质：悬停/选中不加粗（同 TV），预览橡皮筋恒 1
@@ -4073,11 +4243,17 @@ class DrawingPrimitive {
         }
         break;
       }
-      case 'text': if (x0==null||y0==null) return; ctx.setLineDash([]); ctx.font=`${Math.round(12*vpr)}px sans-serif`; ctx.textBaseline='middle'; ctx.fillText(sh.text||'', x0+4*hpr, y0); break;
+      case 'text': {
+        if (x0==null||y0==null) return;
+        const fs = st.fontSize || 12;
+        ctx.setLineDash([]); ctx.font=`${Math.round(fs*vpr)}px sans-serif`; ctx.textBaseline='middle'; ctx.fillText(sh.text||'', x0+4*hpr, y0);
+        sh.__hitW = ctx.measureText(sh.text || '').width / hpr + 8; sh.__hitH = fs;   // 命中盒按实测文本宽/字号（shapeHit 复用）
+        break;
+      }
     }
     ctx.setLineDash([]);
     if (sh.id === this._selId) {   // 选中：画锚点白色小方块
-      for (const p of pts) { const px=bx(p.time), py=by(p.price); if (px==null||py==null) continue; ctx.fillStyle='#fff'; ctx.fillRect(px-3*hpr, py-3*vpr, 6*hpr, 6*vpr); }
+      for (const q of XY) { if (q.x==null||q.y==null) continue; ctx.fillStyle='#fff'; ctx.fillRect(q.x-3*hpr, q.y-3*vpr, 6*hpr, 6*vpr); }
     }
     if (sh.locked && x0 != null && y0 != null) {   // 锁定标记：首锚点右下方画一个小挂锁（灰）
       const s = Math.round(4.5 * Math.max(hpr, vpr)), lx = x0 + 5*hpr, ly = y0 + 4*vpr;
@@ -4140,9 +4316,16 @@ class DrawingPrimitive {
     ctx.stroke();
     ctx.restore();
   }
-  _drawSnap(ctx, snap, W, H, bx, by, hpr, vpr) {   // 吸附目标引导：竖虚线=时间吸附 bar（十字线自由模式不吸 bar，自绘补足）；strong（磁吸/Ctrl）=琥珀横线+实心点，weak（仅工具态）=空心点
-    const sy = by(snap.price);
-    const sx = bx(snap.time);
+  _drawSnap(ctx, snap, W, H, ts, s, hpr, vpr) {   // 吸附目标引导：竖虚线=时间吸附 bar（十字线自由模式不吸 bar，自绘补足）；strong（磁吸/Ctrl）=琥珀横线+实心点，weak（仅工具态）=空心点
+    const sy0 = s.priceToCoordinate(snap.price);
+    const sy = sy0 == null ? null : sy0 * vpr;
+    /* 空白区虚拟时间锚点：timeToCoordinate 为 null 时按 barSpacing 外推（与 anchorXCoord 同口径），引导点跟随光标不落空 */
+    let sx0 = ts.timeToCoordinate(snap.time);
+    if (sx0 == null && klines.length) {
+      const lastT = klines[klines.length - 1].time;
+      if (snap.time > lastT) { const lc = ts.timeToCoordinate(lastT), sp = barSpacingPx(ts); if (lc != null && sp) sx0 = lc + ((snap.time - lastT) / tfDurSecFull(curTf)) * sp; }
+    }
+    const sx = sx0 == null ? null : sx0 * hpr;
     if (sy == null && sx == null) return;
     ctx.save();
     ctx.lineWidth = Math.max(1, Math.floor(hpr));
@@ -4169,8 +4352,9 @@ class DrawingPrimitive {
 const drawPrim = new DrawingPrimitive();
 candleSeries.attachPrimitive(drawPrim);
 
-let drawingsByKey = {};   // "exchange:symbol:tf" -> [shape,...]
-let drawings = [];        // 当前视图活动数组（primitive 直引用）
+let drawingsByKey = {};   // "exchange:symbol" -> [shape,...]（跨周期共享桶；shape.tf=创建周期，shape.tfAll=是否全周期显示）
+let drawAll = [];         // 当前 ex:sym 桶全量数组（所有增删改作用于它，含其它周期专属图形）
+let drawings = [];        // 当前周期可见视图（过滤副本，仅供渲染/hitTest/setShapes）
 let activeTool = null;
 let placePts = [];
 let selectedId = null;
@@ -4180,23 +4364,65 @@ let cursorPt = null;    // 主图最近十字线坐标（供磁吸光标引导�
 let cursorTime = null;  // 主图最近十字线所在 bar 的准确 time（crosshair 同源；锚点定位锁定光标，防 coordinateToLogical 舍入偏右一根）
 let dragState = null;   // 拖拽态：{mode:'anchor'|'body', id, idx?, start?, lgStart?, priceStart?}
 let hoverKind = null;   // 悬停命中类型：'anchor' | 'body' | null（决定光标形状）
-/* 画线偏好：默认样式 + 磁吸开关 + 连续绘制（独立持久化键 kq-draw-pref） */
-let drawPref = { defaultStyle: { color: DRAW_COLOR, lineWidth: 1, lineStyle: 0 }, magnetOn: false, continuousDraw: false };
-try { const p = JSON.parse(localStorage.getItem(DRAW_PREF_KEY) || 'null'); if (p && typeof p === 'object') { if (p.defaultStyle) drawPref.defaultStyle = Object.assign(drawPref.defaultStyle, p.defaultStyle); if (typeof p.magnetOn === 'boolean') drawPref.magnetOn = p.magnetOn; if (typeof p.continuousDraw === 'boolean') drawPref.continuousDraw = p.continuousDraw; } } catch (e) {}
+/* 画线偏好：默认样式 + 磁吸开关 + 连续绘制 + 按工具记忆样式（独立持久化键 kq-draw-pref） */
+let drawPref = { defaultStyle: { color: DRAW_COLOR, lineWidth: 1, lineStyle: 0 }, magnetOn: false, continuousDraw: false, toolStyles: {} };
+try { const p = JSON.parse(localStorage.getItem(DRAW_PREF_KEY) || 'null'); if (p && typeof p === 'object') { if (p.defaultStyle) drawPref.defaultStyle = Object.assign(drawPref.defaultStyle, p.defaultStyle); if (typeof p.magnetOn === 'boolean') drawPref.magnetOn = p.magnetOn; if (typeof p.continuousDraw === 'boolean') drawPref.continuousDraw = p.continuousDraw; if (p.toolStyles && typeof p.toolStyles === 'object') drawPref.toolStyles = p.toolStyles; } } catch (e) {}
 function saveDrawPref() { try { localStorage.setItem(DRAW_PREF_KEY, JSON.stringify(drawPref)); } catch (e) {} }
+/* 工具默认样式取用顺序：按工具记忆（toolStyles[type]，样式弹窗无选中确认时写入）→ 全局默认 → 出厂；
+   修复「画线样式设置后不保存、每次重设」：新建图形/橡皮筋预览均经此取样式，跨刷新/跨品种周期生效 */
+function defaultStyleFor(type) {
+  const ts2 = (type && drawPref.toolStyles && drawPref.toolStyles[type]) || null;
+  const ds = drawPref.defaultStyle || {};
+  const src = ts2 || ds;
+  return { color: src.color || ds.color || DRAW_COLOR, lineWidth: src.lineWidth || ds.lineWidth || 1, lineStyle: src.lineStyle ?? ds.lineStyle ?? 0, fontSize: src.fontSize || ds.fontSize || 12 };
+}
 const magnetActive = () => drawPref.magnetOn || ctrlHeld;
 try { const o = JSON.parse(localStorage.getItem(DRAW_LS_KEY) || 'null'); if (o && typeof o === 'object') drawingsByKey = o; } catch (e) {}
+/* 旧存档一次性迁移："ex:sym:tf" 三段键 → "ex:sym" 共享桶（图形打上创建周期 tf，默认全周期显示 tfAll:true） */
+{
+  let migrated = false;
+  for (const k of Object.keys(drawingsByKey)) {
+    const seg = k.split(':');
+    if (seg.length < 3) continue;
+    const tf = seg.slice(2).join(':'), nk = `${seg[0]}:${seg[1]}`;
+    if (!Array.isArray(drawingsByKey[nk])) drawingsByKey[nk] = [];
+    for (const sh of (drawingsByKey[k] || [])) {
+      if (!sh || typeof sh !== 'object') continue;
+      if (!sh.id) sh.id = genDrawId();
+      if (!sh.tf) sh.tf = tf;
+      if (typeof sh.tfAll !== 'boolean') sh.tfAll = true;
+      drawingsByKey[nk].push(sh);
+    }
+    delete drawingsByKey[k];
+    migrated = true;
+  }
+  for (const k of Object.keys(drawingsByKey)) {   // 新桶内缺省字段补齐（防御手工存档）
+    for (const sh of (drawingsByKey[k] || [])) {
+      if (sh && typeof sh === 'object') { if (!sh.id) { sh.id = genDrawId(); migrated = true; } if (typeof sh.tfAll !== 'boolean') { sh.tfAll = true; migrated = true; } }
+    }
+  }
+  if (migrated) { try { localStorage.setItem(DRAW_LS_KEY, JSON.stringify(drawingsByKey)); } catch (e) {} }
+}
 
-const drawViewKey = () => `${curExchange}:${curSymbol}:${curTf}`;
-function saveDrawings() { try { localStorage.setItem(DRAW_LS_KEY, JSON.stringify(drawingsByKey)); } catch (e) {} }
+const drawViewKey = () => `${curExchange}:${curSymbol}`;   // 跨周期共享桶：画线属于品种（TV 语义），是否随周期显示由 shape.tfAll/tf 决定
+function saveDrawings() { try { localStorage.setItem(DRAW_LS_KEY, JSON.stringify(drawingsByKey, (k, v) => k.startsWith('__') ? undefined : v)); } catch (e) {} }   // 剔除 __xy/__xyVer/__hitW 等运行时缓存属性（不落盘：避免膨胀与重载后缓存纪元碰撞导致坐标短暂陈旧）
+const drawVisible = sh => !!sh && (sh.tfAll !== false || sh.tf === curTf);
+function refreshDrawView() {   // 按当前周期重建可见视图数组（增删改/tfAll 切换后调用；元素仍引用桶内同一对象，拖拽写回自然持久）
+  drawings = drawAll.filter(drawVisible);
+  if (selectedId && !drawings.some(d => d.id === selectedId)) selectedId = null;
+  drawPrim.setShapes(drawings);
+  drawPrim.setSelected(selectedId);
+}
 function reloadDrawingsForView() {
   const k = drawViewKey();
-  if (!drawingsByKey[k]) drawingsByKey[k] = [];
-  drawings = drawingsByKey[k];
+  if (!Array.isArray(drawingsByKey[k])) drawingsByKey[k] = [];
+  drawAll = drawingsByKey[k];
   placePts = []; selectedId = null;
   hideDrawConfirm();   // 切视图关闭确认卡：防确认后误删新视图画线
-  drawPrim.setShapes(drawings); drawPrim.setPreview(null); drawPrim.setSelected(null);
+  refreshDrawView(); drawPrim.setPreview(null);
 }
+/* 按 id 在共享桶内取图形（含当前周期不可见者：拖拽/删除/锁定等变更均作用于桶内对象） */
+function drawById(id) { return drawAll.find(d => d.id === id) || null; }
 function syncToolUI() {
   document.querySelectorAll('#draw-toolbar .draw-btn[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === activeTool));
   const mag = document.querySelector('#draw-toolbar .draw-btn[data-tool="magnet"]');
@@ -4206,21 +4432,37 @@ function syncToolUI() {
   updateCursor();
   updateSnapGuide();   // 工具切换/提交后立即刷新引导（鼠标静止时不等 crosshairMove）
 }
-function updateCursor() {   // 光标形状：工具态 crosshair / 拖拽或悬停锚点 nwse-resize / 悬停线身 move
-  if (activeTool) { container.style.cursor = 'crosshair'; return; }
-  if (dragState) { container.style.cursor = dragState.mode === 'anchor' ? 'nwse-resize' : 'move'; return; }
-  container.style.cursor = hoverKind === 'anchor' ? 'nwse-resize' : (hoverKind === 'body' ? 'move' : '');
+function updateCursor() {   // 光标形状：工具态 crosshair / 拖拽或悬停锚点 nwse-resize / 悬停线身 move；仅在变化时写入（避免每次鼠标移动重复写 style 触发重排）
+  const c = activeTool ? 'crosshair'
+    : dragState ? (dragState.mode === 'anchor' ? 'nwse-resize' : 'move')
+    : (hoverKind === 'anchor' ? 'nwse-resize' : (hoverKind === 'body' ? 'move' : ''));
+  if (container.style.cursor !== c) container.style.cursor = c;
 }
 function pointToAnchor(pt, timeHint) {   // 面板媒体坐标 → {time(锁定光标所在bar), price}；按住 Ctrl 时 price 再吸附该 bar 高/低极值
   if (!pt) return null;
+  if (!klines.length) return null;
+  const ts = chart.timeScale();
+  /* 最右侧空白区优先判定：用光标逻辑索引（越过末 bar）而非依赖 e.time/coordinateToTime 为空——
+     lwc 在空白区仍可能回末 bar 时间/坐标，导致锚点被钳到末根或坐标解析为空而「越过最后一根 K 线就消失」。
+     空白区锚点用虚拟时间落在光标处（信息线右边界不受 K 线长度限制），渲染/命中由 anchorXCoord 外推。 */
+  const lg = ts.coordinateToLogical(pt.x);
+  if (lg != null && lg > klines.length - 1) {
+    const last = klines[klines.length - 1];
+    const vtime = last.time + (lg - (klines.length - 1)) * tfDurSecFull(curTf);
+    let vprice = candleSeries.coordinateToPrice(pt.y);
+    if (vprice == null) return null;
+    if (magnetActive()) {   // 磁吸仍参考末 bar OHLC
+      const cands = [last.open, last.high, last.low, last.close].filter(v => typeof v === 'number');
+      if (cands.length) vprice = cands.reduce((a, b) => Math.abs(b - vprice) < Math.abs(a - vprice) ? b : a);
+    }
+    return { time: vtime, price: vprice };
+  }
   /* 锚点 time 锁定光标（crosshair）所在 bar：优先用 lwc 事件亲测的 e.time，无则用
      coordinateToTime（与 crosshair 同一 timeScale 映射）。弃用 coordinateToLogical+round：
      实时推送触发 timeScale 重算时其舍入会跨 .5 边界、比光标偏右一根（2026-10-22 实证）。 */
-  let time = (timeHint != null) ? timeHint : chart.timeScale().coordinateToTime(pt.x);
-  if (!klines.length) return null;
+  let time = (timeHint != null) ? timeHint : ts.coordinateToTime(pt.x);
   let ci = (time != null) ? barIndexOfTime(time) : -1;   // 二分精确命中 klines（供磁吸取该 bar OHLC）
-  if (ci < 0) {   // time 为空（如最右侧空白区）或未命中：退回最近逻辑索引 bar（clamp 保留原落锚便利）
-    const lg = chart.timeScale().coordinateToLogical(pt.x);
+  if (ci < 0) {   // time 为空或未命中：退回最近逻辑索引 bar（clamp 保留原落锚便利）
     if (lg == null) return null;
     ci = Math.max(0, Math.min(klines.length - 1, Math.round(lg)));
     time = klines[ci].time;
@@ -4239,15 +4481,26 @@ function updateSnapGuide() {   // 工具激活或磁吸激活且有光标位置�
   else drawPrim.setSnap(null);
 }
 function shapeHit(sh, pt) {
-  const ts = chart.timeScale();
-  const P = sh.points.map(p => ({ x: ts.timeToCoordinate(p.time), y: candleSeries.priceToCoordinate(p.price) }));
-  const T = 6;
-  const ok = q => q.x != null && q.y != null;
-  const nearSeg = (a, b) => { if (!ok(a)||!ok(b)) return false; const dx=b.x-a.x, dy=b.y-a.y, L2=dx*dx+dy*dy||1e-6; let t=((pt.x-a.x)*dx+(pt.y-a.y)*dy)/L2; t=Math.max(0,Math.min(1,t)); return Math.hypot(pt.x-(a.x+t*dx), pt.y-(a.y+t*dy)) <= T; };
+  const P = shapeXY(sh);   // 跨周期解析 + 空白区外推，与渲染同口径（消除「渲染在、命中不在」偏差）
+  const T = 6, TB = 8;   // 锚点/水平竖直类阈值 6；斜线线身 8（对齐选中/悬停加粗后的视觉宽度，点线任意处可选）
+  const ok = q => q && q.x != null && q.y != null;
+  const nearSeg = (a, b, th) => { if (!ok(a)||!ok(b)) return false; const dx=b.x-a.x, dy=b.y-a.y, L2=dx*dx+dy*dy||1e-6; let t=((pt.x-a.x)*dx+(pt.y-a.y)*dy)/L2; t=Math.max(0,Math.min(1,t)); return Math.hypot(pt.x-(a.x+t*dx), pt.y-(a.y+t*dy)) <= (th || T); };
   switch (sh.type) {
-    case 'hline': case 'ray': return P[0].y != null && Math.abs(pt.y - P[0].y) <= T;
-    case 'vline': return P[0].x != null && Math.abs(pt.x - P[0].x) <= T;
-    case 'trend': case 'info': case 'sray': return P.length >= 2 && nearSeg(P[0], P[1]);
+    case 'hline': case 'ray': return P[0] && P[0].y != null && Math.abs(pt.y - P[0].y) <= T;   // ray 仅存档兼容
+    case 'vline': return P[0] && P[0].x != null && Math.abs(pt.x - P[0].x) <= T;
+    case 'trend': case 'info': return P.length >= 2 && nearSeg(P[0], P[1], TB);
+    case 'sray': {   // 趋势线：锚点段 + 渲染同口径的延长射线（点击可视线任意处可选中，不再仅限定位点）
+      if (P.length < 2 || !ok(P[0]) || !ok(P[1])) return false;
+      if (nearSeg(P[0], P[1], TB)) return true;
+      const dx = P[1].x - P[0].x, dy = P[1].y - P[0].y;
+      if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return false;
+      const cand = [];
+      if (Math.abs(dx) > 1e-9) { const tr = -P[1].x / dx, tl = (container.clientWidth - P[1].x) / dx; if (tr > 0) cand.push(tr); if (tl > 0) cand.push(tl); }
+      if (Math.abs(dy) > 1e-9) { const tt = -P[1].y / dy, tb2 = (container.clientHeight - P[1].y) / dy; if (tt > 0) cand.push(tt); if (tb2 > 0) cand.push(tb2); }
+      if (!cand.length) return false;
+      const k = Math.min(...cand);   // 与渲染 k=(max(W,H)*2)/max(|dx|,|dy|) 同向延伸，取画布边缘交点即可覆盖可视段
+      return nearSeg(P[1], { x: P[1].x + dx * k, y: P[1].y + dy * k }, TB);
+    }
     case 'rect': return P.length >= 2 && ok(P[0]) && ok(P[1]) && (nearSeg(P[0],{x:P[1].x,y:P[0].y}) || nearSeg({x:P[1].x,y:P[0].y},P[1]) || nearSeg(P[1],{x:P[0].x,y:P[1].y}) || nearSeg({x:P[0].x,y:P[1].y},P[0]));
     case 'fib': {
       if (!ok(P[0]) || !ok(P[1])) return false;
@@ -4255,31 +4508,35 @@ function shapeHit(sh, pt) {
       if (pt.x < xL - T) return false;   // 级别线自较早锚点向右延伸：左侧不命中
       return fibLevelsOf(sh).some(lv => { if (!lv.on) return false; const y = candleSeries.priceToCoordinate(fibLevelPrice(sh, lv.ratio)); return y != null && Math.abs(pt.y - y) <= T; });
     }
-    case 'text': return ok(P[0]) && Math.abs(pt.x-P[0].x)<=48 && Math.abs(pt.y-P[0].y)<=10;
+    case 'text': {   // 命中盒按实测文本宽/字号（渲染时缓存 __hitW/__hitH），不再硬编码 48/10
+      if (!ok(P[0])) return false;
+      const hw = sh.__hitW || Math.max(24, (sh.text || '').length * ((sh.style && sh.style.fontSize) || 12) * 0.62);
+      const hh = sh.__hitH || ((sh.style && sh.style.fontSize) || 12);
+      return pt.x >= P[0].x - 4 && pt.x <= P[0].x + hw && Math.abs(pt.y - P[0].y) <= Math.max(6, hh * 0.6);
+    }
   }
   return false;
 }
 function hitTest(pt, skipLocked) { for (let i = drawings.length - 1; i >= 0; i--) { const sh = drawings[i]; if (skipLocked && sh.locked) continue; if (shapeHit(sh, pt)) return sh.id; } return null; }
 function hitAnchor(pt, skipLocked) {   // 命中某画线锚点手柄（顶层优先，阈值 7px）→ {id, idx}；否则 null；skipLocked 跳过锁定图形
-  const ts = chart.timeScale();
   for (let i = drawings.length - 1; i >= 0; i--) {
     const sh = drawings[i]; if (skipLocked && sh.locked) continue;
-    const pts = sh.points || [];
-    for (let j = 0; j < pts.length; j++) {
-      const x = ts.timeToCoordinate(pts[j].time), y = candleSeries.priceToCoordinate(pts[j].price);
-      if (x == null || y == null) continue;
-      if (Math.hypot(pt.x - x, pt.y - y) <= 7) return { id: sh.id, idx: j };
+    const P = shapeXY(sh);   // 与渲染同口径（跨周期解析 + 空白区外推）
+    for (let j = 0; j < P.length; j++) {
+      const q = P[j];
+      if (!q || q.x == null || q.y == null) continue;
+      if (Math.hypot(pt.x - q.x, pt.y - q.y) <= 7) return { id: sh.id, idx: j };
     }
   }
   return null;
 }
 const clientToMedia = e => { const r = container.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 function commitShape(text) {
-  const ds = drawPref.defaultStyle || {};
-  const sh = { id: genDrawId(), type: activeTool, points: placePts.slice(), style: { color: ds.color || DRAW_COLOR, lineWidth: ds.lineWidth || 1, lineStyle: ds.lineStyle || 0 } };
-  if (activeTool === 'text') sh.text = text || '文本';
+  const ds = defaultStyleFor(activeTool);   // 按工具记忆样式 → 全局默认 → 出厂
+  const sh = { id: genDrawId(), type: activeTool, points: placePts.slice(), style: { color: ds.color, lineWidth: ds.lineWidth, lineStyle: ds.lineStyle }, tf: curTf, tfAll: true };   // 跨周期：记创建周期，默认全周期显示（样式弹窗可切回仅本周期）
+  if (activeTool === 'text') { sh.text = text || '文本'; sh.style.fontSize = ds.fontSize || 12; }
   if (activeTool === 'fib') { sh.levels = fibDefaultLevels(); sh.style.lineWidth = 1; }   // 新建 fib 带默认级别表（独立副本）；级别线默认线宽 1，不继承全局默认画线线宽
-  drawings.push(sh); saveDrawings(); drawPrim.setShapes(drawings);
+  drawAll.push(sh); saveDrawings(); refreshDrawView();
   placePts = []; drawPrim.setPreview(null);
   if (!drawPref.continuousDraw) activeTool = null;   // 连续绘制开启则保持当前工具
   syncToolUI();
@@ -4287,49 +4544,58 @@ function commitShape(text) {
 function deleteSelected() {
   const id = selectedId || (drawings.length ? drawings[drawings.length - 1].id : null);
   if (!id) return;
-  const sh = drawings.find(d => d.id === id);
+  const sh = drawById(id);
   if (sh && sh.locked) return;   // 锁定保护：任何删除路径（Del 键/工具栏/右键菜单）都拒绝，需先右键解锁
-  const i = drawings.findIndex(d => d.id === id);
-  if (i >= 0) { drawings.splice(i, 1); saveDrawings(); }
-  selectedId = null; drawPrim.setSelected(null); drawPrim.setShapes(drawings);
+  const i = drawAll.findIndex(d => d.id === id);
+  if (i >= 0) { drawAll.splice(i, 1); saveDrawings(); }
+  selectedId = null; refreshDrawView();
 }
-function bringSelectedToFront() {   // 置顶：移到数组末尾（渲染最后=最上层，hitTest 顶层优先）
-  const i = drawings.findIndex(d => d.id === selectedId);
-  if (i < 0 || i === drawings.length - 1) return;
-  const [sh] = drawings.splice(i, 1); drawings.push(sh);
-  saveDrawings(); drawPrim.setShapes(drawings);
+function bringSelectedToFront() {   // 置顶：移到共享桶末尾（渲染最后=最上层，hitTest 顶层优先）
+  const i = drawAll.findIndex(d => d.id === selectedId);
+  if (i < 0 || i === drawAll.length - 1) return;
+  const [sh] = drawAll.splice(i, 1); drawAll.push(sh);
+  saveDrawings(); refreshDrawView();
 }
-function duplicateSelected() {   // 复制：生成解锁副本，向右 2 bar、向上 ~20px 偏移以便区分，副本置顶并选中
-  const src = drawings.find(d => d.id === selectedId); if (!src) return;
+/* 克隆图形（副本解锁、置顶；offset=true 时右移 2 bar 上移 ~20px 以便区分）：右键「复制」与 Shift 拖拽复制共用 */
+function cloneShape(src, offset) {
   const p0 = candleSeries.coordinateToPrice(0), p1 = candleSeries.coordinateToPrice(20);
-  const dp = (p0 != null && p1 != null) ? (p0 - p1) : 0;   // 20px 对应的价格差（向上）
+  const dp = offset ? ((p0 != null && p1 != null) ? (p0 - p1) : 0) : 0;   // 20px 对应的价格差（向上）
   const n = klines.length;
   const pts = (src.points || []).map(p => {
-    const idx = barIndexOfTime(p.time);
-    let ni = (idx >= 0 ? idx : 0) + 2; ni = Math.max(0, Math.min(n - 1, ni));
+    if (!offset) return { time: p.time, price: p.price };
+    const idx = barIndexOfTime(resolveAnchorTime(src, p.time));
+    if (idx < 0) return { time: p.time, price: p.price + dp };   // 空白区虚拟锚点/跨周期未命中：保留原 time，仅价格偏移
+    let ni = idx + 2; ni = Math.max(0, Math.min(n - 1, ni));
     return { time: klines[ni] ? klines[ni].time : p.time, price: p.price + dp };
   });
-  const copy = { id: genDrawId(), type: src.type, points: pts, style: Object.assign({}, src.style), locked: false };
+  const copy = { id: genDrawId(), type: src.type, points: pts, style: Object.assign({}, src.style), locked: false, tf: src.tf || curTf, tfAll: src.tfAll !== false };
   if (src.text != null) copy.text = src.text;
   if (Array.isArray(src.levels)) copy.levels = JSON.parse(JSON.stringify(src.levels));   // fib 级别表深拷贝
-  drawings.push(copy);
-  selectedId = copy.id; drawPrim.setSelected(copy.id);
-  saveDrawings(); drawPrim.setShapes(drawings);
+  drawAll.push(copy);
+  saveDrawings();
+  return copy;
+}
+function duplicateSelected() {   // 复制：生成解锁副本，向右 2 bar、向上 ~20px 偏移，副本置顶并选中
+  const src = drawById(selectedId); if (!src) return;
+  const copy = cloneShape(src, true);
+  selectedId = copy.id; refreshDrawView();
 }
 function toggleLockSelected() {   // 锁定/解锁：锁定后取消选中（冻结直接操作，仅右键菜单可再编辑）
-  const sh = drawings.find(d => d.id === selectedId); if (!sh) return;
+  const sh = drawById(selectedId); if (!sh) return;
   sh.locked = !sh.locked;
-  if (sh.locked) { selectedId = null; drawPrim.setSelected(null); }
-  saveDrawings(); drawPrim.setShapes(drawings);
+  if (sh.locked) { selectedId = null; }
+  saveDrawings(); refreshDrawView();
 }
 function clearAll() {
-  if (!drawings.length) return;
-  const lockedCnt = drawings.filter(d => d.locked).length;   // 锁定画线不可删：清空仅移除未锁定者
-  if (lockedCnt === drawings.length) { showDrawConfirm('当前画线全部为锁定状态，请先解锁再清空。', { hideOk: true }); return; }
-  showDrawConfirm(lockedCnt ? `清空未锁定画线？${lockedCnt} 条锁定画线将保留。` : '清空当前品种/周期下的全部画线？', {
+  const vis = drawAll.filter(drawVisible);
+  if (!vis.length) return;
+  const lockedCnt = vis.filter(d => d.locked).length;   // 锁定画线不可删：清空仅移除未锁定者
+  if (lockedCnt === vis.length) { showDrawConfirm('当前画线全部为锁定状态，请先解锁再清空。', { hideOk: true }); return; }
+  showDrawConfirm(lockedCnt ? `清空未锁定画线？${lockedCnt} 条锁定画线将保留。` : '清空当前品种（所有周期）的全部画线？', {
     onOk: () => {
-      for (let i = drawings.length - 1; i >= 0; i--) if (!drawings[i].locked) drawings.splice(i, 1);
-      saveDrawings(); selectedId = null; drawPrim.setSelected(null); drawPrim.setShapes(drawings);
+      const ids = new Set(vis.filter(d => !d.locked).map(d => d.id));
+      for (let i = drawAll.length - 1; i >= 0; i--) if (ids.has(drawAll[i].id)) drawAll.splice(i, 1);
+      saveDrawings(); selectedId = null; refreshDrawView();
     },
   });
 }
@@ -4361,15 +4627,25 @@ dcCard.addEventListener('click', e => {
   else if (e.target.closest('.dc-cancel')) hideDrawConfirm();
 });
 
-/* 文本浮层输入：点击落点后弹出，Enter/失焦提交，Esc 取消 */
+/* 文本浮层输入：新建（点击落点后弹出）与重编辑（双击已有文本图形，预填原文）共用；
+   Enter/失焦提交，Esc 取消（编辑态不动原文本，新建态同时关闭工具） */
 let textInputEl = null;
-function promptText(anchor) {
+function promptText(anchor, existing, onEdit) {
   if (textInputEl) textInputEl.remove();
   const el = document.createElement('input');
   el.type = 'text'; el.placeholder = '输入文本…';
-  el.style.cssText = `position:fixed;z-index:200;left:${lastClient.x + 8}px;top:${lastClient.y - 12}px;background:#1c2536;color:#d1d4dc;border:1px solid ${DRAW_COLOR};border-radius:4px;padding:3px 6px;font-size:12px;outline:none;min-width:120px;`;
-  document.body.appendChild(el); el.focus(); textInputEl = el;
-  const done = ok => { if (!textInputEl) return; const v = el.value.trim(); textInputEl = null; el.remove(); if (ok) { placePts = [anchor]; commitShape(v || '文本'); } else { placePts = []; activeTool = null; syncToolUI(); } };
+  if (existing != null) el.value = existing;
+  el.style.cssText = `position:fixed;z-index:200;left:${lastClient.x + 8}px;top:${lastClient.y - 12}px;background:#1c2536;color:#d1d4dc;border:1px solid var(--accent);border-radius:4px;padding:3px 6px;font-size:12px;outline:none;min-width:120px;`;
+  document.body.appendChild(el); el.focus(); el.select(); textInputEl = el;
+  const done = ok => {
+    if (!textInputEl) return;
+    const v = el.value.trim(); textInputEl = null; el.remove();
+    if (onEdit) {   // 重编辑已有文本：确认写回 shape.text（修复「编辑完成后无法重新编辑，打错字只能删了重来」）
+      if (ok && v) { onEdit(v); saveDrawings(); refreshDrawView(); }
+      return;
+    }
+    if (ok) { placePts = [anchor]; commitShape(v || '文本'); } else { placePts = []; activeTool = null; syncToolUI(); }
+  };
   el.addEventListener('keydown', ev => { ev.stopPropagation(); if (ev.key === 'Enter') done(true); else if (ev.key === 'Escape') done(false); });
   el.addEventListener('blur', () => done(true));
 }
@@ -4387,7 +4663,8 @@ document.getElementById('draw-toolbar').addEventListener('click', e => {
   activeTool = (activeTool === t) ? null : t;
   placePts = []; drawPrim.setPreview(null); syncToolUI();
 });
-/* pointerdown：记录客户端坐标/Ctrl 态，并兼作拖拽起点（锚点/整体）——选择已从 subscribeClick 迁至此 */
+/* pointerdown：记录客户端坐标/Ctrl 态，并兼作拖拽起点（锚点/整体）——选择已从 subscribeClick 迁至此；
+   按住 Shift 拖拽 = 复制（TV 语义）：命中锚点/线身时先原位克隆解锁副本，拖动副本、原图不动 */
 container.addEventListener('pointerdown', e => {
   lastClient = { x: e.clientX, y: e.clientY }; ctrlHeld = e.ctrlKey;
   if (e.button !== 0 || activeTool) return;   // 非左键或工具激活（交给 subscribeClick 放置）不拖拽
@@ -4395,8 +4672,12 @@ container.addEventListener('pointerdown', e => {
   const ha = hitAnchor(pt, true);
   if (ha) {
     setSelectedInd(null);   // 命中画线锚点：清除指标选中态
-    selectedId = ha.id; drawPrim.setSelected(selectedId);
-    dragState = { mode: 'anchor', id: ha.id, idx: ha.idx };
+    let id = ha.id, idx = ha.idx;
+    if (e.shiftKey) {   // Shift+拖锚点：克隆后拖副本对应锚点（副本原位生成，无视觉跳变）
+      const src = drawById(ha.id);
+      if (src && !src.locked) { const cp = cloneShape(src, false); id = cp.id; selectedId = cp.id; refreshDrawView(); }
+    } else { selectedId = ha.id; drawPrim.setSelected(selectedId); }
+    dragState = { mode: 'anchor', id, idx };
   } else {
     const hid = hitTest(pt, true);
     if (!hid) {   // 未命中画线：点中带数值的指标线则选中、空白处取消；均不禁用平移，交还图表
@@ -4405,11 +4686,13 @@ container.addEventListener('pointerdown', e => {
       return;
     }
     setSelectedInd(null);   // 命中画线身：清除指标选中态
-    const sh = drawings.find(d => d.id === hid);
-    selectedId = hid; drawPrim.setSelected(selectedId);
+    let id = hid, sh = drawById(hid);
+    if (e.shiftKey && sh && !sh.locked) {   // Shift+拖线身：克隆后整体平移副本
+      const cp = cloneShape(sh, false); id = cp.id; sh = cp; selectedId = cp.id; refreshDrawView();
+    } else { selectedId = hid; drawPrim.setSelected(selectedId); }
     dragState = {
-      mode: 'body', id: hid,
-      start: ((sh && sh.points) || []).map(p => ({ time: p.time, price: p.price, idx: barIndexOfTime(p.time) })),
+      mode: 'body', id,
+      start: ((sh && sh.points) || []).map(p => ({ time: p.time, price: p.price, idx: barIndexOfTime(resolveAnchorTime(sh, p.time)) })),
       lgStart: chart.timeScale().coordinateToLogical(pt.x),
       priceStart: candleSeries.coordinateToPrice(pt.y),
     };
@@ -4421,7 +4704,7 @@ container.addEventListener('pointerdown', e => {
 container.addEventListener('pointermove', e => {
   lastClient = { x: e.clientX, y: e.clientY }; ctrlHeld = e.ctrlKey;
   if (!dragState) return;
-  const sh = drawings.find(d => d.id === dragState.id); if (!sh) return;
+  const sh = drawById(dragState.id); if (!sh) return;
   const pt = clientToMedia(e);
   if (dragState.mode === 'anchor') {
     const a = pointToAnchor(pt);
@@ -4448,12 +4731,19 @@ function endDrag(e) {
 }
 container.addEventListener('pointerup', endDrag);
 container.addEventListener('pointercancel', endDrag);
-/* 双击画线 → 打开样式弹窗（编辑该画线） */
+/* 双击画线 → 文本类走重编辑浮层（改错字无需删了重画）；其余打开样式弹窗（编辑该画线） */
 container.addEventListener('dblclick', e => {
   if (activeTool) return;
   const pt = clientToMedia(e);
   const ha = hitAnchor(pt, true); const hid = ha ? ha.id : hitTest(pt, true);
-  if (hid) openStyleModal(hid);
+  if (!hid) return;
+  const sh = drawById(hid);
+  if (sh && sh.type === 'text') {   // 文本：双击进入重编辑，Enter/失焦写回、Esc 取消
+    selectedId = hid; drawPrim.setSelected(selectedId);
+    promptText(sh.points[0], sh.text, v => { sh.text = v; });
+    return;
+  }
+  openStyleModal(hid);
 });
 /* 图表点击：仅工具激活时落锚点（文本走浮层）；选择/拖拽已迁至 pointerdown */
 chart.subscribeClick(e => {
@@ -4469,6 +4759,9 @@ chart.subscribeCrosshairMove(e => {
   const inMain = (e.paneIndex == null || e.paneIndex === 0);
   cursorPt = (inMain && e.point) ? e.point : null;
   cursorTime = (inMain && e.point) ? e.time : null;
+  crossX = e.point ? e.point.x : null;   // 时间标签用（任意窗格）
+  crossTagTime = (e.point && e.time != null) ? e.time : null;
+  updateTimeTag();
   updateSnapGuide();
   if (dragState) { drawPrim.setPreview(null); drawPrim.setHover(null); return; }   // 拖拽中不做预览/悬停
   if (!inMain) { drawPrim.setPreview(null); drawPrim.setHover(null); hoverKind = null; updateCursor(); return; }
@@ -4476,7 +4769,7 @@ chart.subscribeCrosshairMove(e => {
     const need = TOOL_ANCHORS[activeTool] || 1, a = pointToAnchor(e.point, e.time);
     if (a) {
       const pts = need === 1 ? [a] : (placePts.length === 1 ? [placePts[0], a] : null);
-      if (pts) { const ds = drawPref.defaultStyle || {}; drawPrim.setPreview({ type: activeTool, points: pts, style: { color: ds.color || DRAW_COLOR, lineWidth: ds.lineWidth || 1, lineStyle: 2 } }); hoverKind = null; updateCursor(); return; }
+      if (pts) { const ds = defaultStyleFor(activeTool); drawPrim.setPreview({ type: activeTool, points: pts, style: { color: ds.color, lineWidth: ds.lineWidth, lineStyle: 2, fontSize: ds.fontSize } }); hoverKind = null; updateCursor(); return; }
     }
   }
   drawPrim.setPreview(null);
@@ -4501,23 +4794,35 @@ window.addEventListener('blur', () => { ctrlHeld = false; updateSnapGuide(); });
 const drawStyleModal = document.getElementById('draw-style-modal');
 const drawStyleBody = document.getElementById('draw-style-body');
 let styleTargetId = null;   // null=编辑默认样式；否则编辑指定画线
-let styleDraft = { color: DRAW_COLOR, lineWidth: 1, lineStyle: 0 };
+let styleDraft = { color: DRAW_COLOR, lineWidth: 1, lineStyle: 0, fontSize: 12, tfAll: true };
 let styleTargetIsFib = false;   // fib 画线走级别编辑器（两栏），其余走通用颜色/线宽/线型
+let styleTargetIsText = false;   // text 画线：隐藏线宽/线型，改显字号下拉
 let fibDraft = [];              // fib 级别草稿（确认才写回 shape）
 const fibEsc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 function renderStyleModal() {
   if (styleTargetIsFib) { renderFibModal(); return; }
   const swList = IND_SWATCHES.includes(styleDraft.color) ? IND_SWATCHES : [styleDraft.color, ...IND_SWATCHES];
-  drawStyleBody.innerHTML =
-    `<div class="ind-style-row"><span class="ind-style-name">颜色</span><div class="ind-swatches">` +
+  const colorRow =
+    `<div class="ind-style-row"><span class="ind-style-name">${styleTargetIsText ? '文字颜色' : '颜色'}</span><div class="ind-swatches">` +
       swList.map(c => `<button type="button" class="ind-sw${c === styleDraft.color ? ' active' : ''}" data-c="${c}" style="background:${c}" title="${c}"></button>`).join('') +
       `<input type="color" class="draw-color-custom" id="draw-color-custom" value="${styleDraft.color}" title="自定义颜色">` +
-    `</div></div>` +
+    `</div></div>`;
+  const strokeRows = styleTargetIsText ? '' :
     `<div class="ind-style-row"><span class="ind-style-name">线宽</span><select class="ind-line-sel draw-lw-sel" id="draw-lw">` +
       [1, 2, 3, 4].map(w => `<option value="${w}"${w === styleDraft.lineWidth ? ' selected' : ''}>${w} px</option>`).join('') +
     `</select></div>` +
-    `<div class="ind-style-row"><span class="ind-style-name">线型</span>${lineStyleSel(styleDraft.lineStyle)}</div>` +
-    `<div class="draw-style-preview"><div id="draw-style-pv"></div></div>`;
+    `<div class="ind-style-row"><span class="ind-style-name">线型</span>${lineStyleSel(styleDraft.lineStyle)}</div>`;
+  const fontRow = styleTargetIsText ?
+    `<div class="ind-style-row"><span class="ind-style-name">字号</span><select class="ind-line-sel draw-lw-sel" id="draw-fs">` +
+      [12, 14, 16, 20, 24, 32].map(s => `<option value="${s}"${s === styleDraft.fontSize ? ' selected' : ''}>${s} px</option>`).join('') +
+    `</select></div>` : '';
+  /* 跨周期开关：仅编辑已有图形时显示（默认样式为全局，不涉及 tfAll） */
+  const tfRow = styleTargetId ?
+    `<div class="ind-style-row"><span class="ind-style-name">周期</span>` +
+    `<span class="kq-chk${styleDraft.tfAll ? ' on' : ''}" id="draw-tfall" role="checkbox" aria-checked="${styleDraft.tfAll ? 'true' : 'false'}"></span>` +
+    `<span style="font-size:12px;color:var(--text-sub)">显示于所有周期</span></div>` : '';
+  const preview = styleTargetIsText ? '' : `<div class="draw-style-preview"><div id="draw-style-pv"></div></div>`;
+  drawStyleBody.innerHTML = colorRow + strokeRows + fontRow + tfRow + preview;
   const ls = drawStyleBody.querySelector('.ind-line-sel:not(.draw-lw-sel)'); if (ls) ls.id = 'draw-ls';
   updateStylePreview();
 }
@@ -4550,40 +4855,54 @@ function renderFibModal() {   // 斐波那契级别编辑器：行内两栏（�
     `</div>` +
     `<button type="button" class="fib-add" id="fib-add">＋ 增加比例</button>` +
     `<button type="button" class="fib-add fib-reset" id="fib-reset" title="恢复出厂默认 10 级">↺ 恢复默认级别</button>` +
+    (styleTargetId ? `<div class="ind-style-row" style="margin-top:6px"><span class="ind-style-name">周期</span>` +
+      `<span class="kq-chk${styleDraft.tfAll ? ' on' : ''}" id="draw-tfall" role="checkbox" aria-checked="${styleDraft.tfAll ? 'true' : 'false'}"></span>` +
+      `<span style="font-size:12px;color:var(--text-sub)">显示于所有周期</span></div>` : '') +
     `<div class="fib-hint">确认后此级别表将记为默认，新建 FIBO 自动沿用（永久记忆）</div>`;
 }
 function openStyleModal(shapeId) {
   styleTargetId = shapeId || null;
-  const target = shapeId ? (drawings.find(d => d.id === shapeId) || null) : null;
+  const target = shapeId ? (drawById(shapeId) || null) : null;
   styleTargetIsFib = !!(target && target.type === 'fib');
-  const src = (target ? target.style : null) || (shapeId ? {} : (drawPref.defaultStyle || {}));
-  styleDraft = { color: src.color || DRAW_COLOR, lineWidth: src.lineWidth || 1, lineStyle: src.lineStyle || 0 };
+  styleTargetIsText = !!(target && target.type === 'text') || (!target && !shapeId && activeTool === 'text');
+  const src = (target ? target.style : null) || (shapeId ? {} : defaultStyleFor(activeTool));
+  styleDraft = { color: src.color || DRAW_COLOR, lineWidth: src.lineWidth || 1, lineStyle: src.lineStyle || 0, fontSize: src.fontSize || 12, tfAll: target ? (target.tfAll !== false) : true };
   fibDraft = styleTargetIsFib ? JSON.parse(JSON.stringify(fibLevelsOf(target))) : [];
   drawStyleModal.querySelector('.modal').style.width = styleTargetIsFib ? '560px' : '300px';
   document.getElementById('draw-style-title').textContent = styleTargetIsFib ? '斐波那契级别' : (shapeId ? '编辑画线样式' : '默认画线样式');
   renderStyleModal();
   drawStyleModal.classList.add('show');
 }
-function closeStyleModal() { drawStyleModal.classList.remove('show'); styleTargetId = null; styleTargetIsFib = false; }
+function closeStyleModal() { drawStyleModal.classList.remove('show'); styleTargetId = null; styleTargetIsFib = false; styleTargetIsText = false; }
 function applyStyleModal() {
-  if (styleTargetIsFib && styleTargetId) {   // fib：级别草稿 + 线宽写回 shape
-    const sh = drawings.find(d => d.id === styleTargetId);
+  if (styleTargetIsFib && styleTargetId) {   // fib：级别草稿 + 线宽 + 跨周期开关写回 shape
+    const sh = drawById(styleTargetId);
     if (sh) {
       sh.levels = fibDraft.map(l => Object.assign({}, l));
       sh.style = Object.assign({}, sh.style, { lineWidth: styleDraft.lineWidth });
+      sh.tfAll = styleDraft.tfAll !== false;
       saveFibLevels(sh.levels);   // 记住为默认模板：此后新建 fib 沿用此比例/颜色/线型
-      saveDrawings(); drawPrim.setShapes(drawings);
+      saveDrawings(); refreshDrawView();
     }
     closeStyleModal(); return;
   }
-  const st = { color: styleDraft.color, lineWidth: styleDraft.lineWidth, lineStyle: styleDraft.lineStyle };
+  /* 通用分支：text 写字号+文字色，其余写线宽/线型/颜色；编辑已有图形同步 tfAll */
+  const st = styleTargetIsText
+    ? { color: styleDraft.color, fontSize: styleDraft.fontSize }
+    : { color: styleDraft.color, lineWidth: styleDraft.lineWidth, lineStyle: styleDraft.lineStyle };
   if (styleTargetId) {
-    const sh = drawings.find(d => d.id === styleTargetId);
-    if (sh) { sh.style = st; saveDrawings(); drawPrim.setShapes(drawings); }
-  } else { drawPref.defaultStyle = st; saveDrawPref(); }
+    const sh = drawById(styleTargetId);
+    if (sh) { sh.style = Object.assign({}, sh.style, st); sh.tfAll = styleDraft.tfAll !== false; saveDrawings(); refreshDrawView(); }
+  } else {
+    drawPref.defaultStyle = st;   // 无选中：写全局默认；若有激活工具则同时写按工具记忆（A7）
+    if (activeTool && activeTool in TOOL_ANCHORS) drawPref.toolStyles[activeTool] = st;
+    saveDrawPref();
+  }
   closeStyleModal();
 }
 drawStyleBody.addEventListener('click', e => {
+  const chk = e.target.closest('#draw-tfall');   // 跨周期开关（自绘勾选框）
+  if (chk) { styleDraft.tfAll = !styleDraft.tfAll; chk.classList.toggle('on', styleDraft.tfAll); chk.setAttribute('aria-checked', styleDraft.tfAll ? 'true' : 'false'); return; }
   const sw = e.target.closest('.ind-sw'); if (!sw) return;
   styleDraft.color = sw.dataset.c; syncSwatchActive();
   const cc = document.getElementById('draw-color-custom'); if (cc && /^#[0-9a-fA-F]{6}$/.test(sw.dataset.c)) cc.value = sw.dataset.c;
@@ -4594,6 +4913,7 @@ function onStyleField(e) {
   if (t.id === 'draw-color-custom') { styleDraft.color = t.value; syncSwatchActive(); updateStylePreview(); }
   else if (t.id === 'draw-lw') { styleDraft.lineWidth = +t.value || 1; updateStylePreview(); }
   else if (t.id === 'draw-ls') { styleDraft.lineStyle = +t.value || 0; updateStylePreview(); }
+  else if (t.id === 'draw-fs') { styleDraft.fontSize = +t.value || 12; }
 }
 drawStyleBody.addEventListener('input', onStyleField);
 drawStyleBody.addEventListener('change', onStyleField);
@@ -4738,16 +5058,16 @@ document.getElementById('ind-ctx-vis').addEventListener('click', e => {
   const inst = instById(indCtxTarget); if (!inst) return;
   inst.off = !inst.off;   // 复用图例显隐语义：off 取反 + 回写 indLayout + 同步勾选框 + 就地生效
   const ref = layoutRef(inst); if (ref) ref.off = inst.off;
-  const chk = inst.legendEl.querySelector('.ind-vis-chk'); if (chk) chk.checked = !inst.off;
+  const chk = inst.legendEl.querySelector('.ind-vis-chk'); if (chk) chk.classList.toggle('on', !inst.off);
   applyInstVisibility(inst); saveLayout();
 });
 document.getElementById('ind-ctx-del').addEventListener('click', e => {
   e.stopPropagation(); closeIndCtxMenu();
   const inst = instById(indCtxTarget); if (!inst) return;
-  const li = indLayout.indexOf(layoutRef(inst));   // 复用弹窗移除语义：从 indLayout 删除后全量重建（副图窗格自动回收）
+  const li = indLayout.indexOf(layoutRef(inst));   // 从 indLayout 摘除后就地移除单实例（不重算其余指标，副图窗格自动回收）
   if (li >= 0) indLayout.splice(li, 1);
   if (selectedIndId === indCtxTarget) selectedIndId = null;
-  rebuildIndicators(); saveLayout();
+  removeInstanceInPlace(inst); saveLayout();
 });
 document.addEventListener('click', e => { if (!indCtxMenu.contains(e.target)) closeIndCtxMenu(); });
 window.addEventListener('keydown', e => { if (e.key === 'Escape') { closeIndCtxMenu(); setSelectedInd(null); } });
