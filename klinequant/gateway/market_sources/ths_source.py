@@ -724,8 +724,9 @@ class ThsSource(MarketSource):
                     "wk": wk_key,
                 }
         delta = max(cum - wk["base"], 0)
+        # 实时周 K timestamp 同样 relabel 到当周周一（与历史周线口径一致）
         return {
-            "timestamp": _week_open_ms(wk["ts"]),   # 实时周 K 同样 relabel 到当周周一（与历史周线口径一致）
+            "timestamp": _week_open_ms(wk["ts"]),
             "open": wk["open"],
             "high": max(wk["high"], float(row.get("最高价") or price)),
             "low": min(wk["low"], float(row.get("最低价") or price)),
