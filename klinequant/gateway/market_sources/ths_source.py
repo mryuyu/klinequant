@@ -8,6 +8,11 @@
 1d 直接由快照当日累计字段合成，1w 惰性以周 K 为种子叠加当日增量。
 日/周 K 复权方式固定前复权（adjust=forward）。
 
+周线口径：thsdk 原生周 K 按当周最后交易日（周五）标记（close-label），与全系统
+其余周期（币安周线=周一、MT5=周日、本模块派生月/季/年线=桶开盘）的 open-label
+口径不一致。故 1w 统一经 _week_open_ms() relabel 到日历周一（北京），消除前端跨
+周期画线锚点错位一根，并使周线成为规则 7 天间隔序列（OHLCV 与 bar 顺序不变）。
+
 同步库单连接 + 限频：全部调用经驱动层全局锁串行并节流（同 MT5 模式）。
 凭证走 .env（THS_USERNAME/THS_PASSWORD，MAC 自动生成）；缺失时 thsdk
 落游客模式（仅限开发，注册时告警）。
@@ -93,6 +98,21 @@ def _to_epoch_ms(dt) -> int:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=_BJ)
     return int(dt.timestamp() * 1000)
+
+
+def _week_open_ms(ts_ms: int) -> int:
+    """THS 原生周 K 时间戳（当周最后交易日/周五）→ 当周周一 00:00（北京）epoch 毫秒。
+
+    thsdk 周 K 按当周最后交易日标记（close-label），与全系统其余周期口径不一致：
+    币安周线=周一、MT5 周线=周日、本模块派生月/季/年线=桶开盘（derived.bucket_label
+    的 _MONDAY_ANCHOR 周对齐）皆为 open-label。close-label 会使前端跨周期画线锚点
+    「包含对齐」错位一根（日线锚点落到上一周的周线 bar）。此处统一 relabel 到日历
+    周一，使周线成为规则 7 天间隔的 open-label 序列，OHLCV 与 bar 顺序不变。"""
+    dt = datetime.fromtimestamp(ts_ms / 1000, _BJ)
+    monday = (dt - timedelta(days=dt.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+    return int(monday.timestamp() * 1000)
 
 
 def _normalize_code(symbol: str) -> str:
@@ -472,6 +492,11 @@ class ThsSource(MarketSource):
             # 裸拉无参路径：无窗口兜底，None 视为真实失败（非尽头）
             raise RuntimeError(f"THS klines failed for {code}/{timeframe}")
         bars = [self._to_bar(r) for r in rows]
+        if timeframe == "1w":
+            # 原生周 K close-label（周五）→ open-label（当周周一），与派生月/季/年线及其
+            # 它源口径统一；翻页游标（上方）走原始 thsdk 时间，relabel 不影响深分页。
+            for b in bars:
+                b["timestamp"] = _week_open_ms(b["timestamp"])
         for b in bars[-20:]:
             self._track_prec(symbol, [b["open"], b["high"], b["low"], b["close"]])
         if end_time:
@@ -700,7 +725,7 @@ class ThsSource(MarketSource):
                 }
         delta = max(cum - wk["base"], 0)
         return {
-            "timestamp": wk["ts"],
+            "timestamp": _week_open_ms(wk["ts"]),   # 实时周 K 同样 relabel 到当周周一（与历史周线口径一致）
             "open": wk["open"],
             "high": max(wk["high"], float(row.get("最高价") or price)),
             "low": min(wk["low"], float(row.get("最低价") or price)),

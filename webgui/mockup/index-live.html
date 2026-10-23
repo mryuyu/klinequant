@@ -4095,13 +4095,20 @@ const fibLevelsOf = sh => (Array.isArray(sh.levels) && sh.levels.length) ? sh.le
 const fibLineStyleOf = sh => (sh.style && sh.style.lineStyle != null) ? sh.style.lineStyle : ((fibLevelsOf(sh)[0] || {}).lineStyle ?? 1);
 const fibLevelPrice = (sh, r) => sh.points[1].price + (sh.points[0].price - sh.points[1].price) * r;
 
-/* 跨周期锚点时间解析：sh.tf 为创建周期，非当前周期时把锚点 time 对齐到当前周期「包含它的 bar」
-   （time <= t < time+周期长）；越出当前 klines 范围取首/末 bar；末 bar 之后的虚拟时间（空白区锚点）原样保留由坐标外推 */
+/* 跨周期锚点时间解析：把锚点 time 对齐到当前周期「包含它的 bar」（time <= t < time+周期长）；
+   越出当前 klines 范围取首/末 bar；末 bar 之后的虚拟时间（空白区锚点）原样保留由坐标外推。
+   sh.tf===curTf 时同样需对齐：在更低周期拖动会把锚点改写成低周期 bar 时间（如日线图形在 1h 拖到 13:00），
+   回创建周期后该时间不再命中任何 bar，timeToCoordinate 返回 null 致图形静默消失（2026-10-24 实证）。
+   同周期快速通道仅保留两种情形：锚点已精确命中 bar（常态零开销）；末 bar 之后的空白区虚拟时间（外推语义不变）。 */
 function resolveAnchorTime(sh, t) {
-  if (!sh || !sh.tf || sh.tf === curTf || !klines.length) return t;
+  if (!sh || !sh.tf || !klines.length) return t;
   const dur = tfDurSecFull(curTf);
-  if (t < klines[0].time) return klines[0].time;
   const last = klines[klines.length - 1];
+  if (sh.tf === curTf) {
+    if (t > last.time + dur) return t;   // 空白区虚拟锚点（外推位）原样保留，与跨周期分支同界
+    if (barIndexOfTime(t) >= 0) return t;   // 已命中本周期 bar，无需对齐
+  }
+  if (t < klines[0].time) return klines[0].time;
   if (t >= last.time + dur) return last.time;
   let lo = 0, hi = klines.length - 1;
   while (lo <= hi) {

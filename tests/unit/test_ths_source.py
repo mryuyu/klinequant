@@ -3,6 +3,7 @@
 覆盖：
     - 品种编码归一化（6 位简码 → THSCODE）
     - m1 桶标签与交易时段网格聚合（收盘时刻惯例/午休/盘后边界）
+    - 周 K close-label（周五）→ open-label（当周周一）归一化（历史 fetch + 实时 _week_bar）
     - fetch_klines：标准 bar 转换/北京时间戳/翻页过滤/精度兜底
     - fetch_ticker：快照字段映射 + 缓存
     - list_symbols：股票 + 指数目录合并与兜底
@@ -23,6 +24,7 @@ from klinequant.gateway.market_sources.ths_source import (
     _is_conn_dead,
     _m1_label,
     _normalize_code,
+    _week_open_ms,
 )
 
 _BJ = timezone(timedelta(hours=8))
@@ -127,6 +129,20 @@ def test_bucket_label_session_grid():
     assert _bucket_label(10 * 3600 + 2700, 3600) == 11 * 3600 + 1800  # 10:45 → 1h 桶 11:30
 
 
+# ─── 周 K close-label（周五）→ open-label（当周周一）归一化 ───
+
+def test_week_open_ms_relabel_to_monday():
+    """thsdk 原生周 K 按当周最后交易日标记，统一 relabel 到日历周一（北京），
+    与派生月/季/年线及币安/MT5 周线口径一致，修复跨周期画线锚点错位一根。"""
+    mon = lambda d: _bj_ms(datetime(*d, tzinfo=_BJ))            # noqa: E731
+    # 常规周五（2026-06-26）→ 当周周一（06-22）
+    assert _week_open_ms(mon((2026, 6, 26))) == mon((2026, 6, 22))
+    # 假日短周：最后交易日为周四（2026-09-10）→ 当周周一（09-07）
+    assert _week_open_ms(mon((2026, 9, 10))) == mon((2026, 9, 7))
+    # 已是周一（2026-08-31）→ 原样不变（幂等）
+    assert _week_open_ms(mon((2026, 8, 31))) == mon((2026, 8, 31))
+
+
 # ─── fetch_klines：标准 bar 转换 / 北京时间戳 / 翻页 / 精度 ───
 
 async def test_fetch_klines_conversion_and_precision():
@@ -160,6 +176,23 @@ async def test_fetch_klines_end_time_paging():
     assert [b["close"] for b in bars] == [1.0, 2.0]          # end_time（含）之前的页
     code, interval, count, start, end_arg = driver.klines_calls[-1]
     assert count is None and start is not None and end_arg is not None   # 翻页走区间查询
+
+
+async def test_fetch_klines_weekly_relabel_to_monday():
+    """历史周 K：thsdk 原生周五标记 → relabel 当周周一；OHLCV 与 bar 顺序不变"""
+    fri1 = datetime(2026, 6, 26)     # 周五
+    fri2 = datetime(2026, 7, 3)      # 周五
+    driver = _FakeThsDriver(klines={"week": [
+        _kline_row(fri1, 1.99, 2.04, 1.93, 2.02, 111),
+        _kline_row(fri2, 2.02, 2.05, 1.95, 1.96, 222),
+    ]})
+    src = ThsSource(driver=driver)
+    bars = await src.fetch_klines("600545", "1w", limit=10)
+    assert [b["timestamp"] for b in bars] == [
+        _bj_ms(datetime(2026, 6, 22, tzinfo=_BJ)),   # 当周周一
+        _bj_ms(datetime(2026, 6, 29, tzinfo=_BJ)),   # 当周周一
+    ]
+    assert [b["close"] for b in bars] == [2.02, 1.96]   # OHLCV 不受 relabel 影响
 
 
 async def test_fetch_klines_deep_paging_across_chunk_cap(monkeypatch):
@@ -290,6 +323,33 @@ async def test_week_bar_seed_and_delta(monkeypatch):
     assert wk["open"] == 9.5                                   # 周开盘保持种子值
     assert wk["high"] == 10.8 and wk["close"] == 10.6
     assert wk["volume"] == 50000 + (1000 - 800)                # 种子量 + 当日增量（扣除基线）
+    assert wk["timestamp"] == _bj_ms(datetime(2026, 8, 31, tzinfo=_BJ))   # 周一种子 → 周一标签
+
+
+async def test_week_bar_relabel_friday_seed_to_monday(monkeypatch):
+    """实时周 K：thsdk 周五种子（close-label）→ 发布 timestamp relabel 到当周周一，
+    与历史周线口径一致（否则实时 bar 与历史 bar 标签错位，前端无法合并）。"""
+    today = date(2026, 9, 4)                                   # 周五
+    driver = _FakeThsDriver(klines={
+        "1m": [],
+        "week": [_kline_row(datetime(2026, 9, 4), 9.5, 10.8, 9.4, 10.2, 50000)],   # 周五种子
+        "day": [_kline_row(datetime(2026, 9, 4), 10.0, 10.5, 9.9, 10.3, 800)],
+    })
+    src = ThsSource(driver=driver)
+    published: list[tuple] = []
+
+    async def fake_publish(exchange, symbol, tf, bar):
+        published.append((symbol, tf, bar))
+        return True
+
+    monkeypatch.setattr(market_manager, "publish_bar", fake_publish)
+    src._sym_tfs = {"USZA300750": {"1w"}}
+    base = datetime(2026, 9, 4, tzinfo=_BJ)
+    row = {"价格": 10.6, "成交量": 1000, "开盘价": 10.0, "最高价": 10.7, "最低价": 9.9}
+    await src._update_symbol("USZA300750", row, today, base.replace(hour=10))
+    wk = [b for s, tf, b in published if tf == "1w"][-1]
+    assert wk["timestamp"] == _bj_ms(datetime(2026, 8, 31, tzinfo=_BJ))   # 周五 9/4 → 当周周一 8/31
+    assert wk["open"] == 9.5 and wk["close"] == 10.6
 
 
 # ─── 断连自愈：传输层连接死亡必须丢弃连接触发重连 ───
