@@ -17,13 +17,23 @@
               clear_registry / StrategyLoadError
   迭代容错    resilient
   指标视图    IndicApi / IndicatorView / FieldView
+  ZigZag      ZigZagView / Pivot / CrossEvent / zigzag_high / zigzag_low
   交易类型    OrderSide / Offset / OrderKind / OrderType / Position / SymbolInfo
               （转发自 protocol.types，策略侧不必依赖 protocol 包）
 """
 from __future__ import annotations
 
 from klinequant.kqsdk.api import KqApi
-from klinequant.kqsdk.indic import FieldView, IndicApi, IndicatorView
+from klinequant.kqsdk.indic import (
+    CrossEvent,
+    FieldView,
+    IndicApi,
+    IndicatorView,
+    Pivot,
+    ZigZagView,
+    zigzag_high,
+    zigzag_low,
+)
 from klinequant.kqsdk.registry import (
     StrategyContext,
     StrategyLoadError,
@@ -60,6 +70,12 @@ __all__ = [
     "IndicApi",
     "IndicatorView",
     "FieldView",
+    # ── 条件驱动 ZigZag ──
+    "ZigZagView",
+    "Pivot",
+    "CrossEvent",
+    "zigzag_high",
+    "zigzag_low",
     # ── 交易类型（转发 protocol.types）──
     "OrderSide",
     "Offset",

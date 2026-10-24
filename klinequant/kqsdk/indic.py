@@ -31,9 +31,13 @@ import polars as pl
 import klinequant.core.indicator_engine.indicators  # noqa: F401
 import klinequant.custom_indicators  # noqa: F401
 from klinequant.core.indicator_engine.engine import IndicatorEngine
+from klinequant.core.indicator_engine.zigzag import CrossEvent, Pivot
 from klinequant.protocol.types import Kline
 
-__all__ = ["IndicApi", "IndicatorView", "FieldView"]
+__all__ = [
+    "IndicApi", "IndicatorView", "FieldView", "ZigZagView",
+    "Pivot", "CrossEvent", "zigzag_high", "zigzag_low",
+]
 
 
 # ─── bars → 引擎数据结构桥接（SDK 侧，不依赖 gateway） ───
@@ -324,6 +328,138 @@ class IndicatorView:
         return f"IndicatorView({self._name}{self._params} @{self._symbol}/{self._timeframe})"
 
 
+class ZigZagView:
+    """条件驱动 ZigZag 活视图（``indic.zigzag(...)`` 返回）。
+
+    包装引擎内 ZIGZAG 指标实例的 :class:`ZigZagCore` 状态机，每次访问现读
+    （随 runner 桥接的增量推进自动更新）；所有访问经 IndicApi 共享锁串行化
+    （拓扑 Z 多品种线程安全）。只读接口，策略不可变更状态。
+
+    常用访问::
+
+        zz = indic.zigzag(bull="cross_up(ma(close,5), ema(close,20))")
+        h1 = zz.zigzag_high()        # 最新高点 H1（含 pending，可能重绘）
+        l1 = zz.zigzag_low()         # 最新低点 L1
+        h2 = zz.zigzag_high(2)       # 上一个高点 H2（已确认，不再改变）
+        ev = zz.last_cross           # 最近交叉事件
+        if zz.pending and zz.pending.confirmed is False: ...
+    """
+
+    __slots__ = ("_api", "_name", "_params", "_view")
+
+    def __init__(self, api: "IndicApi", params: dict[str, Any], view: IndicatorView):
+        self._api = api
+        self._name = "ZIGZAG"
+        self._params = dict(params)
+        self._view = view
+
+    # ─── 内部：取核心状态机（持锁） ───
+
+    def _core(self):
+        api = self._api
+        with api._lock:
+            ind = api._engine.find_indicator(
+                self._name, self._params, api._symbol, api._exchange, api._timeframe
+            )
+        return ind.core if ind is not None else None
+
+    # ─── 视图元信息 ───
+
+    @property
+    def params(self) -> dict[str, Any]:
+        return dict(self._params)
+
+    @property
+    def _kq_bar_key(self) -> str:
+        """KqApi.is_changing 映射用：跟随底层 bar 版本 key。"""
+        return self._view._kq_bar_key
+
+    @property
+    def series_view(self) -> IndicatorView:
+        """底层 IndicatorView（ZZ_HIGH/ZZ_LOW/ZZ_LINE 字段序列，api.plot 消费）"""
+        return self._view
+
+    # ─── 极值点接口 ───
+
+    def zigzag_high(self, n: int = 1) -> Pivot | None:
+        """Hn 高点（n=1 最新，含 pending；按时间新→旧编号）"""
+        core = self._core()
+        return core.high(n) if core else None
+
+    def zigzag_low(self, n: int = 1) -> Pivot | None:
+        """Ln 低点（n=1 最新，含 pending）"""
+        core = self._core()
+        return core.low(n) if core else None
+
+    @property
+    def highs(self) -> list[Pivot]:
+        """高点列表（新→旧：H1, H2, H3…）"""
+        core = self._core()
+        return core.highs() if core else []
+
+    @property
+    def lows(self) -> list[Pivot]:
+        """低点列表（新→旧：L1, L2, L3…）"""
+        core = self._core()
+        return core.lows() if core else []
+
+    @property
+    def pivots(self) -> list[Pivot]:
+        """全部极值点（旧→新；末位为 pending 点，若存在）"""
+        core = self._core()
+        return core.pivots if core else []
+
+    @property
+    def confirmed_pivots(self) -> list[Pivot]:
+        core = self._core()
+        return core.confirmed_pivots if core else []
+
+    @property
+    def pending(self) -> Pivot | None:
+        """当前未确认转折点（允许重绘；无枢轴时 None）"""
+        core = self._core()
+        return core.pending if core else None
+
+    @property
+    def line(self) -> list[dict[str, Any]]:
+        """ZigZag 折线点列（旧→新，{index, timestamp, price}，含 pending 尾点）"""
+        core = self._core()
+        return core.line_series if core else []
+
+    # ─── 交叉事件 / 条件态 ───
+
+    @property
+    def last_cross(self) -> CrossEvent | None:
+        """最近一次交叉事件（类型/位置/涉及序列/触发时极值点编号）"""
+        core = self._core()
+        return core.last_cross if core else None
+
+    @property
+    def crosses(self) -> list[CrossEvent]:
+        """交叉事件列表（旧→新，保留窗口有限）"""
+        core = self._core()
+        return core.cross_events if core else []
+
+    @property
+    def bullish(self) -> bool | None:
+        """当前条件态（True 多头 / False 空头 / None 预热未定）"""
+        core = self._core()
+        return core.bullish if core else None
+
+    def __repr__(self) -> str:
+        return f"ZigZagView({self._params})"
+
+
+def zigzag_high(view: ZigZagView, n: int = 1) -> Pivot | None:
+    """函数形态：取 Hn 高点（需求 4 接口；等价 ``view.zigzag_high(n)``）"""
+    return view.zigzag_high(n)
+
+
+def zigzag_low(view: ZigZagView, n: int = 1) -> Pivot | None:
+    """函数形态：取 Ln 低点（需求 4 接口；等价 ``view.zigzag_low(n)``）"""
+    return view.zigzag_low(n)
+
+
 class IndicApi:
     """声明式指标接口（``api.INDIC()`` 返回）。
 
@@ -386,6 +522,38 @@ class IndicApi:
 
     def vwap(self, period: int = 20) -> IndicatorView:
         return self._declare("VWAP", {"period": period})
+
+    def zigzag(
+        self,
+        bull: str = "cross_up(ma(close,5), ema(close,5))",
+        bear: str = "cross_down(ma(close,5), ema(close,5))",
+        cross_type: str = "",
+        tolerance: float = 0.0,
+        time_window: int = 0,
+    ) -> ZigZagView:
+        """声明条件驱动 ZigZag（转折由指标条件/交叉驱动，只取 High/Low 定极值）。
+
+        Args:
+            bull: 多头态条件表达式（成立 → 多头 leg，跟踪待确认高点 H）。文法：
+                序列 ma/ema/sma/macd_dif/macd_dea/boll_*/rsi/atr/indic(任意注册表
+                指标)，谓词 cross_up/cross_down/cross/golden/death/rising/falling/ref。
+            bear: 空头态条件表达式（空 = not bull；交叉型 bull 应显式配对
+                cross_down，否则逻辑反在每个非交叉 bar 恒成立、多头 leg 压缩为 1 根）。
+            cross_type: 时间窗修正扫描的交叉类型（空 = 仅条件内交叉谓词对）。
+            tolerance: 交叉/方向判定容差（抑制浮点抖动）。
+            time_window: 时间窗修正根数（0 关闭）：严格条件未定时，窗内有
+                cross_type 交叉即认定翻转成立。
+
+        Returns:
+            ZigZagView 活视图：zigzag_high(n)/zigzag_low(n)/pivots/pending/
+            last_cross/bullish（H1/L1 动态编号，已确认点不再改变）。
+        """
+        params = {
+            "bull_cond": bull, "bear_cond": bear, "cross_type": cross_type,
+            "tolerance": float(tolerance), "time_window": int(time_window),
+        }
+        view = self._declare("ZIGZAG", params)
+        return ZigZagView(self, params, view)
 
     # ─── 内部：声明 / 预热 / 增量推进 ───
 

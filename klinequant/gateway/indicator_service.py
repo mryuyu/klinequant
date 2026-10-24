@@ -176,13 +176,20 @@ async def on_bar(exchange: str, symbol: str, timeframe: str, bar: dict) -> None:
     if not updated:
         return
 
-    payload = [
-        {
+    # 重绘型指标（ZIGZAG）历史尾段修补随推送搭车：前端仅末点增量无法自愈 pending 重绘，
+    # 修补累积由 engine.patch_series 活期路径写入、此处按契约 key 取出附到对应条目
+    iks = {engine.ind_key(iv.indicator_name, iv.params) for iv in updated}
+    taken = engine.take_ws_patches(symbol, exchange, timeframe, iks)
+    payload = []
+    for iv in updated:
+        entry = {
             "indicator": iv.indicator_name,
             "params": iv.params,
             "timestamp": iv.timestamp,
             "values": iv.values,
         }
-        for iv in updated
-    ]
+        pk = taken.get(engine.ind_key(iv.indicator_name, iv.params))
+        if pk:
+            entry["patches"] = pk   # {ts: {字段: 新值|null}}，前端 applyIndPatches 落地
+        payload.append(entry)
     await ws_manager.publish(f"indicators.{exchange}.{symbol}.{timeframe}", payload)

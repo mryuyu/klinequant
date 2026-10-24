@@ -66,6 +66,16 @@ class IndicatorEngine:
         # 全局回调（所有指标）
         self._global_subscribers: List[Callable] = []
 
+        # 重绘型指标（ZIGZAG）修补通道：
+        #  _warming：预热重放标记 (key, ind_key)——重放期间 patch_series 走缓冲合并、重放结束批量落地
+        #  _warmup_patch_buf：预热缓冲 (key, ind_key) -> {ts: {field: 值}}
+        #  _ws_patches：活期修补 WS 广播累积 KlineKey -> ind_key -> {ts: {field: 值}}，
+        #    由 indicator_service.on_bar 经 take_ws_patches 取出随 indicators.* 推送搭车，
+        #    前端 applyIndPatches 同步修正已绘重绘尾段（否则前端尾段冻在拉取时旧插值）
+        self._warming: Set[Tuple[KlineKey, str]] = set()
+        self._warmup_patch_buf: Dict[Tuple[KlineKey, str], Dict[int, Dict[str, Any]]] = {}
+        self._ws_patches: Dict[KlineKey, Dict[str, Dict[int, Dict[str, Any]]]] = {}
+
         self._running = False
 
     @property
@@ -135,7 +145,39 @@ class IndicatorEngine:
         """
         indicator = self._registry.create(name, params)
         self.add_indicator(indicator, symbol, exchange, timeframe)
+        self._inject_series_patcher(indicator, symbol, exchange, timeframe)
         return indicator
+
+    def _inject_series_patcher(
+        self,
+        indicator: IndicatorBase,
+        symbol: str,
+        exchange: str,
+        timeframe: str,
+    ) -> None:
+        """重绘型指标（如 ZIGZAG）注入历史序列修补回调：指标声明了
+        ``series_patcher`` 属性时，绑定到本引擎的 patch_series。"""
+        if hasattr(indicator, "series_patcher"):
+            indicator.series_patcher = (
+                lambda patches: self.patch_series(symbol, exchange, timeframe,
+                                                  indicator, patches)
+            )
+
+    def find_indicator(
+        self,
+        name: str,
+        params: Optional[Dict[str, Any]],
+        symbol: str,
+        exchange: str,
+        timeframe: str,
+    ) -> Optional[IndicatorBase]:
+        """按计算契约 key=(指标名|参数) 精确定位实例（SDK 取重绘型指标
+        丰富接口用，如 ZIGZAG 的极值点/交叉事件）"""
+        ik = self.ind_key(name, params)
+        for indicator in self._indicators.get((symbol, exchange, timeframe), []):
+            if self.ind_key(indicator.name, indicator.params) == ik:
+                return indicator
+        return None
 
     def subscribe(
         self,
@@ -233,16 +275,28 @@ class IndicatorEngine:
         窗口未满足的字段出 null（前端逐字段补空），短周期线仍可用——对齐 TV 观感
         """
         indicator.reset()
+        ik = self.ind_key(indicator.name, indicator.params)
         series: Deque[Tuple[int, Dict[str, Any]]] = deque(maxlen=self._max_cache_size)
-        self._series[key][self.ind_key(indicator.name, indicator.params)] = series
+        self._series[key][ik] = series
         partial = (
             len(df) < indicator.min_periods or force_partial
         ) and getattr(indicator, "supports_partial", False)
         values: Optional[Dict[str, Any]] = None
-        for row in df.iter_rows(named=True):
-            values = indicator.update_bar(row, True, partial=partial) if partial else indicator.update_bar(row, True)
-            if values is not None and any(v is not None for v in values.values()):
-                series.append((row["timestamp"], dict(values)))
+        # 重绘型指标重放期间逐 bar 产生重绘修补：缓冲合并、重放结束一次落地（patch_series
+        # 逐 bar 即时修补会把预热放大成 重放根数×序列长 的二次开销；同 ts 同字段后发覆盖
+        # 先发，合并落地与顺序应用等价）
+        wk = (key, ik)
+        self._warming.add(wk)
+        try:
+            for row in df.iter_rows(named=True):
+                values = indicator.update_bar(row, True, partial=partial) if partial else indicator.update_bar(row, True)
+                if values is not None and any(v is not None for v in values.values()):
+                    series.append((row["timestamp"], dict(values)))
+        finally:
+            self._warming.discard(wk)
+            buf = self._warmup_patch_buf.pop(wk, None)
+            if buf:
+                self._apply_patches(key, ik, buf)
         return series[-1][1] if series else None
 
     def _rebuild_full_series(
@@ -369,6 +423,87 @@ class IndicatorEngine:
             series[-1] = (timestamp, dict(values))
         else:
             series.append((timestamp, dict(values)))
+
+    def patch_series(
+        self,
+        symbol: str,
+        exchange: str,
+        timeframe: str,
+        indicator: IndicatorBase,
+        patches: Dict[int, Dict[str, Any]],
+    ) -> None:
+        """重绘型指标的历史序列点修补（ZigZag pending 尾段重绘契约）。
+
+        patches: {timestamp: {字段: 新值或 None}}，仅覆盖给出的字段。
+        预热重放路径：缓冲合并、重放结束批量落地（见 _warmup_incremental），避免逐 bar
+        修补把预热放大成二次开销；活期路径：立即修正 REST 序列供给源（_series），并累积
+        进 WS 广播池——由 indicator_service.on_bar 经 take_ws_patches 取出随 indicators.*
+        推送搭车，前端 applyIndPatches 同步修正已绘尾段。否则 WS 逐 bar 增量只更新末点，
+        前端历史尾段冻在拉取时刻的旧插值，pending 重绘在图上留下残腿/断口（仅切周期/
+        resync 全量重拉才短暂正确）。
+        """
+        if not patches:
+            return
+        key = (symbol, exchange, timeframe)
+        ik = self.ind_key(indicator.name, indicator.params)
+        wk = (key, ik)
+        if wk in self._warming:
+            buf = self._warmup_patch_buf.setdefault(wk, {})
+            for ts, fields in patches.items():
+                buf.setdefault(ts, {}).update(fields)
+            return
+        if not self._series.get(key, {}).get(ik):
+            return
+        self._apply_patches(key, ik, patches)
+        wb = self._ws_patches.setdefault(key, {}).setdefault(ik, {})
+        for ts, fields in patches.items():
+            wb.setdefault(ts, {}).update(fields)
+
+    def _apply_patches(
+        self,
+        key: KlineKey,
+        ik: str,
+        patches: Dict[int, Dict[str, Any]],
+    ) -> None:
+        """序列修补落地：修补 ts 恒落在尾段（pending leg），单次反向扫描提前终止；
+        落在序列覆盖范围之外的 timestamp 静默跳过（预热重建时序列会全量重放，无需修补）"""
+        series = self._series.get(key, {}).get(ik)
+        if not series:
+            return
+        mint = min(patches)
+        items = list(series)
+        changed = False
+        for k in range(len(items) - 1, -1, -1):
+            ts = items[k][0]
+            if ts < mint:
+                break
+            fields = patches.get(ts)
+            if fields is None:
+                continue
+            merged = dict(items[k][1])
+            merged.update(fields)
+            items[k] = (ts, merged)
+            changed = True
+        if changed:
+            series.clear()
+            series.extend(items)
+
+    def take_ws_patches(
+        self,
+        symbol: str,
+        exchange: str,
+        timeframe: str,
+        iks: Set[str],
+    ) -> Dict[str, Dict[int, Dict[str, Any]]]:
+        """取出指定契约 key 的 WS 广播累积（indicators.* 推送搭车）；
+        未取到的契约（本轮推送无值输出）保留在池内下轮推送再取"""
+        bucket = self._ws_patches.get((symbol, exchange, timeframe))
+        if not bucket:
+            return {}
+        taken = {ik: bucket.pop(ik) for ik in iks if ik in bucket}
+        if not bucket:
+            self._ws_patches.pop((symbol, exchange, timeframe), None)
+        return taken
 
     def kline_cache_ts(
         self,
