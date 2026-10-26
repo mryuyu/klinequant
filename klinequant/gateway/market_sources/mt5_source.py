@@ -63,6 +63,10 @@ class Mt5Source(MarketSource):
         {"symbol": "XAUUSD", "name": "XAU/USD", "type": "metal"},
     ]
     watched_targets: list[tuple[str, str]] = []
+    # 短页≠源尽头：终端对新观察品种只先同步浅层历史（渐进加深，Python 包无主动
+    # 下载接口），首拉短页被 kline_cache 永久焊死会导致终端手动加深历史后前端仍卡在
+    # 旧深度（XAUUSD 1m 1038 根 / EURUSD 1m 1056 根实证），改为冷却期标记可重试。
+    history_end_on_short_page = False
 
     def __init__(self, driver: Mt5Api | None = None):
         self._driver = driver or Mt5Api()

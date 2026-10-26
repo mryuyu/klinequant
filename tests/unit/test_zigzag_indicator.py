@@ -705,3 +705,313 @@ def test_sdk_zigzag_advances_with_feed():
         assert zz.bullish in (True, False)
     finally:
         eng.stop()
+
+
+# ═══════════════════════════════════════════════════
+# 极值搜索方式 search_mode：cond=条件搜索（默认，现行行为）/ range=范围搜索
+# ═══════════════════════════════════════════════════
+
+# 确定性场景：纯状态条件 close>1.1 / close<1.1，翻转 bar 完全可控。
+# bar3 为底部 L(0.70)；bar4 反弹尖峰 high=1.05 但仍在空头态（条件未成立）；
+# bar6 翻多（条件成立）、bar11 翻空确认 H：
+#   cond → H=argmax high[6..11]=bar7(1.04)；range → H=argmax high[3..11]=bar4(1.05)，
+#   极值下标早于条件成立 bar(6)、不早于上一个 zz 点(3)。
+_SM_TS = BASE_TS
+_SM_SPEC = [
+    # (close, high, low)
+    (0.90, 0.95, 0.85),   # 0
+    (0.88, 0.93, 0.80),   # 1
+    (0.87, 0.92, 0.76),   # 2
+    (0.86, 0.90, 0.70),   # 3 ← L 底部
+    (0.95, 1.05, 0.85),   # 4 ← 反弹尖峰（range 模式的 H）
+    (1.00, 1.00, 0.86),   # 5
+    (1.12, 1.02, 0.90),   # 6 ← bull 条件成立 bar
+    (1.15, 1.04, 0.91),   # 7 ← cond 模式的 H
+    (1.14, 1.01, 0.90),   # 8
+    (1.13, 1.02, 0.89),   # 9
+    (1.12, 1.03, 0.88),   # 10
+    (1.08, 1.04, 0.82),   # 11 ← bear 翻转 bar（两模式 pending L 均 @11/0.82）
+]
+
+
+def _sm_bars(spec=None):
+    spec = _SM_SPEC if spec is None else spec
+    bars = []
+    prev = spec[0][0]
+    for i, (c, h, lo) in enumerate(spec):
+        bars.append({
+            "symbol": SYM, "period": TF, "timestamp": _SM_TS + i * 60000,
+            "open": prev, "high": h, "low": lo, "close": c, "volume": 1000.0,
+        })
+        prev = c
+    return bars
+
+
+_SM_COND = {"bull_cond": "close > 1.1", "bear_cond": "close < 1.1"}
+
+
+def test_search_mode_validation():
+    """search_mode 非法值核心层抛 ValueError（指标层另行归一，见下）。"""
+    with pytest.raises(ValueError):
+        ZigZagCore(bull_cond="close > 1.1", search_mode="bogus")
+    # 合法值不抛
+    ZigZagCore(bull_cond="close > 1.1", search_mode="cond")
+    ZigZagCore(bull_cond="close > 1.1", search_mode="range")
+
+
+def test_search_mode_cond_extremum_from_condition_bar():
+    """条件搜索（默认）：H 取 leg 内（自条件成立 bar 起）最高 High，无视前段反弹尖峰。"""
+    core = ZigZagCore(**_SM_COND)   # 缺省 search_mode=cond
+    _run(core, _sm_bars())
+    piv = core.pivots
+    assert [(p.direction, p.index) for p in piv] == [(-1, 3), (1, 7), (-1, 11)]
+    assert piv[0].price == pytest.approx(0.70)
+    assert piv[0].confirmed and not piv[0].pending
+    assert piv[1].price == pytest.approx(1.04) and piv[1].confirmed
+    assert piv[2].pending and piv[2].price == pytest.approx(0.82)
+
+
+def test_search_mode_range_backtracks_to_prev_pivot():
+    """范围搜索：H 自上一个 zz 点回搜，命中条件成立前的反弹尖峰 bar4。"""
+    core = ZigZagCore(**_SM_COND, search_mode="range")
+    _run(core, _sm_bars())
+    piv = core.pivots
+    assert [(p.direction, p.index) for p in piv] == [(-1, 3), (1, 4), (-1, 11)]
+    assert piv[1].price == pytest.approx(1.05) and piv[1].confirmed
+    # 极值下标可早于条件成立 bar(6)、不早于上一个 zz 点(3)
+    assert piv[0].index <= piv[1].index < 6
+    # L 确认与 pending 尾与 cond 模式一致（本场景低极值均在 leg 内）
+    assert piv[0].price == pytest.approx(0.70)
+    assert piv[2].pending and piv[2].price == pytest.approx(0.82)
+
+
+# 固定回搜窗回归（v9.155 用户定稿算法）：bear leg 内先大振幅底部 bar2（low=0.70 且
+# high=1.30 尖峰同 bar）后反弹尖峰 bar3(1.25, 条件仍未翻转)，bar9 翻多；
+# bull leg 高仅至 1.20（低于两尖峰）。
+# 窗恒为 [B, A]：bar9 翻多 A=9、B=L@2 → 窗 [2,9] 捕捉同 bar 尖峰高 1.30
+# 为垂直腿 H@2（用户接受偶发垂直）；bar15 翻空 A=15、B=H@2 已承载垂直腿 →
+# 防往返守卫下界取 3 → 窗 [3,15] 命中 bar8 而非堆叠回 bar2（v9.150 无守卫时
+# 同 bar 往返堆叠三连针）。range_lookback 参数已全链路删除。
+_LB_SPEC = [
+    (1.00, 1.02, 0.98),   # 0  bear
+    (0.99, 1.01, 0.90),   # 1
+    (0.95, 1.30, 0.70),   # 2  ← L 底部 + 同 bar 尖峰高（针状腿源）
+    (0.96, 1.25, 0.92),   # 3  ← 反弹尖峰（仍 bear 态）
+    (0.94, 0.98, 0.90),   # 4
+    (0.93, 0.97, 0.89),   # 5
+    (0.92, 0.96, 0.88),   # 6
+    (0.91, 0.95, 0.87),   # 7
+    (0.90, 0.94, 0.86),   # 8
+    (1.12, 1.14, 1.08),   # 9  ← bull 条件成立 bar
+    (1.14, 1.16, 1.10),   # 10
+    (1.15, 1.17, 1.11),   # 11
+    (1.16, 1.18, 1.12),   # 12
+    (1.17, 1.19, 1.13),   # 13
+    (1.18, 1.20, 1.14),   # 14 ← bull leg 真高
+    (0.95, 1.00, 0.90),   # 15 ← bear 翻转确认
+]
+
+
+def test_search_mode_range_fixed_window_backsearch():
+    """范围搜索固定窗 [B, A]（v9.155 用户定稿，无范围参数）：窗内本方向极值播种，
+    含 B 本 bar 捕捉同 bar 垂直尖峰；B 已有垂直腿时守卫取次 bar 防往返堆叠；
+    range_lookback 参数已删除（传入即 TypeError）。"""
+    with pytest.raises(TypeError):
+        ZigZagCore(bull_cond="close > 1.1", range_lookback=5)
+
+    def _no_round_trip(piv):
+        # 往返堆叠不变量：不得出现同 bar 三连针（L-H-L / H-L-H 同 index）
+        return all(
+            not (piv[i].index == piv[i + 1].index == piv[i + 2].index)
+            for i in range(len(piv) - 2)
+        )
+
+    bars = _sm_bars(_LB_SPEC)
+    core = ZigZagCore(**_SM_COND, search_mode="range")
+    _run(core, bars)
+    piv = core.pivots
+    # 窗 [2,9] 捕捉同 bar 尖峰高 H@2(1.30) 垂直腿；守卫使 bar15 窗 [3,15] 命中 L@8
+    assert [(p.direction, p.index) for p in piv] == [(-1, 2), (1, 2), (-1, 8)]
+    assert piv[1].price == pytest.approx(1.30)
+    assert piv[1].confirmed and piv[2].pending
+    assert _no_round_trip(piv)
+
+
+def test_zz_line_vertical_bar_keeps_incoming_end():
+    """v9.156 同 bar 垂直腿守卫：垂直对 (L@2,H@2) 之后末段前移为 (H@2,L@8)，
+    ZZ_LINE@2 仍取入侧端点 L@2=0.70（真低触线），不被新末段插值起点 H@2=1.30
+    覆盖；bar3 起按新末段插值，尾段止于 pending L@8。"""
+    bars = _sm_bars(_LB_SPEC)
+    ind = ZigZagIndicator({**_SM_COND, "search_mode": "range"})
+    out = ind._calculate(bars_to_df(bars))
+    line = out["ZIGZAG_ZZ_LINE"].to_list()
+    assert line[2] == pytest.approx(0.70)
+    assert line[3] == pytest.approx(1.30 + (0.86 - 1.30) * (3 - 2) / (8 - 2))
+    assert line[8] == pytest.approx(0.86)
+
+
+def test_search_mode_range_snapshot_idempotent():
+    """范围搜索窗随快照回退：forming bar 同 ts 重复/渐进推送结果与一次性收盘一致。"""
+    bars = _sm_bars()
+    ref = ZigZagCore(**_SM_COND, search_mode="range")
+    _run(ref, bars)
+
+    # forming 渐进：bar11 分三次同 ts 推送（high/low 逐步扩展），最后收盘
+    inc = ZigZagCore(**_SM_COND, search_mode="range")
+    _run(inc, bars[:-1])
+    spec11 = _SM_SPEC[11]
+    for h, lo in ((0.99, 0.90), (1.02, 0.86), spec11[1:]):
+        fb = dict(bars[-1], high=h, low=lo)
+        inc.update_bar(fb, False)
+    inc.update_bar(bars[-1], True)
+    got = [(p.direction, p.index, p.price, p.confirmed, p.pending) for p in inc.pivots]
+    want = [(p.direction, p.index, p.price, p.confirmed, p.pending) for p in ref.pivots]
+    assert got == want
+
+
+def test_search_mode_indicator_param_and_normalization():
+    """指标层：search_mode=range 输出随核心变；非法值归一 cond 不抛。"""
+    bars = _sm_bars()
+    ind = ZigZagIndicator({**_SM_COND, "search_mode": "range"})
+    out = ind._calculate(bars_to_df(bars))
+    highs = out["ZIGZAG_ZZ_HIGH"].to_list()
+    line = out["ZIGZAG_ZZ_LINE"].to_list()
+    assert highs[4] == pytest.approx(1.05)
+    assert highs[7] is None
+    # ZZ_LINE 末段＝最后确认枢轴→pending（v9.154）：固定窗 [4,11] 最小低=bar11
+    # 0.82 → L@11 播种，尾段 H@4→L@11 插值致密（水平腿修复后的既有不变量）
+    assert line[3] == pytest.approx(0.70) and line[4] == pytest.approx(1.05)
+    assert all(v is not None for v in line[3:12])
+
+    bad = ZigZagIndicator({**_SM_COND, "search_mode": "bogus"})   # 归一 cond，不抛
+    assert bad.core.search_mode == "cond"
+    cond = ZigZagIndicator(dict(_SM_COND))                        # 缺省也是 cond
+    out_bad = bad._calculate(bars_to_df(bars))
+    out_cond = cond._calculate(bars_to_df(bars))
+    assert out_bad["ZIGZAG_ZZ_HIGH"].to_list() == out_cond["ZIGZAG_ZZ_HIGH"].to_list()
+    assert out_cond["ZIGZAG_ZZ_HIGH"].to_list()[7] == pytest.approx(1.04)
+
+
+def test_search_mode_range_matches_incremental():
+    """范围搜索：批量 _calculate 与逐 bar 增量输出逐字段一致（回测/实盘同源）。"""
+    bars = _mk_bars(200)
+    params = {**_ZZ_PARAMS, "search_mode": "range"}
+    batch = ZigZagIndicator(dict(params))
+    out = batch._calculate(bars_to_df(bars))
+    ts_col = out["timestamp"].to_list()
+    batch_map = {
+        int(ts_col[i]): (out["ZIGZAG_ZZ_HIGH"][i], out["ZIGZAG_ZZ_LOW"][i],
+                         out["ZIGZAG_ZZ_LINE"][i])
+        for i in range(len(bars))
+    }
+    inc = ZigZagIndicator(dict(params))
+    inc_map: dict[int, tuple] = {}
+    for b in bars:
+        vals = inc.update_bar(b, True, partial=True)
+        # 增量输出叠加历史修补（与 _calculate 回写同法）
+        for pts, fields in inc._patches.items():
+            key = int(pts)
+            cur = list(inc_map.get(key, (None, None, None)))
+            for fname, v in fields.items():
+                cur[{"ZZ_HIGH": 0, "ZZ_LOW": 1, "ZZ_LINE": 2}[fname]] = v
+            inc_map[key] = tuple(cur)
+        if vals:
+            inc_map[int(b["timestamp"])] = (
+                vals.get("ZZ_HIGH"), vals.get("ZZ_LOW"), vals.get("ZZ_LINE"))
+
+    for ts, (bh, bl, bln) in batch_map.items():
+        ih, il, iln = inc_map.get(ts, (None, None, None))
+        assert (bh is None) == (ih is None)
+        assert (bl is None) == (il is None)
+        assert (bln is None) == (iln is None)
+        if bh is not None:
+            assert bh == pytest.approx(ih, rel=1e-9, abs=1e-9)
+        if bl is not None:
+            assert bl == pytest.approx(il, rel=1e-9, abs=1e-9)
+        if bln is not None:
+            assert bln == pytest.approx(iln, rel=1e-9, abs=1e-9)
+
+
+# ─── forming tick 残值清扫回归 ───
+
+
+def test_forming_tick_residual_absolute_sweep():
+    """收盘绝对清扫消除 forming tick 残值：中间 tick 瞬移 pending 改写历史 bar，
+    收盘 tick pending 回原位（diff 为空），engine 序列持有残值。
+    绝对清扫应对 [_tail_floor, cur_idx) 全量发射正确终值覆盖残值。
+
+    场景：_SM_SPEC bars 0-10 收盘后 pivots=[L@3, H@4(pending,1.05)]；
+    bar11 tick1 high=1.20 瞬移 pending→H@11(1.20)，改写 bars[3,11) 插值；
+    bar11 close high=1.04/close=1.08 翻空：pending 不移动（H@4 确认），
+    固定回搜窗 [B=4, A=11] 最小低=bar4 0.85 → 同 bar 垂直腿 L@4 播种——
+    bars[5,11) 尾段 span=0 无值（None），tick1 插值残值应被清扫/回退清除。
+    """
+    bars = _sm_bars()
+    params = {**_SM_COND, "search_mode": "range"}
+    ind = ZigZagIndicator(dict(params))
+
+    # 建立状态：bars 0-10 逐根收盘
+    for b in bars[:-1]:
+        ind.update_bar(b, True, partial=True)
+
+    bar11 = bars[-1]
+
+    # 模拟 engine 序列（ts → {field: value}），只累积 patches 不回退
+    engine: Dict[int, Dict[str, Any]] = {}
+
+    def apply_patches():
+        for ts, fields in ind._patches.items():
+            engine.setdefault(int(ts), {}).update(fields)
+
+    # Tick 1: forming，high=1.20 > 1.05 → _track 瞬移 pending H 到 bar11
+    tick1 = dict(bar11, high=1.20, low=0.90, close=1.15)
+    ind.update_bar(tick1, False, partial=True)
+    apply_patches()
+    tick1_keys = set(int(k) for k in ind._patches.keys())
+    # 确认 tick1 改写了 bar4（原 ZZ_HIGH=1.05 → None，因 H 移到 11）
+    ts4 = int(bars[4]["timestamp"])
+    assert ts4 in tick1_keys, "tick1 应改写 bar4（pending 瞬移后 H 标记消失）"
+
+    # Tick 2 (CLOSE): high=1.04 < 1.05 → pending 不移动，H 留在 bar4
+    tick2 = dict(bar11, high=1.04, low=0.88, close=1.08)
+    ind.update_bar(tick2, True, partial=True)
+    apply_patches()
+
+    # 收盘后 _tail_floor 应已重置
+    assert ind._tail_floor is None
+
+    # 验证：engine 中 bar4 的 ZZ_HIGH 恢复为 1.05（绝对清扫覆盖了 tick1 的 None 残值）
+    assert engine[ts4]["ZZ_HIGH"] == pytest.approx(1.05), \
+        f"bar4 ZZ_HIGH 残值未清扫: {engine[ts4]}"
+
+    # 验证：engine 中 bars 5-10 的 ZZ_LINE 全为 None（固定窗播种同 bar 垂直腿
+    # L@4，尾段 span=0 仅 bar4 有值）；tick1 瞬态插值残值不在这些 bar 冻结
+    for i in range(5, 11):
+        ts_i = int(bars[i]["timestamp"])
+        assert engine[ts_i].get("ZZ_LINE") is None, \
+            f"bar{i} ZZ_LINE 残值未清扫: {engine[ts_i]}"
+
+    # 验证：确认腿 L@3→H@4 端点 + 同 bar 垂直腿低点标记落地
+    assert engine[int(bars[3]["timestamp"])]["ZZ_LINE"] == pytest.approx(0.70)
+    assert engine[ts4]["ZZ_LINE"] == pytest.approx(1.05)
+    assert engine[ts4]["ZZ_LOW"] == pytest.approx(0.85)
+
+    # 全量对比：engine 终态 vs 批量参考（bar11 用 tick2 值收盘）
+    ref_bars = bars[:-1] + [tick2]
+    ref = ZigZagIndicator(dict(params))
+    ref_out = ref._calculate(bars_to_df(ref_bars))
+    ts_col = ref_out["timestamp"].to_list()
+    for i in range(len(ref_bars)):
+        ts_i = int(ts_col[i])
+        if ts_i not in engine:
+            continue
+        for fname, col in (("ZZ_HIGH", "ZIGZAG_ZZ_HIGH"), ("ZZ_LOW", "ZIGZAG_ZZ_LOW"),
+                           ("ZZ_LINE", "ZIGZAG_ZZ_LINE")):
+            expected = ref_out[col][i]
+            actual = engine[ts_i].get(fname)
+            if expected is None:
+                assert actual is None, f"bar{i} {fname}: engine={actual}, ref=None"
+            else:
+                assert actual is not None, f"bar{i} {fname}: engine=None, ref={expected}"
+                assert actual == pytest.approx(expected, rel=1e-9, abs=1e-9), \
+                    f"bar{i} {fname}: engine={actual}, ref={expected}"

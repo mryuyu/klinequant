@@ -465,14 +465,19 @@ class IndicatorEngine:
         ik: str,
         patches: Dict[int, Dict[str, Any]],
     ) -> None:
-        """序列修补落地：修补 ts 恒落在尾段（pending leg），单次反向扫描提前终止；
-        落在序列覆盖范围之外的 timestamp 静默跳过（预热重建时序列会全量重放，无需修补）"""
+        """序列修补落地：修补 ts 恒落在尾段（pending leg），单次反向扫描提前终止。
+
+        修补 ts 无现成序列点时（gap bar：重绘型指标尾段极值 bar 之后按设计全字段
+        None 不建点）按时间序**插入**新点——只合并不插入会把翻转 bar 定型腿的
+        回填修补静默丢弃，序列留洞、前端变色线跨洞直连成水平假腿。
+        全字段 None 的修补 ts 不建点（与不建点语义等价，免增 whitespace 噪点）。"""
         series = self._series.get(key, {}).get(ik)
         if not series:
             return
         mint = min(patches)
         items = list(series)
         changed = False
+        hit = set()
         for k in range(len(items) - 1, -1, -1):
             ts = items[k][0]
             if ts < mint:
@@ -480,9 +485,26 @@ class IndicatorEngine:
             fields = patches.get(ts)
             if fields is None:
                 continue
+            hit.add(ts)
             merged = dict(items[k][1])
             merged.update(fields)
             items[k] = (ts, merged)
+            changed = True
+        missing = [
+            (ts, fields) for ts, fields in patches.items()
+            if ts not in hit and ts >= mint and any(v is not None for v in fields.values())
+        ]
+        if missing:
+            missing.sort(key=lambda x: x[0])
+            for ts, fields in missing:
+                lo, hi = 0, len(items)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if items[mid][0] < ts:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                items.insert(lo, (ts, dict(fields)))
             changed = True
         if changed:
             series.clear()

@@ -97,6 +97,77 @@ def test_exhausted_stops_further_fetches():
     assert len(out2) == 4 and len(src.calls) == n
 
 
+def test_terminal_source_short_page_not_welded():
+    """MT5 类源（history_end_on_short_page=False）：短页不永久焊死尽头。
+
+    冷却内视同尽头不重复补拉；冷却过期后重试，终端侧加深历史后免重启即可续拉
+    （XAUUSD 1m 卡 1038 根实证场景复现）。尾刷走默认 TTL（连续调用内跳过），聚焦补拉行为。"""
+    src = FakeSource([bar(i) for i in range(100, 110)])  # 终端仅同步了浅层 10 根
+    src.history_end_on_short_page = False
+    out = run(kc.cached_klines(src, "S", "1d", 100))
+    assert len(out) == 10                                # 短页 → 标尽头（带冷却）
+    assert kc._cache[("fake", "S", "1d")].exhausted
+    # 冷却内：再请求更深不再拉源（与焊死行为一致，防反复拉空页）
+    n = len(src.calls)
+    out2 = run(kc.cached_klines(src, "S", "1d", 100))
+    assert len(out2) == 10 and len(src.calls) == n
+    # 冷却过期 + 终端侧已加深历史：重试补拉拿到更深数据
+    kc._cache[("fake", "S", "1d")].exhausted_at -= kc._EXHAUST_RETRY_COOLDOWN + 1
+    src.data = [bar(i) for i in range(0, 110)]           # 模拟手动下载后历史变深
+    out3 = run(kc.cached_klines(src, "S", "1d", 100))
+    assert len(out3) == 100
+    assert kc._cache[("fake", "S", "1d")].bars[0]["timestamp"] == 0
+
+
+def test_rest_source_short_page_stays_welded_after_cooldown(monkeypatch):
+    """REST 源（默认 history_end_on_short_page=True）：短页即尽头，冷却过期也不重试
+
+    （防回归：币安/THS 源短页=回溯到上市日，重试只会反复拉空页）"""
+    monkeypatch.setattr(kc, "_EXHAUST_RETRY_COOLDOWN", 0.0)   # 冷却归零也不得重试
+    src = FakeSource([bar(i) for i in range(0, 10)])
+    run(kc.cached_klines(src, "S", "1d", 100))
+    n = len(src.calls)
+    out2 = run(kc.cached_klines(src, "S", "1d", 100, end_time=3))
+    assert len(out2) == 4 and len(src.calls) == n
+
+
+class ShortPageTerminalSource(FakeSource):
+    """模拟 MT5 终端源：补拉窗口被周末/休市空洞吃掉后单次至多返请求量 1/4（短页），
+    但更早历史仍充足——短页不得判尽头，须继续翻页凑满（XAUUSD 1m 跨周末 748/1000 实证）"""
+    history_end_on_short_page = False
+
+    async def fetch_klines(self, symbol, timeframe, limit=200, end_time=None):
+        self.calls.append((limit, end_time))
+        rows = [b for b in self.data if end_time is None or b["timestamp"] <= end_time]
+        return rows[-max(1, limit // 4):]
+
+
+def test_terminal_source_short_page_keeps_paging_until_filled():
+    """终端源短页（窗口内合法空洞）不中断补拉：多轮翻页凑满请求深度"""
+    src = ShortPageTerminalSource([bar(i) for i in range(0, 10_000)])
+    out = run(kc.cached_klines(src, "S", "1d", 1000))
+    assert len(out) == 1000                        # 旧逻辑首轮短页即断，只能拿到 ~500 根
+    assert out[0]["timestamp"] == 9000 and out[-1]["timestamp"] == 9999
+    e = kc._cache[("fake", "S", "1d")]
+    assert not e.exhausted                         # 短页≠尽头，未误标
+    assert len(src.calls) <= kc._FILL_MAX_ROUNDS + 1   # 轮数护栏内
+
+
+def test_terminal_source_deep_paging_crosses_weekend_gap():
+    """终端源翻页越过周末空洞拿到更早历史（缓存最旧根前是 >1 个窗口的休市段）"""
+    # 本周 500 根（ts 10_000起）+ 上周 2000 根（ts 0起），中间 8000 跨度空洞（仿周末+长假）
+    data = [bar(i) for i in range(0, 2000)] + [bar(i) for i in range(10_000, 10_500)]
+    src = FakeSource(data)
+    src.history_end_on_short_page = False
+    e = kc._entry(("fake", "S", "1d"))
+    e.bars = [dict(b) for b in data[-500:]]        # 缓存仅本周段
+    e.exhausted = True                             # 旧逻辑曾在此焊死
+    e.exhausted_at = 0.0                           # 冷却已过 → 允许重试
+    out = run(kc.cached_klines(src, "S", "1d", 1200))
+    assert len(out) == 1200                        # 跨过空洞补齐到上周段
+    assert out[0]["timestamp"] == 1300             # 已触及上周数据（上周段 1300~1999 + 本周段 500 根）
+
+
 def test_lru_eviction(monkeypatch):
     monkeypatch.setattr(kc, "_MAX_ENTRIES", 2)
     src = FakeSource([bar(i) for i in range(10)])

@@ -46,11 +46,17 @@ __all__ = [
     "SeriesManager",
     "compile_cond",
     "CROSS_TYPES",
+    "SEARCH_MODES",
 ]
 
 # 交叉类型：cross_up/golden（上穿，等价）、cross_down/death（下穿，等价）、
 # cross（任意交叉）、None/""（跟随条件表达式内出现的交叉谓词对）
 CROSS_TYPES = ("cross_up", "cross_down", "cross", "golden", "death")
+
+# 极值搜索方式：cond=条件搜索（leg 极值自条件成立 bar 起逐 bar 增量跟踪）/
+# range=范围搜索（翻转时自上一个 zz 点到条件成立 bar 范围一次性回搜极值，
+# 极值下标可早于条件成立 bar、不早于上一个 zz 点）
+SEARCH_MODES = ("cond", "range")
 
 # 别名归一：golden≡cross_up（金叉）、death≡cross_down（死叉）
 _CROSS_ALIAS = {"golden": "cross_up", "death": "cross_down"}
@@ -1089,14 +1095,18 @@ class ZigZagCore:
         tolerance: float = 0.0,
         time_window: int = 0,
         max_events: int = 200,
+        search_mode: str = "cond",
     ):
         if cross_type is not None and cross_type != "" and cross_type not in CROSS_TYPES:
             raise ValueError(f"cross_type 必须为 {CROSS_TYPES} 之一或 None，得到 {cross_type!r}")
+        if search_mode not in SEARCH_MODES:
+            raise ValueError(f"search_mode 必须为 {SEARCH_MODES} 之一，得到 {search_mode!r}")
         self.bull_src = str(bull_cond)
         self.bear_src = str(bear_cond) if bear_cond else ""
         self.cross_type = cross_type or None
         self.tolerance = float(tolerance)
         self.time_window = int(time_window)
+        self.search_mode = str(search_mode)
         if self.tolerance < 0:
             raise ValueError("tolerance 不能为负")
         if self.time_window < 0:
@@ -1148,6 +1158,10 @@ class ZigZagCore:
         self._bar_count = 0
         self._last_ts: Optional[int] = None
         self._snap: Optional[Any] = None
+        # 范围搜索 bar 窗（idx, ts, high, low；仅 search_mode=range 维护）：翻转时回搜
+        # [上一个 zz 点, 本 bar] 极值用；头部按最近确认点裁剪，界内即全部候选 bar
+        # （回搜窗恒为 [刚确认点 B, 翻转 bar A]，无范围参数，见 _flip）
+        self._win: Deque[Tuple[int, int, Any, Any]] = deque()
 
     # ─── 配置元信息 ───
 
@@ -1174,6 +1188,13 @@ class ZigZagCore:
         self._bar_count += 1
         self._last_ts = ts
         idx = self._bar_count - 1
+        if self.search_mode == "range":
+            # 范围搜索窗逐 bar 累积（state 未定 bar 也入窗：其 high/low 仍是合法候选）；
+            # forming bar 同 ts 重复推送就地位换尾entry（快照法幂等，restore 整体回退）
+            if self._win and self._win[-1][0] == idx:
+                self._win[-1] = (idx, ts, bar.get("high"), bar.get("low"))
+            else:
+                self._win.append((idx, ts, bar.get("high"), bar.get("low")))
 
         # forming bar 与收盘 bar 同口径评估：与条件线 dirline forming 段变色逐 tick 同步
         # （v9.145：v9.144 仅收盘口径致「ZLINE 已变色却不绘段」）；盘内瞬翻瞬回由
@@ -1254,10 +1275,51 @@ class ZigZagCore:
         # 新 leg 从翻转 bar 起跟踪本方向极值（多头 → 待确认 H，空头 → 待确认 L）；
         # 退化 leg（1 根 bar 即再翻转）允许与刚确认点同 idx，形成垂直段，
         # 两极值均为真实价格；同向不可能相邻（翻转必先确认反向 pending）
+        if self.search_mode == "range" and self._pivots:
+            # 范围搜索（用户定稿算法 v9.155）：翻转 bar=A，刚确认极值点=B，
+            # 回搜窗恒为 [B, A]（区间固定，无需任何范围参数）：取窗内本方向
+            # 极值播种新 pending（极值下标可早于条件成立 bar、不早于 B）；
+            # 窗内无有效极值（high/low 全 None）回退本 bar 极值播种，与条件搜索同构。
+            # 含 B 本 bar 可捕捉大振幅 bar 的同 bar 反向尖峰（用户确认接受偶发
+            # 同 bar 垂直腿）；但若该 bar 已承载前一反向枢轴（垂直腿已成立），
+            # 再纳入会把同 bar 低/高往返堆叠成 L-H-L 三连针 → 下界取次 bar。
+            conf = self._pivots[-1]
+            lo = conf.index
+            if len(self._pivots) >= 2 and self._pivots[-2].index == conf.index:
+                lo = conf.index + 1
+            seed = self._range_extremum(lo, idx, state)
+            if seed is not None:
+                self._pivots.append(seed)
+                self._trim_win(conf.index)
+                return
         if state and high is not None:
             self._pivots.append(Pivot(idx, ts, float(high), 1, pending=True))
         elif not state and low is not None:
             self._pivots.append(Pivot(idx, ts, float(low), -1, pending=True))
+
+    def _range_extremum(self, lo_idx: int, cur_idx: int, state: bool) -> Optional[Pivot]:
+        """范围搜索：窗内 [lo_idx, cur_idx] 找极值 bar（多头→最高 High / 空头→最低 Low），
+        返回未确认 pending 点；窗内无有效极值返回 None（调用方回退本 bar 播种）。"""
+        best: Optional[Tuple[int, int, float]] = None   # (idx, ts, price)
+        for w_idx, w_ts, w_high, w_low in self._win:
+            if w_idx < lo_idx:
+                continue
+            if w_idx > cur_idx:
+                break
+            raw = w_high if state else w_low
+            if raw is None:
+                continue
+            price = float(raw)
+            if best is None or (price > best[2] if state else price < best[2]):
+                best = (w_idx, w_ts, price)
+        if best is None:
+            return None
+        return Pivot(best[0], best[1], best[2], 1 if state else -1, pending=True)
+
+    def _trim_win(self, lo_idx: int) -> None:
+        """窗头裁剪到最近确认点：下次翻转的回搜下界即该点 index，更早 bar 永不再候选"""
+        while self._win and self._win[0][0] < lo_idx:
+            self._win.popleft()
 
     def _track(self, idx: int, ts: int, high: Any, low: Any) -> None:
         if not self._pivots:
@@ -1396,10 +1458,11 @@ class ZigZagCore:
             self._bar_count,
             list(self._events),
             self._series.snapshot(),
+            list(self._win) if self.search_mode == "range" else None,
         )
 
     def _restore(self, snap: Any) -> None:
-        n, last, bullish, count, events, ssnap = snap
+        n, last, bullish, count, events, ssnap, win = snap
         del self._pivots[n:]                       # 丢弃本次确认/追加的枢轴
         if n and last is not None:
             # 还原被就地改写的末位（replace 拷贝：同一快照可被多次 restore）
@@ -1408,6 +1471,8 @@ class ZigZagCore:
         self._bar_count = count
         self._events = deque(events, maxlen=self._events.maxlen)
         self._series.restore(ssnap)
+        if win is not None:
+            self._win = deque(win)   # 范围搜索窗整体回退（forming tick 的就地位换/裁剪全部撤销）
 
     def reset(self) -> None:
         self._pivots = []
@@ -1416,6 +1481,7 @@ class ZigZagCore:
         self._bar_count = 0
         self._last_ts = None
         self._snap = None
+        self._win.clear()
         self._series.reset()
 
 

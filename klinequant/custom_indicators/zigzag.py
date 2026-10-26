@@ -24,13 +24,21 @@ H1 确认并开启 pending L1（区间最低 Low），反之亦然；H/L 严格�
     tolerance    交叉/方向判定容差（抑制浮点抖动误判）
     time_window  时间窗修正根数（0 = 关闭）：严格条件未定时，窗内发生过
                  cross_type 交叉事件即认定翻转成立
+    search_mode  极值搜索方式：cond=条件搜索（leg 极值自条件成立 bar 起逐 bar
+                 增量跟踪，默认）/ range=范围搜索（用户定稿算法 v9.155：翻转
+                 bar=A、刚确认极值点=B，回搜窗恒为 [B, A] 取本方向极值播种，
+                 区间固定无需范围参数；含 B 本 bar 捕捉同 bar 反向尖峰，接受
+                 偶发同 bar 垂直腿；B 已有垂直腿时取次 bar 防往返堆叠；极值
+                 下标可早于条件成立 bar）；非法值归一为 cond
 
 输出字段（sparse 稀疏语义，逐字段 null 透传）：
     ZZ_HIGH  极值高点（H 转折点所在 bar 输出价格，其余 null；plot:'scatter' 前端不建线）
     ZZ_LOW   极值低点（L 转折点所在 bar 输出价格，其余 null；plot:'scatter' 前端不建线）
-    ZZ_LINE  ZigZag 折线（相邻极值点间线性插值；pending 尾段随重绘更新，
-             经 engine.patch_series 修补历史序列点，契约见该方法 docstring；
-             plot:'dirline' 按 leg 方向分段变色——上升段绿 / 下降段红）
+    ZZ_LINE  ZigZag 折线（末段＝最后确认枢轴→pending 枢轴线性插值，止于 pending
+             不连当根 live 价；pending 尾段随重绘更新，经 engine.patch_series 修补
+             历史序列点，契约见该方法 docstring；plot:'dirline' 按 leg 方向分段
+             变色——上升段绿 / 下降段红。v9.153 曾隐藏进行中腿，v9.154 撤销：
+             该决策基于误诊，且隐藏会丢掉真实摆动段）
 """
 from __future__ import annotations
 
@@ -41,7 +49,7 @@ import polars as pl
 
 from klinequant.core.indicator_engine.base import IndicatorBase
 from klinequant.core.indicator_engine.registry import register_indicator
-from klinequant.core.indicator_engine.zigzag import Pivot, ZigZagCore
+from klinequant.core.indicator_engine.zigzag import SEARCH_MODES, Pivot, ZigZagCore
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +63,16 @@ class ZigZagIndicator(IndicatorBase):
     def __init__(self, params: Optional[Dict[str, Any]] = None):
         super().__init__(params)
         p = self._params
+        search_mode = str(p.get("search_mode") or "cond")
+        if search_mode not in SEARCH_MODES:
+            search_mode = "cond"   # 非法值归一默认，避免核心层 raise 致订阅整体失败
         self._core = ZigZagCore(
             bull_cond=str(p.get("bull_cond") or "cross_up(ma(close,5), ema(close,5))"),
             bear_cond=str(p.get("bear_cond") or "") or None,
             cross_type=str(p.get("cross_type") or "") or None,
             tolerance=float(p.get("tolerance") or 0.0),
             time_window=int(p.get("time_window") or 0),
+            search_mode=search_mode,
         )
         # 引擎注入的历史序列修补回调（重绘型指标契约，见 engine.patch_series）
         self.series_patcher: Optional[Callable[[Dict[int, Dict[str, Any]]], None]] = None
@@ -84,6 +96,7 @@ class ZigZagIndicator(IndicatorBase):
             "cross_type": "",
             "tolerance": 0.0,
             "time_window": 0,
+            "search_mode": "cond",
         }
 
     @property
@@ -118,6 +131,12 @@ class ZigZagIndicator(IndicatorBase):
         self._patches: Dict[int, Dict[str, Any]] = {}       # 本 bar 产生的历史修补
         self._last_ts: Optional[int] = None
         self._snap: Optional[Any] = None
+        # forming bar 内各 tick 尾段改写区间下界的并集（最小 start）：patches 是对
+        # _vals（逐 tick 快照回退）的 diff，而 engine 序列不随 tick 回退——tick 瞬翻/
+        # 瞬移 pending 改写的历史 bar 若收盘 diff 为空，残值永久冻结进序列（range 模式
+        # 回搜播种使残值区宽达上一 zz 点之前 → 长直弦）。收盘时对该并集区做绝对值
+        # 全量清扫（不取 diff）清除残值。
+        self._tail_floor: Optional[int] = None
 
     def reset(self) -> None:
         super().reset()
@@ -140,15 +159,28 @@ class ZigZagIndicator(IndicatorBase):
         self._patches = {}
         if ts != self._last_ts:
             self._snap = self._snapshot()
+            self._tail_floor = None   # 新 bar 开始，重置 tick 改写区追踪
         elif self._snap is not None:
             self._restore(self._snap)
 
+        # 翻转前预录 pending 点索引：翻转 bar 若以本 bar 极值更新 pending 后再确认，
+        # pivots[-2].index 会跳到本 bar，_recompute_tail 默认起点漏掉「刚定型腿」的
+        # (旧极值, 本 bar) 区间 → 序列留洞，前端变色线跨洞直连成水平假腿
+        pre = self._core.raw_pivots
+        pre_n = len(pre)
+        pre_pend_idx = pre[-1].index if pre_n and pre[-1].pending else None
         self._core.update_bar(bar, is_closed)
+        flipped = pre_pend_idx is not None and len(self._core.raw_pivots) > pre_n
         self._rows.append({"timestamp": ts, "high": bar.get("high"), "low": bar.get("low")})
         idx = len(self._rows) - 1
         out = self._compute_outputs(idx)
         self._vals.append(dict(out))
-        self._recompute_tail(idx)
+        self._recompute_tail(idx, pre_pend_idx if flipped else None)
+        # 收盘：对本 bar 内各 tick 尾段改写区的并集做绝对值全量清扫，清除 forming
+        # tick 残值（中间 tick 改写过但收盘 diff 为空的历史 bar，engine 序列不会回退）
+        if is_closed and self._tail_floor is not None:
+            self._recompute_tail(idx, None, absolute=True, floor=self._tail_floor)
+            self._tail_floor = None
 
         self._last_ts = ts
         if len(self._rows) >= self.min_periods:
@@ -209,11 +241,25 @@ class ZigZagIndicator(IndicatorBase):
     def _line_value_at(idx: int, pivots: List[Pivot]) -> Optional[float]:
         """ZZ_LINE：仅末段（最后两枢轴之间，含 pending 尾点）线性插值，其余 null。
 
-        历史段一经确认即稳定，其插值值在确认当时已写入序列并被后续修补固定；
-        每 bar 只需重算末段（pending 重绘 / 新确认延长的影响范围）。
+        止于 pending 枢轴、不连当根 live 价（v9.154 恢复 v9.153 前语义：v9.153 曾
+        隐藏整条进行中腿，实证会把真实摆动段（如大跌腿 H→pending L）整段藏到下次
+        翻转才显现，观感缺失；且 v9.153 所治的「条件未翻先见腿」实为已确认腿的
+        误读）。历史段一经确认即稳定，其插值值在确认当时已写入序列并被后续修补
+        固定；每 bar 只需重算末段（pending 重绘 / 新确认延长的影响范围）。
+
+        同 bar 垂直腿守卫（v9.156）：idx 恰落在 (pivots[-3], pivots[-2]) 同 bar
+        垂直对上时取入侧端点 pivots[-3].price——该 bar 的值在垂直对尚为末段时
+        已按 span=0 写入入侧端点；下次翻转后末段前移，若无守卫会被新末段插值
+        起点（出侧端点）覆盖，折线降腿止于插值浮点、真低/真高不触线（用户截图
+        1m 02:43 垂直腿 V 底浮在 02:42 插值点）。
         """
         if len(pivots) < 2:
             return None
+        if (
+            len(pivots) >= 3
+            and pivots[-3].index == pivots[-2].index == idx
+        ):
+            return pivots[-3].price
         p0, p1 = pivots[-2], pivots[-1]
         if idx < p0.index or idx > p1.index:
             return None
@@ -222,13 +268,53 @@ class ZigZagIndicator(IndicatorBase):
             return p0.price
         return p0.price + (p1.price - p0.price) * (idx - p0.index) / span
 
-    def _recompute_tail(self, cur_idx: int) -> None:
+    @staticmethod
+    def _tail_value_at(idx: int, pivots: List[Pivot]) -> Optional[float]:
+        """尾段重算插值：idx 落在末段 → 同 _line_value_at；落在刚定型的倒数第二段
+        （翻转 bar 回填区间 [flip_start, pivots[-2].index)）→ 按该段插值；其余 null。"""
+        if idx >= pivots[-2].index:
+            return ZigZagIndicator._line_value_at(idx, pivots)
+        if len(pivots) >= 3:
+            p0, p1 = pivots[-3], pivots[-2]
+            if idx < p0.index:
+                return None
+            span = p1.index - p0.index
+            if span <= 0:
+                return p0.price
+            return p0.price + (p1.price - p0.price) * (idx - p0.index) / span
+        return None
+
+    def _recompute_tail(
+        self,
+        cur_idx: int,
+        flip_start: Optional[int] = None,
+        absolute: bool = False,
+        floor: Optional[int] = None,
+    ) -> None:
         """重算受影响历史 bar 的输出（pending 重绘移动/新确认延长末段），
-        差异写入 self._patches（timestamp → 字段增量）供序列修补。"""
+        差异写入 self._patches（timestamp → 字段增量）供序列修补。
+
+        flip_start：翻转前 pending 点索引。翻转 bar 以本 bar 极值更新 pending 再确认时，
+        定型腿终点从 flip_start 移到本 bar，[flip_start, cur) 区间须按定型腿插值回填
+        （默认起点 pivots[-2].index 已跳到本 bar，漏掉该区间 → 序列留洞，
+        前端跨洞直连成水平假腿）；区间内 bar 的 ZZ_HIGH/ZZ_LOW 旧标记同步清理。
+
+        absolute：收盘清扫模式——区间内每根 bar 无条件发射全字段（含 None），不做
+        diff 门控。用于清除 forming tick 残值：中间 tick 按瞬态几何改写过 engine 序列，
+        收盘 diff（对回退后的 _vals）不再含那些 bar，残值永久冻结；绝对覆盖强制对齐。
+        floor：清扫区下界（本 bar 内各 tick start 的最小值），扩展默认起点。
+        常规模式下累积 floor 到 self._tail_floor（供收盘清扫取并集）。
+        """
         pivots = self._core.raw_pivots
         if len(pivots) < 2:
             return
-        start = max(0, pivots[-2].index)
+        start = pivots[-2].index
+        if flip_start is not None and len(pivots) >= 3:
+            start = min(start, flip_start)
+        if floor is not None:
+            start = min(start, floor)
+        elif self._tail_floor is None or start < self._tail_floor:
+            self._tail_floor = start
         # 重算区间内的 H/L 标记映射（index → 价格；含同 idx 退化叠加）。
         # 枢轴按 index 升序，仅末段 [start, cur_idx] 可能命中：反向扫描遇 index<start 即停，
         # 避免逐 bar 全量遍历枢轴把预热放大成 O(n·p)（max/min 聚合与遍历顺序无关，结果一致）。
@@ -247,13 +333,17 @@ class ZigZagIndicator(IndicatorBase):
             new_vals: Dict[str, Optional[float]] = {
                 "ZZ_HIGH": h_map.get(i),
                 "ZZ_LOW": l_map.get(i),
-                "ZZ_LINE": self._line_value_at(i, pivots),
+                "ZZ_LINE": self._tail_value_at(i, pivots),
             }
             stored = self._vals[i]
-            diff: Dict[str, Any] = {}
-            for f in _FIELDS:
-                if (stored.get(f) or None) != (new_vals[f] or None):
-                    diff[f] = new_vals[f]
+            if absolute:
+                # 无条件全字段发射：覆盖 engine 序列中 forming tick 残值（含置回 None）
+                diff = {f: new_vals[f] for f in _FIELDS}
+            else:
+                diff = {}
+                for f in _FIELDS:
+                    if (stored.get(f) or None) != (new_vals[f] or None):
+                        diff[f] = new_vals[f]
             if diff:
                 stored.update(diff)
                 self._patches[self._rows[i]["timestamp"]] = diff

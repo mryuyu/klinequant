@@ -89,6 +89,23 @@ class AppState:
             )
         return self._http_client
 
+    async def heal_http_client(self, exc: BaseException) -> None:
+        """共享 HTTP client 自愈：传输层异常 → 丢弃连接池，下次 get 时重建。
+
+        代理断流期间池内 keep-alive 隧道全成死连接，恢复后复用 client 的请求
+        仍会即刻失败且永不自愈（client 只在 is_closed 时才重建），调用方在
+        捕获异常后调本方法即可在代理恢复后自动重建连接池。
+        """
+        if not isinstance(exc, httpx.TransportError):
+            return
+        client = self._http_client
+        self._http_client = None
+        if client is not None and not client.is_closed:
+            try:
+                await client.aclose()
+            except Exception:  # 关闭死连接可能再抛，不影响重建
+                pass
+
     async def close(self):
         """关闭资源"""
         if self._http_client and not self._http_client.is_closed:

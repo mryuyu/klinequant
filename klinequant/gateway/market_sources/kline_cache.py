@@ -42,11 +42,20 @@ _DAY_MS = 86_400_000
 _TF_RE = re.compile(r"^(\d+)([mhdw])$")
 _TF_UNIT_MS = {"m": 60_000, "h": 3_600_000, "d": _DAY_MS, "w": 604_800_000}
 
+# 短页≠尽头的源（history_end_on_short_page=False，如 MT5 终端源）的尽头标记冷却：
+# 冷却内视同尽头不重复补拉，过期后允许重试——终端侧渐进同步/手动加深历史后，
+# 免重启进程即可续拉（永久焊死实证：XAUUSD 1m 卡 1038 根、EURUSD 1m 卡 1056 根）。
+_EXHAUST_RETRY_COOLDOWN = 120.0
+# 单次请求补拉轮数护栏（50×8000 根 ≫ 路由 limit 上限 30000）：防极端缺口源
+# 单请求内无限翻页；未凑满不标尽头，下次请求可继续。
+_FILL_MAX_ROUNDS = 50
+
 
 @dataclass
 class _Entry:
     bars: list[dict] = field(default_factory=list)   # 时间升序
     exhausted: bool = False                          # 源已无更早数据
+    exhausted_at: float = 0.0                        # 尽头标记时刻(monotonic)，冷却过期可重试
     gap_attempts: dict = field(default_factory=dict)  # (a_ts,b_ts) -> monotonic，缺洞补拉冷却台账
     last_tail_at: float = 0.0                        # 上次尾刷时刻(monotonic)；TTL 内跳过重复尾刷
 
@@ -87,6 +96,19 @@ def _merge_front(entry: _Entry, page: list[dict]) -> None:
     have = {int(b["timestamp"]) for b in entry.bars}
     front = [b for b in page if int(b["timestamp"]) not in have]
     entry.bars = sorted(front + entry.bars, key=lambda b: int(b["timestamp"]))
+
+
+def _exhausted_active(source, e: _Entry) -> bool:
+    """尽头标记是否仍生效（补拉循环短路条件）
+
+    REST 源（history_end_on_short_page 默认 True）短页即尽头，永久生效；
+    MT5 类终端源短页可能只是终端历史尚未同步完，冷却过期后放行重试补拉。
+    """
+    if not e.exhausted:
+        return False
+    if getattr(source, "history_end_on_short_page", True):
+        return True
+    return time.monotonic() - e.exhausted_at < _EXHAUST_RETRY_COOLDOWN
 
 
 def _merge_tail(entry: _Entry, page: list[dict]) -> None:
@@ -192,9 +214,19 @@ async def cached_klines(
                 # 短返回可能是截断而非全量；尽头只由补拉路径的空页/短页判定
 
         # 缺口补拉：请求深度超过已缓存最旧根
+        interval_ms = _interval_ms(timeframe)
+        # 短页==尽头：REST 源恒成立（单次上限固定，短页=回溯到上市日）；终端源（MT5）
+        # 原生档不成立——短页多为补拉窗口内的周末/休市空洞（实证：黄金 M1 窗口跨周末
+        # 只返 748/1000 根被误判尽头，缓存永远停在本周开盘处），须继续向前翻页，
+        # 空页才判尽头；派生档（interval_ms=None）窗口语义由聚合层自管，仍按短页即尽头。
+        end_on_short = getattr(source, "history_end_on_short_page", True) or interval_ms is None
         need = limit - _count_le(e.bars, end_time)
         anchor = (int(e.bars[0]["timestamp"]) - 1) if e.bars else end_time
-        while need > 0 and not e.exhausted:
+        rounds = 0
+        while need > 0 and not _exhausted_active(source, e):
+            rounds += 1
+            if rounds > _FILL_MAX_ROUNDS:
+                break   # 护栏：不标尽头，下次请求可继续补拉
             take = min(max(need, 1000), 8000)
             try:
                 page = await _fetch_page(source, symbol, timeframe, take, anchor)
@@ -203,16 +235,20 @@ async def cached_klines(
                 break   # 保留已有数据退回；不标尽头，源恢复后下次请求可继续补拉
             if not page:
                 e.exhausted = True
+                e.exhausted_at = time.monotonic()
                 break
             _merge_front(e, page)
-            if len(page) < take:
+            e.exhausted = False   # 补拉有数据即解除旧尽头标记，按本页返回量重判
+            if len(page) < take and end_on_short:
                 e.exhausted = True
+                e.exhausted_at = time.monotonic()
                 break
+            # 终端源短页不中断：以本页最旧根为新锚点继续向前翻页
+            # （page[0] ≤ anchor ⇒ 锚点严格递减，无死循环；越过空洞后仍可拿到更早历史）
             anchor = int(page[0]["timestamp"]) - 1
             need = limit - _count_le(e.bars, end_time)
 
         #  内部中空洞自愈（仅日内原生档）：源掉线遗留的缺口尾刷/前补都修不了
-        interval_ms = _interval_ms(timeframe)
         if interval_ms and interval_ms < _DAY_MS and len(e.bars) >= 2:
             try:
                 await _repair_interior_gaps(

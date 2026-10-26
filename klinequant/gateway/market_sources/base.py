@@ -52,6 +52,10 @@ class MarketSource(ABC):
     watched_targets: list[tuple[str, str]] = []
     #: 到目标行情服务器的最近网络往返延迟 RTT(ms)（ping 式，源自行维护）；None=未知/不支持
     latency_ms: float | None = None
+    #: 短页（返回量<请求量）是否即源尽头。REST 源单次上限固定、短页=回溯到上市日（True）；
+    #: MT5 类本地终端源覆写为 False：短页多为终端历史尚未同步完，kline_cache 对其
+    #: 只置冷却期尽头标记，终端侧加深历史（手动下载/脚本预下载）后免重启进程即可续拉。
+    history_end_on_short_page: bool = True
 
     def _track_prec(self, symbol: str, values) -> None:
         """从订阅到的原始价格更新品种精度缓存（只增不减：新批次可能碰巧整数价）"""

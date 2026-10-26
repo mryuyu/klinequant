@@ -88,7 +88,8 @@ async def list_orders(
                 "total": len(orders),
             }
     except Exception as e:
-        logger.error(f"Failed to fetch orders: {e}")
+        logger.error(f"Failed to fetch orders: {type(e).__name__}: {e}")
+        await state.heal_http_client(e)
     return {"orders": [], "total": 0}
 
 
@@ -133,7 +134,9 @@ async def create_order(body: OrderCreate):
         )
         return {"error": data.get("msg", "Order failed"), "code": data.get("code")}
     except Exception as e:
-        logger.error(f"Failed to create order: {e}")
+        # 带异常类型：ConnectionResetError/ReadError 等的 str() 为空串，只打 {e} 日志冒号后全空白
+        logger.error(f"Failed to create order: {type(e).__name__}: {e}")
+        await state.heal_http_client(e)   # 传输层异常丢弃被污染的共享连接池
         return {"error": str(e)}
 
 
@@ -157,7 +160,8 @@ async def cancel_order(order_id: str, symbol: str = Query("BTCUSDT")):
             return {"order_id": order_id, "status": "CANCELED"}
         return {"error": data.get("msg", "Cancel failed")}
     except Exception as e:
-        logger.error(f"Failed to cancel order: {e}")
+        logger.error(f"Failed to cancel order: {type(e).__name__}: {e}")
+        await state.heal_http_client(e)
         return {"error": str(e)}
 
 
@@ -191,7 +195,8 @@ async def list_positions():
                     })
             return {"positions": positions}
     except Exception as e:
-        logger.error(f"Failed to fetch positions: {e}")
+        logger.error(f"Failed to fetch positions: {type(e).__name__}: {e}")
+        await state.heal_http_client(e)
     return {"positions": []}
 
 
@@ -227,7 +232,8 @@ async def list_fills(
                 "total": len(trades),
             }
     except Exception as e:
-        logger.error(f"Failed to fetch fills: {e}")
+        logger.error(f"Failed to fetch fills: {type(e).__name__}: {e}")
+        await state.heal_http_client(e)
     return {"fills": [], "total": 0}
 
 
@@ -264,7 +270,8 @@ async def get_account():
                 "assets": assets[:20],  # 前20个有余额的资产
             }
     except Exception as e:
-        logger.error(f"Failed to fetch account: {e}")
+        logger.error(f"Failed to fetch account: {type(e).__name__}: {e}")
+        await state.heal_http_client(e)
     return {
         "total_balance": 0,
         "available_balance": 0,

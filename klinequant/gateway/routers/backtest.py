@@ -79,10 +79,14 @@ def _build_strategy_fn(strategy_type: str, parameters: dict):
 async def _fetch_klines(symbol: str, timeframe: str, limit: int) -> pl.DataFrame:
     """从币安 REST API 获取历史 K 线"""
     client = state.get_http_client()
-    resp = await client.get(
-        f"{BINANCE_REST_BASE}/api/v3/klines",
-        params={"symbol": symbol, "interval": timeframe, "limit": limit},
-    )
+    try:
+        resp = await client.get(
+            f"{BINANCE_REST_BASE}/api/v3/klines",
+            params={"symbol": symbol, "interval": timeframe, "limit": limit},
+        )
+    except Exception as e:
+        await state.heal_http_client(e)   # 传输层异常丢弃被污染的共享连接池
+        raise
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Binance API error: {resp.status_code}")
 
