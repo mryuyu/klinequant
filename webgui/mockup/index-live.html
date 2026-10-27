@@ -241,6 +241,16 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 .price-tag { position:absolute; right:0; z-index:6; display:none; flex-direction:column; align-items:center; gap:1px; padding:3px 4px 4px; border-radius:2px; pointer-events:none; white-space:nowrap; font-family:var(--font-mono); box-sizing:border-box; background:#787b86; }
 .price-tag .pt-price { font-size:13px; color:#131722; line-height:1.15; }   /* 与 layout.fontSize（坐标栏字号）一致、不加粗（同坐标栏刻度观感） */
 .price-tag .pt-cd { font-size:11px; color:rgba(19,23,34,.8); line-height:1; }
+/* 时区选择器（右下角时间轴上的 TV 风格指示器 + 弹出菜单，菜单复用 .ctx-menu 样式） */
+.tz-btn { position:absolute; z-index:7; display:flex; align-items:center; height:18px; padding:0 5px; border:1px solid transparent; border-radius:3px; background:transparent; color:#787b86; font-family:var(--font-mono); font-size:11px; line-height:1; cursor:pointer; white-space:nowrap; }
+.tz-btn:hover, .tz-btn.open { color:#d1d4dc; border-color:var(--border-light); background:var(--bg-elevated); }
+.tz-menu { min-width:184px; }
+.tz-menu .tz-opt { cursor:pointer; }
+.tz-menu .tz-name { display:flex; align-items:center; gap:6px; }
+.tz-menu .tz-ck { display:inline-block; width:12px; color:var(--accent); font-style:normal; visibility:hidden; }
+.tz-menu .tz-opt.active .tz-ck { visibility:visible; }
+.tz-menu .tz-opt.active .tz-name { color:#fff; }
+.tz-menu .tz-off { color:var(--text-sub); font-family:var(--font-mono); font-size:12px; }
 .time-tag { position:absolute; z-index:6; display:none; padding:4px 6px; border-radius:2px; pointer-events:none; white-space:nowrap; font-family:'Trebuchet MS', Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif; font-size:13px; line-height:1.2; background:#2a2e39; color:#ffffff; transform:translate(-50%,-50%); box-sizing:border-box; }   /* 空白区十字光标时间标签：与有数据区 lwc 十字线时间标签完全一致（背景=labelBackgroundColor #2a2e39、白字、layout.fontSize 13、格式=timeFormatter 中式） */
 
 /* 底部持仓（高度可拖拽 + 可折叠隐藏） */
@@ -433,6 +443,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
       <button class="tf-btn" data-tf="1m">1分</button>
       <button class="tf-btn" data-tf="5m">5分</button>
       <button class="tf-btn active" data-tf="15m">15分</button>
+      <button class="tf-btn" data-tf="30m">30分</button>
       <button class="tf-btn" data-tf="1h">1时</button>
       <button class="tf-btn" data-tf="4h">4时</button>
       <button class="tf-btn" data-tf="1d">日线</button>
@@ -440,7 +451,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
       <button class="tf-btn" data-tf="1M">月线</button>
       <button class="tf-btn" data-tf="1Q">季线</button>
       <button class="tf-btn" data-tf="1Y">年线</button>
-      <button class="tf-btn" id="tf-custom-btn" title="自定义周期：数字+单位（d/w/M）">自定</button>
+      <button class="tf-btn" id="tf-custom-btn" title="自定义周期：数字+单位（m/h/d/w/M）">自定</button>
       <div class="toolbar-sep"></div>
       <button class="tool-btn" id="ind-btn" title="添加指标"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>指标</button>
     </div>
@@ -504,7 +515,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 
       <!-- 自定义周期输入弹层（点击「自定」开关） -->
       <div id="tf-custom-pop" class="tf-custom-pop" style="display:none">
-        <input id="tf-custom-input" type="text" maxlength="4" placeholder="如 2d / 3w / 2M">
+        <input id="tf-custom-input" type="text" maxlength="4" placeholder="如 10m / 3h / 2d">
         <button id="tf-custom-ok">确定</button>
         <div id="tf-custom-hint" class="tf-custom-hint"></div>
       </div>
@@ -522,6 +533,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
         <div id="ind-legends"></div>
         <div class="price-tag" id="price-tag"><span class="pt-price"></span><span class="pt-cd"></span></div>
         <div class="time-tag" id="time-tag"></div>
+        <button class="tz-btn" id="tz-btn" title="时区：北京时间 UTC+8（点击切换）">UTC+8</button>
         <div id="chart"></div>
         <!-- 清空画线确认卡片（图表内：工具栏清空按钮触发，替代浏览器弹窗） -->
         <div class="draw-confirm" id="draw-confirm">
@@ -684,6 +696,12 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
   <div class="ctx-row"><span>价格线颜色</span><span class="ctx-field"><em>涨跌色</em><span id="ctx-pl-auto" class="kq-sw on" role="switch" aria-checked="true" title="随涨跌自动着色"><span class="kq-sw-track"></span><span class="kq-sw-text">打开</span></span><input id="ctx-plc" class="ctx-color" type="color" title="最新价格线颜色"></span></div>
 </div>
 
+<!-- 时区选择菜单（右下角 tz-btn 触发：北京时间 / 交易所时间；复用 .ctx-menu 样式） -->
+<div class="ctx-menu tz-menu" id="tz-menu">
+  <div class="ctx-row tz-opt" data-tz="bj"><span class="tz-name"><i class="tz-ck">✓</i>北京时间</span><span class="tz-off">UTC+8</span></div>
+  <div class="ctx-row tz-opt" data-tz="exch"><span class="tz-name"><i class="tz-ck">✓</i>交易所时间</span><span class="tz-off" id="tz-exch-off">UTC+0</span></div>
+</div>
+
 <!-- 画线右键菜单（命中画线时弹出：编辑样式/复制/置顶/锁定/删除；复用 .ctx-menu 样式） -->
 <div class="ctx-menu" id="draw-ctx-menu">
   <div class="ctx-row ctx-action" id="draw-ctx-style"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h9M19 8h1M4 16h3M13 16h7"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/></svg><span>编辑样式</span></div>
@@ -721,6 +739,14 @@ let curSymbol = 'BTCUSDT';
 let curTf = '15m';
 let curExchange = 'binance';    // 当前市场源（binance/ig，后端插件注册表驱动）
 const sourcesMeta = {};         // exchange -> 插件元数据（label/周期支持/默认品种/成交量）
+/* ═══ 时区显示：北京时间(UTC+8) / 交易所时间(源本地时区，后端 tz_offset_s 下发) ═══
+   bar timestamp 恒为真实 UTC，渲染时加显式偏移 tzShiftS 并用 UTC getters，与浏览器本地时区解耦 */
+let tzMode = 'bj';                       // 'bj'=北京时间(UTC+8) / 'exch'=交易所时间
+let exchTzS = 0;                         // 当前源交易所偏移秒（来自 /klines 或 sources 的 tz_offset_s）
+let tzShiftS = 8 * 3600;                 // 渲染实际应用的偏移秒（fmtTimeCn/tickMarkFormatter 读它）
+try { const _m = localStorage.getItem('kq-tz-mode'); if (_m === 'bj' || _m === 'exch') tzMode = _m; } catch (e) {}
+function refreshTzShift() { tzShiftS = (tzMode === 'exch') ? exchTzS : 8 * 3600; }
+refreshTzShift();
 let firstScreenBars = 1000;     // 首屏 K 线数量（右键菜单可调，默认 1000，localStorage 持久化）
 const PRELOAD_PAGE_SIZE = 5000; // 左滑按需加载页大小（后端已支持大页；源插件内部分页）
 let curRightOffset = 20;        // 图表右侧预留空 K 线数：可调，默认 20
@@ -774,9 +800,9 @@ const histColor = (v, prev, colors) => {
 
 /* ═══ 布局持久化（localStorage：面板尺寸/折叠/K线数/右侧留白/周期/品种） ═══ */
 const LS_KEY = 'kq-layout-live';
-const TF_VALID = ['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M', '1Q', '1Y'];
-/* 自定义周期：倍率 2~99 + 单位 d/w/M（分钟/小时级原生档已覆盖；前端只做格式初筛，最终合法性以后端响应为准） */
-const TF_CUSTOM_RE = /^(\d{1,2})(d|w|M)$/;
+const TF_VALID = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1M', '1Q', '1Y'];
+/* 自定义周期：倍率 2~99 + 单位 m/h/d/w/M（分钟/小时级由网关从 1m 重采样，日级以上从日 K 聚合；前端只做格式初筛，最终合法性以后端响应为准） */
+const TF_CUSTOM_RE = /^(\d{1,2})([mhdwM])$/;
 function tfValid(tf) {
   if (TF_VALID.includes(tf)) return true;
   const m = TF_CUSTOM_RE.exec(tf || '');
@@ -784,13 +810,21 @@ function tfValid(tf) {
 }
 /* 周期时长（分钟）：切所回退选“最接近当前档”用（派生档 1M/1Q/1Y 取近似值即可） */
 const TF_DURATION = { '1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '6h': 360, '12h': 720, '1d': 1440, '3d': 4320, '1w': 10080, '1M': 43200, '1Q': 129600, '1Y': 525600 };
-/* 自定义派生倍率（2d/3w/2M…）：网关从日 K 聚合，全源可用（与后端 derived 层契约一致） */
+/* 自定义派生倍率（2m/3h/2d/3w/2M…）：网关从基础周期聚合，全源可用（与后端 derived 层契约一致） */
 function tfDerivedCustom(tf) { const m = TF_CUSTOM_RE.exec(tf || ''); return !!m && +m[1] >= 2; }
-/* 当前源是否供给该周期：以后端 meta.timeframes 为唯一真值（原生档+固定派生档），自定义倍率恒可用。
-   注意固定档不再无条件放行——A 股等源无 4h 原生供给且派生层仅聚合日级以上，请求必空（2026-09-22 实证） */
+/* 派生聚合基础档：日内倍率（m/h）← 1m 重采样，日级及以上 ← 日 K；源缺原生供给的固定日内档（如 ths 4h）后端同样由 1m 重采样兜底 */
+const TF_DERIVED_BASE = { m: '1m', h: '1m', d: '1d', w: '1d', M: '1d' };
+function tfDerivedBase(tf) {
+  if (tfDerivedCustom(tf)) return TF_DERIVED_BASE[TF_CUSTOM_RE.exec(tf)[2]];
+  return /^[2-9]\d*h$/.test(tf || '') ? '1m' : null;
+}
+/* 当前源是否供给该周期：以后端 meta.timeframes 为唯一真值（原生档+固定派生档）；
+   自定义倍率与可重采样兜底的固定日内档（2h~99h，源需供 1m）恒可用 */
 function tfAvailable(tf, meta) {
   if (tfDerivedCustom(tf)) return true;
-  return !meta || !meta.timeframes || !meta.timeframes.length || meta.timeframes.includes(tf);
+  const tfs = (meta && meta.timeframes) || [];
+  if (tfDerivedBase(tf) && (!tfs.length || tfs.includes(tfDerivedBase(tf)))) return true;
+  return !tfs.length || tfs.includes(tf);
 }
 /* 回退周期：优先取不大于当前档的最大周期（如 ths 无 4h → 1h），都更大时取最小档 */
 function fallbackTf(tf, meta) {
@@ -1216,12 +1250,12 @@ function applyIndPatches(inst, patches) {
    十字线标签用完整格式，X 轴刻度用紧凑格式（轴空间有限） */
 const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 const TF_DATE_ONLY = new Set(['1d', '3d', '1w', '1M', '1Q', '1Y']);   // 日线及以上：不显示时间（含派生四档）
-const tfIsDateOnly = tf => TF_DATE_ONLY.has(tf) || TF_CUSTOM_RE.test(tf || '');   // 自定义倍率（2d/3w/2M…）同样只显示日期
+const tfIsDateOnly = tf => { const m = /^(\d{1,2})([dwM])$/.exec(tf || ''); return TF_DATE_ONLY.has(tf) || (!!m && +m[1] >= 2); };   // 自定义日级及以上倍率（2d/3w/2M…）只显示日期；日内倍率（10m/3h）仍显示时间
 const fmtTimeCn = (ts, dateOnly) => {
-  const d = new Date(ts * 1000);
+  const d = new Date((ts + tzShiftS) * 1000);   // 真实 UTC + 显示偏移，用 UTC getters 渲染（不依赖浏览器时区）
   const p2 = n => String(n).padStart(2, '0');
-  const date = `${WD[d.getDay()]} ${d.getFullYear()}/${p2(d.getMonth() + 1)}/${p2(d.getDate())}`;
-  return dateOnly ? date : `${date} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  const date = `${WD[d.getUTCDay()]} ${d.getUTCFullYear()}/${p2(d.getUTCMonth() + 1)}/${p2(d.getUTCDate())}`;
+  return dateOnly ? date : `${date} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
 };
 const container = document.getElementById('chart');
 const chart = createChart(container, {
@@ -1248,13 +1282,13 @@ const chart = createChart(container, {
     borderColor: '#2a2e39', timeVisible: true, secondsVisible: false, rightOffset: curRightOffset,
     /* X 轴刻度中式紧凑格式：年/月、月/日、24 小时时间（不占轴宽的短标签） */
     tickMarkFormatter: (time, tickMarkType) => {
-      const d = new Date(time * 1000);
+      const d = new Date((time + tzShiftS) * 1000);   // 同时区偏移口径（与 fmtTimeCn 一致）
       const p2 = n => String(n).padStart(2, '0');
       switch (tickMarkType) {
-        case 0: return `${d.getFullYear()}年`;                 // 年
-        case 1: return `${d.getFullYear()}/${p2(d.getMonth() + 1)}`;   // 月
-        case 2: return `${p2(d.getMonth() + 1)}/${p2(d.getDate())}`;   // 日
-        default: return `${p2(d.getHours())}:${p2(d.getMinutes())}`;   // 时间（24 小时制）
+        case 0: return `${d.getUTCFullYear()}年`;                 // 年
+        case 1: return `${d.getUTCFullYear()}/${p2(d.getUTCMonth() + 1)}`;   // 月
+        case 2: return `${p2(d.getUTCMonth() + 1)}/${p2(d.getUTCDate())}`;   // 日
+        default: return `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;   // 时间（24 小时制）
       }
     },
   },
@@ -1289,6 +1323,55 @@ function applyVolVisibility() {
   ctxVol.classList.toggle('dis', !sourceSupportsVolume());   // 开关禁用态（该市场无成交量）
   ctxVol.title = sourceSupportsVolume() ? '' : '该市场无成交量';
 }
+/* ═══ 时区选择器（右下角时间轴上的 TV 风格按钮 + 弹出菜单）═══
+   北京时间 = 真实 UTC + 8h（固定）；交易所时间 = 真实 UTC + 源本地偏移（后端 tz_offset_s 下发，
+   MT5 随夏令时动态）。切换只改显示偏移 tzShiftS 后重绘，不动 bar 数据（timestamp 恒为真实 UTC）。 */
+const tzBtn = document.getElementById('tz-btn');
+const tzMenu = document.getElementById('tz-menu');
+function fmtUtcOff(sec) { const h = Math.round((sec || 0) / 3600); return 'UTC' + (h >= 0 ? '+' : '-') + Math.abs(h); }
+function updateTzBtn() {
+  const off = (tzMode === 'exch') ? exchTzS : 8 * 3600;
+  const label = fmtUtcOff(off);
+  if (tzBtn.textContent !== label) tzBtn.textContent = label;
+  tzBtn.title = (tzMode === 'exch' ? '交易所时间 ' : '北京时间 ') + label + '（点击切换）';
+  const eo = document.getElementById('tz-exch-off');
+  if (eo) eo.textContent = fmtUtcOff(exchTzS);
+  tzMenu.querySelectorAll('.tz-opt').forEach(o => o.classList.toggle('active', o.dataset.tz === tzMode));
+}
+/* 定位：紧贴右侧价格刻度区左缘、垂直居中于底部时间轴（随轴宽/时间轴高动态，由 layoutPaneLegends 周期调用） */
+function positionTzBtn() {
+  const w = (chart.priceScale('right').width() || 60);
+  const tsH = (chart.timeScale().height && chart.timeScale().height()) || 26;
+  const right = Math.round(w + 6), bottom = Math.max(2, Math.round((tsH - 18) / 2));
+  if (tzBtn.__r !== right) { tzBtn.__r = right; tzBtn.style.right = right + 'px'; }
+  if (tzBtn.__b !== bottom) { tzBtn.__b = bottom; tzBtn.style.bottom = bottom + 'px'; }
+}
+function openTzMenu() {
+  updateTzBtn();
+  tzMenu.classList.add('show'); tzBtn.classList.add('open');
+  const r = tzBtn.getBoundingClientRect();
+  const mw = tzMenu.offsetWidth, mh = tzMenu.offsetHeight;
+  tzMenu.style.left = Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8)) + 'px';
+  tzMenu.style.top = Math.max(8, r.top - mh - 6) + 'px';   // 向上弹出（按钮在底部时间轴）
+}
+function closeTzMenu() { tzMenu.classList.remove('show'); tzBtn.classList.remove('open'); }
+function setTzMode(mode) {
+  if (mode !== 'bj' && mode !== 'exch') return;
+  tzMode = mode; refreshTzShift();
+  try { localStorage.setItem('kq-tz-mode', mode); } catch (e) {}
+  updateTzBtn(); closeTzMenu();
+  const vr = chart.timeScale().getVisibleLogicalRange();   // 保持缩放/滚动位置不因切时区跳变
+  renderChart();      // 重设数据触发时间轴按新偏移重绘（tickMarkFormatter 重新求值）
+  if (vr) chart.timeScale().setVisibleLogicalRange(vr);
+  updateTimeTag();    // 十字线时间标签即时刷新（若可见）
+}
+tzBtn.addEventListener('click', e => { e.stopPropagation(); tzMenu.classList.contains('show') ? closeTzMenu() : openTzMenu(); });
+tzMenu.querySelectorAll('.tz-opt').forEach(o => o.addEventListener('click', () => setTzMode(o.dataset.tz)));
+document.addEventListener('click', e => {
+  if (tzMenu.classList.contains('show') && !tzMenu.contains(e.target) && !e.target.closest('#tz-btn')) closeTzMenu();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTzMenu(); });
+updateTzBtn(); positionTzBtn();
 applyVolVisibility();
 
 /* ═══ 指标实例动态管理（indLayout 驱动：series/图例/窗格随增删重建） ═══ */
@@ -2168,6 +2251,7 @@ function layoutPaneLegends() {
     }
     if (el.__lastTop !== top) { el.__lastTop = top; el.style.top = top + 'px'; }   // 只在变化时写入，避免频繁样式重算
   }
+  positionTzBtn();   // 右下角时区按钮随价格轴宽/时间轴高重定位
   syncPaneBtns();
 }
 /* 注：立即执行与定时器注册置于本区块末尾（依赖下方 maxPane/paneBtnCache 声明，提前执行会命中暂时性死区） */
@@ -2562,6 +2646,10 @@ async function fetchPage(need, endTime) {
      无超时的 fetch 会让“拉取 K 线”状态永久停留；超时后走 catch 展示失败可重试 */
   const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
   const json = await resp.json();
+  /* 交易所时区偏移随后端每次下发（MT5 探测后自校）；变化时刷新显示偏移，load 后续 renderChart 自然重绘 */
+  if (typeof json.tz_offset_s === 'number' && json.tz_offset_s !== exchTzS) {
+    exchTzS = json.tz_offset_s; refreshTzShift(); updateTzBtn();
+  }
   return {
     bars: (json.data || []).map(k => ({
       time: Math.floor(k.timestamp / 1000),
@@ -2855,7 +2943,7 @@ document.getElementById('tf-custom-btn').addEventListener('click', () => {
 function applyCustomTf() {
   const tf = tfCustomInput.value.trim();
   if (!tfValid(tf)) {
-    tfCustomHint.textContent = '格式：数字+单位（d/w/M），倍率 2~99，如 2d、3w、2M';
+    tfCustomHint.textContent = '格式：数字+单位（m/h/d/w/M），倍率 2~99，如 10m、3h、2d';
     return;
   }
   tfCustomPop.style.display = 'none';
@@ -4017,6 +4105,8 @@ async function switchExchange(ex, opts = {}) {
     if (!meta) { setSb(`✕ 市场源 ${ex} 未就绪（外汇需本机 MT5 终端已登录运行），请稍后重试`); return; }
   }
   curExchange = ex;
+  exchTzS = (meta && typeof meta.tz_offset_s === 'number') ? meta.tz_offset_s : 0;   // 交易所时间偏移：切所即更新（klines 到达后再校准）
+  refreshTzShift(); updateTzBtn();
   /* 品种列表为全局收藏夹：切所不换组，仅重渲染高亮行 */
   const belongs = symGroups.some(g => g.symbols.some(s => s.sym && s.sym === curSymbol && (!s.ex || s.ex === ex)));
   if (opts.symbol) {

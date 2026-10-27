@@ -66,6 +66,7 @@ def test_meta_contract():
     assert meta["default_symbols"][0]["symbol"] == "FXUSD"
     assert _FakeSource("otc").meta()["supports_volume"] is False   # OTC 所声明无成交量
     assert meta["region"] == "global"                          # 区域缺省国外（国内源自行覆盖为 cn）
+    assert meta["tz_offset_s"] == 0                            # 交易所时区偏移缺省 0
 
 
 # ─── 全量品种目录：插件默认实现 + manager TTL 缓存 ───
@@ -153,6 +154,7 @@ def test_klines_response_delivers_price_precision():
         data = resp.json()
         assert resp.status_code == 200
         assert data["price_precision"] == 2
+        assert data["tz_offset_s"] == 0   # 交易所时区偏移随 klines 下发（桩源缺省 0）
     finally:
         market_manager._sources.pop("mockex", None)
 
@@ -173,6 +175,31 @@ def test_active_targets_topic_routing():
     finally:
         ws_manager.disconnect("ws-t1")
         ws_manager.disconnect("ws-t2")
+
+
+def test_active_targets_per_source_derived_routing():
+    """同一 4h 订阅按源分流：原生直供源走 4h，缺供源（如 ths）映射为基础 1m 隐式订阅。
+    日内自定义倍率（10m）同理映射 1m；日级派生（2d）映射 1d。防回归：
+    不得因 4h 属全局 VALID_TIMEFRAMES 而错当原生流下发给不支持它的源。"""
+    mgr = MarketSourceManager()
+    rich = _FakeSource("rich")                       # 原生支持 4h
+    rich.supported_timeframes = {"1m", "1h", "4h", "1d"}
+    thin = _FakeSource("thin")                       # 仅 1m/1h/1d（无 4h，似 ths）
+    thin.supported_timeframes = {"1m", "1h", "1d"}
+    mgr.register(rich)
+    mgr.register(thin)
+
+    ws_manager.subscribe("ws-r", "klines.rich.BTCUSDT.4h")
+    ws_manager.subscribe("ws-t", "klines.thin.600000.4h")
+    ws_manager.subscribe("ws-m", "klines.thin.600000.10m")
+    ws_manager.subscribe("ws-d", "klines.thin.600000.2d")
+    try:
+        assert mgr._active_targets("rich") == {("BTCUSDT", "4h")}          # 原生直供
+        # thin 无 4h/10m → 均映射 1m；2d → 1d
+        assert mgr._active_targets("thin") == {("600000", "1m"), ("600000", "1d")}
+    finally:
+        for cid in ("ws-r", "ws-t", "ws-m", "ws-d"):
+            ws_manager.disconnect(cid)
 
 
 def test_active_targets_watched_fallback():
@@ -235,3 +262,84 @@ async def test_publish_bar_dedup_and_exchange_field(monkeypatch):
     topics = [t for t, _ in sent]
     assert "klines.EURUSD.1m" in topics and "klines.EURUSD" in topics   # 新旧主题都广播
     assert all(d["exchange"] in ("fx", "binance") for _, d in sent)     # payload 带 exchange 维度
+
+
+async def test_feed_derived_intraday_from_1m(monkeypatch):
+    """实时链路：1m 基础流喂入 → 合成订阅的 10m 派生 bar（日内重采样）。
+
+    验证桶内 OHLC 合并/量求和与桶翻滚：首根开桶、末根满后下一根开新桶。
+    """
+    mgr = MarketSourceManager()
+    src = _FakeSource("thin")
+    src.supported_timeframes = {"1m", "1h", "1d"}   # 无 10m，需由 1m 派生
+
+    async def _no_hist(*a, **k):   # seed 预填无历史（桶首根开始喂，无需预填）
+        return []
+    src.fetch_klines = _no_hist
+    mgr.register(src)
+
+    sent = []
+
+    async def fake_publish(topic, data):
+        sent.append((topic, data))
+        return 1
+    monkeypatch.setattr(ws_manager, "publish", fake_publish)
+
+    ws_manager.subscribe("ws-d", "klines.thin.AAPL.10m")
+    try:
+        t0 = 1_800_000_000_000   # 10m 对齐的 epoch 毫秒
+        feed = [
+            (t0, 100, 110, 90, 105, 10),
+            (t0 + 60_000, 105, 120, 100, 115, 20),
+            (t0 + 120_000, 115, 130, 95, 125, 30),
+            (t0 + 600_000, 125, 128, 120, 127, 5),   # 下一桶首根
+        ]
+        for ts, o, h, lo, c, v in feed:
+            await mgr.publish_bar("thin", "AAPL", "1m", {
+                "timestamp": ts, "open": o, "high": h, "low": lo, "close": c,
+                "volume": v, "event_ms": ts,
+            })
+    finally:
+        ws_manager.disconnect("ws-d")
+
+    derived = [d for t, d in sent if t == "klines.thin.AAPL.10m"]
+    assert derived, "未发布派生 10m bar"
+    # 首桶（t0）最终聚合：开 100 / 高 130 / 低 90 / 收 125 / 量 60
+    bucket0 = [b for b in derived if b["timestamp"] == t0][-1]
+    assert (bucket0["open"], bucket0["high"], bucket0["low"], bucket0["close"]) == (
+        100, 130, 90, 125,
+    )
+    assert bucket0["volume"] == 60
+    # 次桶（t0+600000）由末根开启：开 125 / 量 5
+    bucket1 = [b for b in derived if b["timestamp"] == t0 + 600_000][-1]
+    assert bucket1["open"] == 125 and bucket1["volume"] == 5
+
+
+async def test_feed_derived_skips_native_hour(monkeypatch):
+    """防双口径：源原生直供的 4h 订阅不得从 1m 流重复聚合（实时 bar 由源流直接发布）"""
+    mgr = MarketSourceManager()
+    src = _FakeSource("rich")
+    src.supported_timeframes = {"1m", "4h", "1d"}   # 4h 原生
+
+    async def _no_hist(*a, **k):
+        return []
+    src.fetch_klines = _no_hist
+    mgr.register(src)
+    sent = []
+
+    async def fake_publish(topic, data):
+        sent.append((topic, data))
+        return 1
+    monkeypatch.setattr(ws_manager, "publish", fake_publish)
+
+    ws_manager.subscribe("ws-h", "klines.rich.BTCUSDT.4h")
+    try:
+        t0 = 1_800_000_000_000
+        await mgr.publish_bar("rich", "BTCUSDT", "1m", {
+            "timestamp": t0, "open": 1, "high": 2, "low": 0.5, "close": 1.5,
+            "volume": 7, "event_ms": t0,
+        })
+    finally:
+        ws_manager.disconnect("ws-h")
+    # 4h 为 rich 原生档：1m 喂入不应产生 klines.rich.BTCUSDT.4h 的派生聚合
+    assert not [d for t, d in sent if t == "klines.rich.BTCUSDT.4h"]

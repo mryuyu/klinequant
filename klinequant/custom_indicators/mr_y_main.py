@@ -38,15 +38,15 @@ from klinequant.core.indicator_engine.graph import ema, pyindicator, rolling_std
         {"color": "#67697e", "step": True},   # LOWER_2 basis-2.7σ 阶梯线
     ],
 )
-def mr_y_main(close, n=1, x0=3, main=12, stop_4x=24, stop_16x=113,
+def mr_y_main(close,n=1,x_1=3, x_4=12, stop_4x=24, stop_16x=113,
               bet_16x=48, bet_64x=192, bet_256x=764,
-              bb_length=280, mult_1=1.7, mult_2=2.7):
+              bb_length=261, mult_1=1.77, mult_2=2.77):
     out = {}
     # 1x / 4x 均线组
-    out["M_1X"] = sma(close, x0)
-    out["E_1X"] = ema(close, x0)
-    out["M_4X"] = sma(close, main)
-    out["E_4X"] = ema(close, main)
+    out["M_1X"] = sma(close, x_1)
+    out["E_1X"] = ema(close, x_1)
+    out["M_4X"] = sma(close, x_4)
+    out["E_4X"] = ema(close, x_4)
     # 止损线（ema 24）与 113 组（Pine 原版标题误重复为 M_16x/E_16x）
     out["STOP_LINE"] = ema(close, stop_4x)
     out["M_STOP"] = sma(close, stop_16x)

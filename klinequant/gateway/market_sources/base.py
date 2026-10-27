@@ -46,6 +46,9 @@ class MarketSource(ABC):
     supports_volume: bool = True
     #: 市场区域（global=国外 / cn=国内，前端品种搜索弹窗国内/国外分段用）
     region: str = "global"
+    #: 交易所本地时区相对真实 UTC 的偏移秒（前端「交易所时间」显示用；bar timestamp 恒为真实 UTC）。
+    #: 缺省 0（加密源按 UTC 报时）；国内源（ths）覆写 +8h；MT5 外汇覆写为动态探测的服务器偏移。
+    exchange_utc_offset_s: int = 0
     #: 默认品种列表 [{symbol, name}]（前端品种列表初始化）
     default_symbols: list[dict[str, str]] = []
     #: 无订阅者时的默认监控集 [(symbol, timeframe)]，保持旧行为
@@ -68,6 +71,13 @@ class MarketSource(ABC):
     def price_precision(self, symbol: str) -> int:
         """品种价格显示精度（已订阅数据推导；未知时 0，前端自行保底）"""
         return getattr(self, "_price_prec", {}).get(symbol.upper(), 0)
+
+    def exchange_tz_offset_s(self) -> int:
+        """交易所本地时区相对真实 UTC 的偏移秒（前端「交易所时间」= 真实 UTC + 本值）。
+
+        缺省返回类属性 exchange_utc_offset_s；MT5 外汇覆写为运行时探测的服务器偏移
+        （随夏令时 UTC+2/+3 变化，故不能用固定类属性）。"""
+        return self.exchange_utc_offset_s
 
     @abstractmethod
     async def fetch_klines(
@@ -118,10 +128,10 @@ class MarketSource(ABC):
         """插件元数据（/api/market/sources 下发给前端）
 
         周期可用性：timeframes = 源原生支持档 ∪ {1w} ∪ 固定派生档（1M/1Q/1Y）。
-        自定义倍率（Nd/Nw/NM）由网关从日 K 聚合、全源可用，不在此列。
-        前端以此为唯一真值逐档启用/禁用周期按钮——源不供给的档（如 ths 无
-        2h/4h/6h/12h 等日内档，派生层只聚合日级以上、不重采样日内）须禁用并
-        在切所/恢复时回退到最接近的支持档，否则请求必空（前端“未返回 K 线数据”）。
+        自定义倍率（Nm/Nh/Nd/Nw/NM）由网关从基础周期（1m/1d）聚合、全源可用，
+        不在此列；源缺失的固定档（如 ths 无 4h）亦由派生层从 1m 重采样供给。
+        前端以此为唯一真值逐档启用/禁用周期按钮——源不供给且格式不可派生的档
+        须禁用并在切所/恢复时回退到最接近的支持档，否则请求必空（前端“未返回 K 线数据”）。
         """
         tfs = set(self.supported_timeframes) | {"1w"} | set(DERIVED_FIXED)
         return {
@@ -129,6 +139,7 @@ class MarketSource(ABC):
             "label": self.label,
             "region": self.region,
             "supports_volume": self.supports_volume,
+            "tz_offset_s": self.exchange_tz_offset_s(),
             "timeframes": sorted(tfs),
             "default_symbols": self.default_symbols,
         }

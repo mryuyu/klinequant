@@ -93,6 +93,7 @@ def test_display_code():
 def test_source_meta_region():
     src = ThsSource(driver=_FakeThsDriver())
     assert src.meta()["region"] == "cn"                        # 国内源驱动前端「国内」分段
+    assert src.meta()["tz_offset_s"] == 8 * 3600               # A 股交易所时间 = 北京 UTC+8
 
 
 def test_normalize_code():

@@ -359,6 +359,8 @@ class ThsSource(MarketSource):
     name = "ths"
     label = "同花顺 A股"
     region = "cn"
+    # 交易所时间 = 北京 UTC+8（A 股无夏令时；bar ts 已归一真实 UTC）
+    exchange_utc_offset_s = 8 * 3600
     supported_timeframes = set(INTERVAL_MAP.keys())
     supports_volume = True
     # 沪指数代码不可直拼（上证指数=USHI1A0001，经 index_list 名称映射实测确认）

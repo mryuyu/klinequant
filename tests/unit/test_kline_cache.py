@@ -238,14 +238,25 @@ def test_legit_gap_empty_source_not_refetched_within_cooldown(monkeypatch):
 
 
 def test_interval_ms_and_derived_gate():
-    """周期跨度解析：派生档返回 None（不做补洞）；日/周线 >= _DAY_MS 亦不触发补洞"""
+    """周期跨度解析：实际走派生聚合的档返回 None（不做补洞）；日/周线 >= _DAY_MS 亦不触发补洞；
+    格式可解析但源原生直供的档（如币安 4h）按原生跨度参与补洞/尽头判定"""
     assert kc._interval_ms("1m") == 60_000
     assert kc._interval_ms("5m") == 300_000
     assert kc._interval_ms("1h") == 3_600_000
-    assert kc._interval_ms("4h") == 14_400_000
     assert kc._interval_ms("1d") == 86_400_000            # 解析成功但 >= _DAY_MS，不补洞
     assert kc._interval_ms("1w") == 604_800_000
     assert kc._interval_ms("2d") is None                  # 自定义倍率派生档
+    assert kc._interval_ms("10m") is None                 # 分钟级自定义倍率（1m 重采样）
+    assert kc._interval_ms("3h") is None                  # 小时级自定义倍率
     assert kc._interval_ms("1M") is None                  # 月线派生档
     assert kc._interval_ms("1Q") is None
     assert kc._interval_ms("1Y") is None
+
+    # 按源判定：同是 4h，原生直供源按跨度解析，缺供源（如 ths）走派生返 None
+    class _Src:
+        def __init__(self, tfs):
+            self.supported_timeframes = tfs
+    binance_like = _Src({"1m", "1h", "2h", "4h", "1d"})
+    ths_like = _Src({"1m", "5m", "1h", "1d"})
+    assert kc._interval_ms("4h", binance_like) == 14_400_000
+    assert kc._interval_ms("4h", ths_like) is None

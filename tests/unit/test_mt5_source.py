@@ -269,3 +269,69 @@ async def test_list_symbols_fallback_to_defaults():
         {"symbol": "GBPUSD", "name": "GBP/USD", "type": "forex", "code": "GBPUSD"},
     ]
 
+
+# ─── 服务器时区偏移校正（外汇 MT5 服务器 UTC+2/+3，_to_bar 归一到真实 UTC）───
+
+
+async def test_server_offset_probed_and_corrects_timestamp():
+    """交易时段新鲜 tick → 探测服务器时区偏移，K 线时间戳归一到真实 UTC。
+    防回归：MT5 服务器 UTC+3 时 row.time 比真实 UTC 快 3h，未校正致前端快 3h。"""
+    import time as _t
+    offset_s = 3 * 3600                              # 服务器 UTC+3（夏令时）
+    now = int(_t.time())
+    server_ts = now + offset_s                       # 最新 bar/tick 的服务器时间戳（伪装 UTC）
+    rows = [_row(server_ts - (4 - i) * 60, 1.15) for i in range(5)]
+    tick = {"bid": 1.15, "ask": 1.16, "time": server_ts}   # 新鲜 tick（≈当前时刻）
+    src = Mt5Source(driver=_FakeMt5(rows=rows, tick=tick))
+    bars = await src.fetch_klines("EURUSD", "1m", limit=5)
+    assert src._server_offset_s == offset_s          # 探测到 +3h
+    assert src.exchange_tz_offset_s() == offset_s    # 交易所时间偏移 = 探测值（前端下发）
+    # 校正后 timestamp = server_ts*1000 - offset = 真实 UTC（不再快 3h）
+    assert bars[-1]["timestamp"] == now * 1000
+
+
+async def test_server_offset_rejects_stale_tick():
+    """休市陈旧 tick（周末停在周五收盘）：delta 为大负数落在合理窗外 → 拒绝采纳，
+    offset 保持 None（不校正），避免用陈旧 tick 算出错误偏移污染时间轴。"""
+    import time as _t
+    stale_ts = int(_t.time()) - 48 * 3600            # 2 天前的 tick
+    rows = [_row(stale_ts - (4 - i) * 60, 1.15) for i in range(5)]
+    tick = {"bid": 1.15, "ask": 1.16, "time": stale_ts}
+    src = Mt5Source(driver=_FakeMt5(rows=rows, tick=tick))
+    bars = await src.fetch_klines("EURUSD", "1m", limit=5)
+    assert src._server_offset_s is None              # 陈旧被拒
+    assert bars[-1]["timestamp"] == stale_ts * 1000  # offset=0 保持原始
+
+
+def test_configured_offset_fallback(monkeypatch):
+    """休市冷启动探测不到时，MT5_SERVER_UTC_OFFSET_H 提供偏移兜底"""
+    monkeypatch.setenv("MT5_SERVER_UTC_OFFSET_H", "3")
+    src = Mt5Source(driver=_FakeMt5())               # tick=None，无法探测
+    assert src._server_offset_s == 3 * 3600
+    assert src._offset_ms() == 3 * 3600 * 1000
+    assert src.exchange_tz_offset_s() == 3 * 3600    # env 兜底亦供交易所时间显示
+
+
+def test_configured_offset_invalid_ignored(monkeypatch):
+    """非法 env 值忽略（不崩溃），退回未探测态"""
+    monkeypatch.setenv("MT5_SERVER_UTC_OFFSET_H", "abc")
+    src = Mt5Source(driver=_FakeMt5())
+    assert src._server_offset_s is None
+
+
+async def test_paging_dt_to_restores_server_time(monkeypatch):
+    """翻页 end_time 是校正后真实 UTC，range 查询须加回偏移还原服务器墙钟时间"""
+    import time as _t
+    monkeypatch.setenv("MT5_SERVER_UTC_OFFSET_H", "3")
+    offset_s = 3 * 3600
+    server_ts = int(_t.time()) + offset_s
+    rows = [_row(server_ts - (9 - i) * 60, 1.15) for i in range(10)]
+    drv = _FakeMt5(rows=rows, tick=None)             # tick=None → 用 env 兜底 offset
+    src = Mt5Source(driver=drv)
+    real_end_ms = (server_ts - 3 * 60 - offset_s) * 1000   # 前端回传的真实 UTC
+    await src.fetch_klines("EURUSD", "1m", limit=5, end_time=real_end_ms)
+    assert len(drv.range_calls) == 1
+    _, _, _dt_from, dt_to = drv.range_calls[0]
+    # range 的 date_to = 真实 UTC + 偏移 = 服务器墙钟时间
+    assert int(dt_to.timestamp()) == int(real_end_ms / 1000) + offset_s
+

@@ -19,7 +19,7 @@ import httpx
 from fastapi import APIRouter, Query
 
 from klinequant.gateway.market_sources.binance_source import BINANCE_REST_BASE, HTTP_PROXY
-from klinequant.gateway.market_sources.derived import is_derived
+from klinequant.gateway.market_sources.derived import is_derived, resolve_tf
 from klinequant.gateway.market_sources.kline_cache import cached_klines
 from klinequant.gateway.market_sources.manager import market_manager
 
@@ -78,10 +78,13 @@ async def get_klines(
     if source is None:
         logger.error(f"Unknown market source: {exchange}")
         return {"symbol": symbol, "timeframe": timeframe, "exchange": ex, "count": 0, "data": []}
-    # 派生档位（1M/1Q/1Y/自定义倍率）由网关从日 K 聚合，不走源原生支持表；
-    # 1w 各源原生直供。翻页（end_time）语义不变，前端懒加载/预载零改动。
-    derived = is_derived(timeframe)
-    if not derived and timeframe not in source.supported_timeframes:
+    # 派生档位（1M/1Q/1Y/自定义倍率 Nm/Nh/Nd/Nw/NM）由网关从基础周期（1m/1d）聚合，
+    # 不走源原生支持表；源原生支持的档（含币安 2h/4h、1w）直接透传不双重口径。
+    # 翻页（end_time）语义不变，前端懒加载/预载零改动。
+    base = resolve_tf(timeframe, source.supported_timeframes)
+    if base is None and timeframe not in source.supported_timeframes:
+        if is_derived(timeframe):
+            logger.error(f"derived/native routing conflict: {timeframe} [{ex}]")
         logger.warning(f"[{ex}] unsupported timeframe: {timeframe}")
         return {"symbol": symbol, "timeframe": timeframe, "exchange": ex, "count": 0, "data": []}
 
@@ -113,6 +116,8 @@ async def get_klines(
         "data": out,
         # 品种价格显示精度（市场源从订阅到的价格推导，前端只渲染不推导）
         "price_precision": source.price_precision(symbol),
+        # 交易所本地时区偏移秒（前端「交易所时间」显示 = 真实 UTC + 本值；MT5 随夏令时动态）
+        "tz_offset_s": source.exchange_tz_offset_s(),
     }
 
 

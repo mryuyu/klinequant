@@ -84,9 +84,19 @@ def _lock(key: tuple) -> asyncio.Lock:
 
 
 async def _fetch_page(source, symbol: str, tf: str, limit: int, end_time=None) -> list[dict]:
-    """单页拉取：派生周期走聚合入口，原生直连源插件"""
-    from klinequant.gateway.market_sources.derived import fetch_derived_klines, is_derived
-    if is_derived(tf):
+    """单页拉取：派生周期走聚合入口，原生直连源插件
+
+    派生判定按源（同路由 resolve_tf 口径）而非纯格式：格式可解析但源原生
+    直供的档（如币安 2h/4h）必须透传，否则与 REST 路由双口径不一致；
+    未声明 supported_timeframes 的源（测试桩）按全局原生档集透传。
+    """
+    from klinequant.gateway.market_sources.derived import (
+        NATIVE_TIMEFRAMES,
+        fetch_derived_klines,
+        parse_tf,
+    )
+    native = getattr(source, "supported_timeframes", None) or NATIVE_TIMEFRAMES
+    if tf not in native and tf != "1m" and parse_tf(tf) is not None:
         return await fetch_derived_klines(source, symbol, tf, limit=limit, end_time=end_time)
     return await source.fetch_klines(symbol, tf, limit=limit, end_time=end_time)
 
@@ -124,10 +134,12 @@ def _merge_tail(entry: _Entry, page: list[dict]) -> None:
     entry.bars.sort(key=lambda b: int(b["timestamp"]))
 
 
-def _interval_ms(timeframe: str) -> int | None:
-    """原生周期 → 单根跨度(ms)。派生档（1M/1Q/1Y 及 Nd/Nw/NM 自定义倍率）返回 None。"""
-    from klinequant.gateway.market_sources.derived import is_derived
-    if is_derived(timeframe):
+def _interval_ms(timeframe: str, source=None) -> int | None:
+    """周期 → 单根跨度(ms)。实际走派生聚合的档返回 None（聚合窗口语义由派生层自管）；
+    源原生直供的档（含格式可解析的 2h/4h 等，如币安）按原生跨度参与缺口自愈/尽头判定。"""
+    from klinequant.gateway.market_sources.derived import NATIVE_TIMEFRAMES, parse_tf
+    native = getattr(source, "supported_timeframes", None) or NATIVE_TIMEFRAMES
+    if timeframe not in native and timeframe != "1m" and parse_tf(timeframe) is not None:
         return None
     m = _TF_RE.match(timeframe or "")
     return int(m.group(1)) * _TF_UNIT_MS[m.group(2)] if m else None
@@ -214,7 +226,7 @@ async def cached_klines(
                 # 短返回可能是截断而非全量；尽头只由补拉路径的空页/短页判定
 
         # 缺口补拉：请求深度超过已缓存最旧根
-        interval_ms = _interval_ms(timeframe)
+        interval_ms = _interval_ms(timeframe, source)
         # 短页==尽头：REST 源恒成立（单次上限固定，短页=回溯到上市日）；终端源（MT5）
         # 原生档不成立——短页多为补拉窗口内的周末/休市空洞（实证：黄金 M1 窗口跨周末
         # 只返 748/1000 根被误判尽头，缓存永远停在本周开盘处），须继续向前翻页，

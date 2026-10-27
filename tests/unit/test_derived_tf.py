@@ -1,11 +1,12 @@
 """网关派生周期层（derived）单元测试
 
 覆盖：
-    - parse_tf：固定档/自定义倍率解析与非法格式拒绝
-    - bucket_label：月/季/年/周倍率/日倍率桶标签（北京时区、跨边界）
-    - aggregate_daily：OHLC 合并/量求和/末桶进行中输出
-    - daily_need：日 K 拉取量换算与封顶
-    - fetch_derived_klines：假源拉日 K 聚合、limit 截取、end_time 过滤
+    - parse_tf：固定档/自定义倍率（含分钟·小时级）解析与非法格式拒绝
+    - base_tf_for / resolve_tf：聚合基础周期与按源路由判定
+    - bucket_label：月/季/年/周倍率/日倍率桶标签（北京时区、跨边界）及日内 epoch 对齐
+    - aggregate_daily：OHLC 合并/量求和/末桶进行中输出（日 K 与 1m 基础同口径）
+    - base_need：基础 K 拉取量换算与封顶
+    - fetch_derived_klines：假源拉基础 K 聚合、limit 截取、end_time 过滤（日级/日内）
 """
 from __future__ import annotations
 
@@ -15,12 +16,16 @@ import pytest
 
 from klinequant.gateway.market_sources.derived import (
     FETCH_DAILY_CAP,
+    FETCH_INTRADAY_CAP,
     aggregate_daily,
+    base_need,
+    base_tf_for,
     bucket_label,
     daily_need,
     fetch_derived_klines,
     is_derived,
     parse_tf,
+    resolve_tf,
 )
 
 _BJ = timezone(timedelta(hours=8))
@@ -49,15 +54,60 @@ def test_parse_tf_custom():
     assert parse_tf("99d") == (99, "d")
 
 
-@pytest.mark.parametrize("tf", ["3h", "100M", "0d", "1d", "1w", "15m", "abc", "", "2q", "1.5d"])
+def test_parse_tf_intraday_custom():
+    """分钟/小时级自定义倍率（日内重采样扩展）"""
+    assert parse_tf("2m") == (2, "m")
+    assert parse_tf("10m") == (10, "m")
+    assert parse_tf("59m") == (59, "m")
+    assert parse_tf("3h") == (3, "h")
+    assert parse_tf("24h") == (24, "h")
+
+
+@pytest.mark.parametrize(
+    "tf", ["100M", "0d", "1m", "1d", "1w", "15m", "abc", "", "2q", "1.5d", "100m", "0h"],
+)
 def test_parse_tf_reject(tf):
     assert parse_tf(tf) is None
     assert not is_derived(tf)
 
 
 def test_is_derived_true():
-    for tf in ("1M", "1Q", "1Y", "2d", "3w", "4M"):
+    for tf in ("1M", "1Q", "1Y", "2d", "3w", "4M", "2m", "10m", "3h"):
         assert is_derived(tf)
+
+
+# ─── base_tf_for / resolve_tf ───
+
+def test_base_tf_for():
+    assert base_tf_for("10m") == "1m"
+    assert base_tf_for("3h") == "1m"
+    assert base_tf_for("2d") == "1d"
+    assert base_tf_for("1M") == "1d"
+    with pytest.raises(ValueError):
+        base_tf_for("1d")   # 原生档非派生
+
+
+_THS_LIKE = {"1m", "5m", "15m", "30m", "1h", "1d", "1w"}
+_BINANCE_LIKE = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "3d", "1w"}
+
+
+def test_resolve_tf_native_passthrough():
+    """源原生直供的档透传（含格式可解析的 2h/4h，不双重口径）"""
+    assert resolve_tf("4h", _BINANCE_LIKE) is None
+    assert resolve_tf("2h", _BINANCE_LIKE) is None
+    assert resolve_tf("1m", _BINANCE_LIKE) is None
+    assert resolve_tf("1w", _THS_LIKE) is None
+
+
+def test_resolve_tf_derived_routing():
+    """源不供给且格式可派生 → 返回聚合基础周期；不可派生且不支持 → None（路由层拒绝）"""
+    assert resolve_tf("4h", _THS_LIKE) == "1m"     # ths 无 4h → 1m 重采样兜底
+    assert resolve_tf("8h", _THS_LIKE) == "1m"     # 8≤99 倍率格式可派生
+    assert resolve_tf("10m", _BINANCE_LIKE) == "1m"
+    assert resolve_tf("2d", _THS_LIKE) == "1d"
+    assert resolve_tf("1M", _THS_LIKE) == "1d"
+    assert resolve_tf("7x", _THS_LIKE) is None     # 非法格式且源不支持
+    assert resolve_tf("1000m", _THS_LIKE) is None  # 倍率超两位数字，格式非法
 
 
 # ─── bucket_label ───
@@ -100,6 +150,20 @@ def test_bucket_nw_align_monday():
     assert lab.weekday() == 0
 
 
+def test_bucket_intraday_epoch_align():
+    """分钟/小时级按 epoch 整除对齐（UTC 口径，不随交易时段切分）"""
+    t0 = _bj_ms(2026, 10, 27)   # 当日零点（北京），恰为整小时 epoch 边界
+    p10 = parse_tf("10m")
+    assert bucket_label(t0, p10) == t0
+    assert bucket_label(t0 + 9 * 60_000, p10) == t0            # 第 10 分钟才翻滚
+    assert bucket_label(t0 + 10 * 60_000, p10) == t0 + 600_000
+    p3 = parse_tf("3h")
+    # 北京零点 = UTC 16:00，落在 UTC 3h 桶 [15:00,18:00) 内：桶起点为 t0-3600s
+    assert bucket_label(t0, p3) == t0 - 3_600_000
+    assert bucket_label(t0 + 119 * 60_000, p3) == t0 - 3_600_000   # 至 UTC 17:59 同桶
+    assert bucket_label(t0 + 121 * 60_000, p3) == t0 + 2 * 3_600_000   # UTC 18:01 落入下一桶
+
+
 # ─── aggregate_daily ───
 
 def test_aggregate_month_merge():
@@ -124,7 +188,24 @@ def test_aggregate_reject_native():
     assert aggregate_daily([], "1M") == []
 
 
-# ─── daily_need ───
+def test_aggregate_intraday_from_1m():
+    """1m 基础 K → 10m 派生：OHLC 合并/量求和，末桶进行中照常输出"""
+    t0 = _bj_ms(2026, 10, 27)
+    bars = [
+        _day(t0 + i * 60_000, 100 + i, 105 + i, 95 + i, 101 + i, 10)   # 09:00~09:09 前 10 根
+        for i in range(10)
+    ]
+    bars += [_day(t0 + 10 * 60_000, 200, 210, 190, 205, 7)]            # 第二桶首根（进行中）
+    out = aggregate_daily(bars, "10m")
+    assert len(out) == 2
+    b0, b1 = out
+    assert b0["timestamp"] == t0
+    assert (b0["open"], b0["high"], b0["low"], b0["close"]) == (100, 114, 95, 110)
+    assert b0["volume"] == 100
+    assert b1["timestamp"] == t0 + 600_000 and b1["close"] == 205 and b1["volume"] == 7
+
+
+# ─── base_need / daily_need ───
 
 def test_daily_need():
     assert daily_need("1M", 10) == 10 * 22 * 2
@@ -139,6 +220,16 @@ def test_daily_need_paging():
     """翻页放行：老品种月/季/年线覆盖上市日（如 1991）需远超首页封顶的日 K"""
     assert daily_need("1M", 1000, paging=True) == FETCH_DAILY_CAP * 4   # 宽上限封顶
     assert daily_need("1M", 10, paging=True) == 10 * 22 * 2             # 小需求原样放行
+
+
+def test_base_need_intraday():
+    """日内倍率：每桶 n 根（h 档 60n 根）1m × 2 冗余，受日内封顶"""
+    assert base_need("10m", 100) == 100 * 10 * 2
+    assert base_need("3h", 10) == 10 * 3 * 60 * 2
+    assert base_need("3h", 100) == FETCH_INTRADAY_CAP                  # 需求超封顶被钳制
+    assert base_need("2m", 30000) == FETCH_INTRADAY_CAP                 # 首页封顶
+    assert base_need("2m", 30000, paging=True) == FETCH_INTRADAY_CAP * 4
+    assert daily_need is base_need                                      # 旧名兼容
 
 
 # ─── fetch_derived_klines（假源） ───
@@ -194,3 +285,28 @@ async def test_fetch_derived_end_time_filter():
     src = _FakeSource(days)
     out = await fetch_derived_klines(src, "TEST", "1M", limit=10, end_time=_bj_ms(2026, 7, 31))
     assert len(out) == 1 and out[0]["timestamp"] == _bj_ms(2026, 7, 1)
+
+
+# ─── fetch_derived_klines（日内重采样，1m 基础） ───
+
+async def test_fetch_derived_intraday_from_1m():
+    """10m 自定义周期：拉 1m 基础 K 聚合，桶标签按 epoch 对齐"""
+    t0 = _bj_ms(2026, 10, 27)
+    mins = [_day(t0 + i * 60_000, 100 + i, 105 + i, 95 + i, 101 + i, 3) for i in range(25)]
+    src = _FakeSource(mins)
+    out = await fetch_derived_klines(src, "TEST", "10m", limit=10)
+    assert src.calls[0][1] == "1m"                                       # 基础周期 = 1m
+    assert [b["timestamp"] for b in out] == [t0, t0 + 600_000, t0 + 1_200_000]
+    assert out[0]["volume"] == 30 and out[2]["close"] == 125             # 末桶进行中（5 根）
+
+
+async def test_fetch_derived_intraday_limit_and_end_time():
+    """日内派生同样遵守 limit 截取与 end_time 翻页过滤"""
+    t0 = _bj_ms(2026, 10, 27)
+    mins = [_day(t0 + i * 60_000, 1, 2, 0.5, 1.5, 1) for i in range(60)]
+    src = _FakeSource(mins)
+    out = await fetch_derived_klines(src, "TEST", "10m", limit=2)
+    assert len(out) == 2 and out[-1]["timestamp"] == t0 + 5 * 600_000    # 只留末两桶
+    out2 = await fetch_derived_klines(src, "TEST", "10m", limit=10, end_time=t0 + 2_999_999)
+    assert [b["timestamp"] for b in out2] == [t0, t0 + 600_000, t0 + 1_200_000,
+                                              t0 + 1_800_000, t0 + 2_400_000]

@@ -36,6 +36,15 @@ TICKER_CACHE_TTL = 5.0
 # 切外汇品种持续报“数据源不可用”、需切走等够时间才恢复）；后台 stream_loop 重连节奏同步加快
 RECONNECT_COOLDOWN = 8.0
 
+# ─── 服务器时区偏移校正 ───
+# 外汇经纪商 MT5 服务器普遍用东欧时间（UTC+2 冬令时 / UTC+3 夏令时），copy_rates 与
+# symbol_info_tick 的 time 字段是「服务器墙钟当 UTC 编码」的 epoch，直接当真实 UTC 用
+# 会让前端（按北京时间渲染）比真实时刻快 2~3 小时。此处动态探测偏移并在 _to_bar 归一到
+# 真实 UTC，与币安/ths 口径一致；偏移随夏令时变化，故按 TTL 重探、休市陈旧 tick 由合理窗拒绝。
+_OFFSET_PROBE_TTL = 3600.0        # 探测缓存秒：一年两次夏令时切换最多滞后 1h 自动校准
+_OFFSET_SANE_MIN_S = 0            # 合理服务器时区窗（外汇 UTC+0~+3，留余量）；休市陈旧
+_OFFSET_SANE_MAX_S = 5 * 3600     # tick 的 delta 为大负数落在窗外被拒，沿用旧偏移
+
 # 品种目录：完全可交易模式常量 + path 顶层目录 → 资产类别
 _TRADE_MODE_FULL = _tf_const("SYMBOL_TRADE_MODE_FULL", 4)
 _ASSET_TYPE_BY_PATH = {
@@ -79,6 +88,10 @@ class Mt5Source(MarketSource):
         self._ticker_cache: dict[str, tuple[float, dict | None]] = {}
         self._last_reconnect_at = 0.0
         self._latency_at = 0.0   # probe_latency_ms 缓存时刻（terminal_info 走子进程 IPC+全局锁，短缓存降频）
+        #: 经纪商服务器时区偏移秒（server_time = 真实 UTC + offset）；None=未探测（不校正）。
+        #: 可用 MT5_SERVER_UTC_OFFSET_H 配置兜底值（休市冷启动无法探测时用），交易时段探测覆盖。
+        self._server_offset_s: int | None = self._configured_offset_s()
+        self._offset_probed_at = 0.0   # 上次探测尝试时刻(monotonic)，TTL 内不重复探测
         if self.available:
             self._probe_symbols()
 
@@ -157,7 +170,8 @@ class Mt5Source(MarketSource):
         # real_volume 为 0 时（外汇/CFD 常态）用 tick_volume
         vol = row.get("real_volume") or row.get("tick_volume") or 0
         return {
-            "timestamp": int(row["time"]) * 1000,
+            # 减去服务器时区偏移，归一到真实 UTC epoch（与币安/ths 口径一致）
+            "timestamp": int(row["time"]) * 1000 - self._offset_ms(),
             "open": row["open"],
             "high": row["high"],
             "low": row["low"],
@@ -167,10 +181,52 @@ class Mt5Source(MarketSource):
         }
 
     def _prepare_sync(self, sym: str) -> None:
-        """惰性品种选中 + digits 缓存：同步 MT5 调用，只能在 to_thread 内执行，
-        不得占用事件循环（终端挂死时会堵死全部 HTTP 请求）"""
+        """惰性品种选中 + digits 缓存 + 服务器时区偏移探测：同步 MT5 调用，只能在
+        to_thread 内执行，不得占用事件循环（终端挂死时会堵死全部 HTTP 请求）"""
         self._ensure_selected(sym)
         self._ensure_digits(sym)
+        self._ensure_server_offset(sym)
+
+    @staticmethod
+    def _configured_offset_s() -> int | None:
+        """env MT5_SERVER_UTC_OFFSET_H 配置的服务器时区偏移兜底（小时→秒）；未配置返回 None"""
+        raw = os.getenv("MT5_SERVER_UTC_OFFSET_H", "").strip()
+        if not raw:
+            return None
+        try:
+            return int(round(float(raw) * 3600))
+        except ValueError:
+            logger.warning(f"MT5_SERVER_UTC_OFFSET_H invalid: {raw!r}, ignored")
+            return None
+
+    def _ensure_server_offset(self, sym: str) -> None:
+        """探测经纪商服务器时区偏移（TTL 缓存）：最新 tick 的服务器时间 vs 真实 UTC。
+        交易时段 tick 新鲜→delta≈偏移（合理窗内）被采纳；休市陈旧 tick→delta 为大负数
+        落在窗外被拒，沿用旧偏移。TTL 内不重复探测（含失败尝试），免休市频繁无效调用。"""
+        if time.monotonic() - self._offset_probed_at < _OFFSET_PROBE_TTL:
+            return
+        self._offset_probed_at = time.monotonic()
+        tick = self._driver.symbol_info_tick(sym)
+        ts = int(tick["time"]) if tick and tick.get("time") else 0
+        if ts > 0:
+            self._calibrate_offset(ts)
+
+    def _calibrate_offset(self, server_ts: int) -> None:
+        """服务器时间戳 vs 真实 UTC → 整小时偏移；落在合理窗才采纳（否则视为休市陈旧）"""
+        offset = int(round((server_ts - time.time()) / 3600) * 3600)
+        if _OFFSET_SANE_MIN_S <= offset <= _OFFSET_SANE_MAX_S:
+            if self._server_offset_s != offset:
+                logger.info(f"MT5 server UTC offset calibrated: {offset // 3600:+d}h")
+            self._server_offset_s = offset
+
+    def _offset_ms(self) -> int:
+        """当前服务器时区偏移（毫秒）；未探测到（None）时为 0（不校正，保持原始时间戳）"""
+        return (self._server_offset_s or 0) * 1000
+
+    def exchange_tz_offset_s(self) -> int:
+        """交易所（经纪商服务器）时区偏移秒：前端「交易所时间」= 真实 UTC + 本值。
+        返回动态探测的 _server_offset_s（与 _to_bar 校正所减去的偏移同源），未探测到时 0。"""
+        return self._server_offset_s or 0
 
     def _klines_sync(self, sym, tf_const, timeframe, limit, dt_from, dt_to):
         self._prepare_sync(sym)
@@ -197,7 +253,11 @@ class Mt5Source(MarketSource):
         async def _pull():
             if end_time:
                 # 翻页加深：按 end_time（含）向前回溯 limit 根（窗口留 2 倍冗余防缺口）
-                dt_to = datetime.fromtimestamp(end_time / 1000, tz=timezone.utc)
+                # end_time 是前端回传的真实 UTC（已校正），MT5 range 查询需服务器墙钟时间，
+                # 故加回偏移还原（首屏已探测偏移，翻页时通常就绪；未探测则 +0 由冗余窗兜底）
+                dt_to = datetime.fromtimestamp(
+                    end_time / 1000 + (self._server_offset_s or 0), tz=timezone.utc
+                )
                 dt_from = dt_to - timedelta(seconds=TF_SECONDS[timeframe] * limit * 2)
                 return await asyncio.to_thread(
                     self._klines_sync, sym, tf_const, timeframe, limit, dt_from, dt_to

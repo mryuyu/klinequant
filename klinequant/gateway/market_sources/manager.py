@@ -18,12 +18,19 @@ import logging
 import time
 
 from klinequant.gateway.market_sources.base import MarketSource
-from klinequant.gateway.market_sources.derived import bucket_label, daily_need, is_derived, parse_tf
+from klinequant.gateway.market_sources.derived import (
+    base_tf_for,
+    bucket_label,
+    is_derived,
+    parse_tf,
+)
 from klinequant.gateway.ws import ws_manager
 
 logger = logging.getLogger(__name__)
 
 VALID_TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "3d", "1w"}
+# 派生聚合的基础周期（实时流驱动网关聚合的入口档：日内倍率←1m，日级及以上←1d）
+_BASE_CANDIDATES = frozenset({"1m", "1d"})
 # 订阅扫描节奏：订阅集合变化最多延迟该秒数反映到插件重连
 _TARGET_POLL_INTERVAL = 1.0
 # 全量品种目录缓存（秒）：终端/交易所目录极少变化，避免每次打开搜索弹窗重新枚举
@@ -116,11 +123,23 @@ class MarketSourceManager:
                 symbol, tf = parts[1], parts[2]
             else:
                 continue
-            if tf in VALID_TIMEFRAMES:
+            # 原生/派生分流按源判定：同是 4h，币安/MT5 原生直供、ths 无供给需由 1m 派生。
+            # src 未注册时退回全局 VALID_TIMEFRAMES（保持无源上下文时的既有语义）。
+            src = self._sources.get(exchange)
+            supported = src.supported_timeframes if src is not None else VALID_TIMEFRAMES
+            if tf in supported:
                 targets.add((symbol, tf))
             elif is_derived(tf):
-                # 派生周期源无原生供给：映射为隐式 1d 订阅，由日 K 实时流驱动网关聚合（源侧零改动）
-                targets.add((symbol, "1d"))
+                # 格式派生且本源无原生供给（各源 1M/1Q/1Y、日内倍率 Nm/Nh、日级倍率 Nd/Nw，
+                # 及 ths 缺的 2h/4h 等）：映射为隐式基础周期订阅（1m/1d），由基础 K 实时流
+                # 驱动网关聚合（源侧零改动）；基础档也须本源可供，否则无从聚合
+                base = base_tf_for(tf)
+                if base in supported:
+                    targets.add((symbol, base))
+            elif tf in VALID_TIMEFRAMES:
+                # 全局原生档但本源支持表未声明且不可派生（如桩源精简支持表 / mt5 无 3d）：
+                # 仍按原生流交给源侧自行处理，保持既有行为不回退
+                targets.add((symbol, tf))
         return targets
 
     def active_targets(self, exchange: str) -> set[tuple[str, str]]:
@@ -159,84 +178,100 @@ class MarketSourceManager:
             await on_bar(exchange, symbol, timeframe, payload)
         except Exception as e:
             logger.debug(f"Indicator bridge error: {e}")
-        # 派生周期实时聚合：日 K bar 更新时合成各订阅派生周期的最新 bar（指标 on_bar 随之自动驱动）
-        if timeframe == "1d":
+        # 派生周期实时聚合：基础周期（1m/1d）bar 更新时合成各订阅派生周期的最新 bar
+        # （指标 on_bar 随之自动驱动；非基础档直接跳过，免每根 bar 扫描订阅表）
+        if timeframe in _BASE_CANDIDATES:
             try:
-                await self._feed_derived(exchange, symbol, payload)
+                await self._feed_derived(exchange, symbol, timeframe, payload)
             except Exception as e:
                 logger.debug(f"Derived aggregation error: {e}")
         return True
 
     # ─── 派生周期实时聚合 ───
 
-    def _derived_subs(self, exchange: str, symbol: str) -> list[str]:
-        """当前订阅了该品种的派生周期列表（WS 主题解析）"""
+    def _derived_subs(self, exchange: str, symbol: str, base_tf: str) -> list[str]:
+        """当前订阅了该品种、且以 base_tf 为聚合基础的派生周期列表（WS 主题解析）
+
+        按源排除原生直供档：格式可派生但源原生支持（如币安 2h）时实时 bar 由源流
+        直接发布，不得再从基础流重复聚合（双口径互相覆盖）。
+        """
+        source = self._sources.get(exchange)
+        native = source.supported_timeframes if source else set()
         out = []
         prefix = f"klines.{exchange}.{symbol}."
         for topic, subs in list(ws_manager._subscriptions.items()):
             if subs and topic.startswith(prefix):
                 tf = topic[len(prefix):]
-                if is_derived(tf):
+                if is_derived(tf) and tf not in native and base_tf_for(tf) == base_tf:
                     out.append(tf)
         return out
 
     async def _seed_derived_state(
-        self, exchange: str, symbol: str, tf: str, day_bar: dict, parsed: tuple[int, str],
+        self, exchange: str, symbol: str, tf: str, base_bar: dict, parsed: tuple[int, str],
     ) -> dict | None:
-        """冷启动/桶翻滚补齐：拉桶起始日至昨日的日 K 预填（防月线最新 bar 开盘价/量基线缺失）"""
+        """冷启动/桶翻滚补齐：拉桶起始至上一根基础 K 历史预填
+
+        防月线/日内倍率最新 bar 开盘价、量基线缺失。
+        """
         source = self._sources.get(exchange)
         if source is None:
             return None
-        day_ts = int(day_bar["timestamp"])
-        label = bucket_label(day_ts, parsed)
+        base_tf = base_tf_for(tf)
+        base_ts = int(base_bar["timestamp"])
+        label = bucket_label(base_ts, parsed)
+        # 预填窗口 = 桶起点至当前基础 bar 之前；+8 冗余覆盖窗口估算误差，封顶防滥用
+        span_ms = max(1, base_ts - label)
+        unit_ms = 60_000 if base_tf == "1m" else 86_400_000
+        need = min(span_ms // unit_ms + 8, 2000)
         try:
-            days = await source.fetch_klines(symbol, "1d", limit=min(daily_need(tf, 1), 1000), end_time=day_ts - 1)
+            from klinequant.gateway.market_sources.kline_cache import cached_klines
+            bars = await cached_klines(source, symbol, base_tf, limit=need, end_time=base_ts - 1)
         except Exception as e:
             logger.warning(f"Derived seed fetch failed [{exchange}] {symbol}/{tf}: {e}")
             return None
-        days = [b for b in (days or []) if label <= int(b["timestamp"]) < day_ts]
-        if not days:
-            return None   # 当日即桶首日，无需预填（直接用实时日 K）
+        bars = [b for b in (bars or []) if label <= int(b["timestamp"]) < base_ts]
+        if not bars:
+            return None   # 当前 bar 即桶首根，无需预填（直接用实时基础 K）
         return {
             "label": label,
-            "open": float(days[0]["open"]),
-            "high": max(float(b["high"]) for b in days),
-            "low": min(float(b["low"]) for b in days),
-            "close": float(days[-1]["close"]),
-            "base_vol": sum(float(b.get("volume") or 0) for b in days),
+            "open": float(bars[0]["open"]),
+            "high": max(float(b["high"]) for b in bars),
+            "low": min(float(b["low"]) for b in bars),
+            "close": float(bars[-1]["close"]),
+            "base_vol": sum(float(b.get("volume") or 0) for b in bars),
             "day_ts": None,
             "day_vol": 0.0,
         }
 
-    async def _feed_derived(self, exchange: str, symbol: str, day_bar: dict) -> None:
-        """日 K 实时 bar 喂入聚合器：为每个订阅的派生周期合成并发布最新 bar"""
-        for tf in self._derived_subs(exchange, symbol):
+    async def _feed_derived(self, exchange: str, symbol: str, base_tf: str, base_bar: dict) -> None:
+        """基础周期（1m/1d）实时 bar 喂入聚合器：为每个订阅的派生周期合成并发布最新 bar"""
+        for tf in self._derived_subs(exchange, symbol, base_tf):
             parsed = parse_tf(tf)
             if parsed is None:
                 continue
-            day_ts = int(day_bar["timestamp"])
-            label = bucket_label(day_ts, parsed)
+            base_ts = int(base_bar["timestamp"])
+            label = bucket_label(base_ts, parsed)
             key = f"{exchange}_{symbol}_{tf}"
             st = self._derived_state.get(key)
             if st is None or st["label"] != label:
-                st = await self._seed_derived_state(exchange, symbol, tf, day_bar, parsed) or {
+                st = await self._seed_derived_state(exchange, symbol, tf, base_bar, parsed) or {
                     "label": label,
-                    "open": float(day_bar["open"]),
-                    "high": float(day_bar["high"]),
-                    "low": float(day_bar["low"]),
-                    "close": float(day_bar["close"]),
+                    "open": float(base_bar["open"]),
+                    "high": float(base_bar["high"]),
+                    "low": float(base_bar["low"]),
+                    "close": float(base_bar["close"]),
                     "base_vol": 0.0,
                     "day_ts": None,
                     "day_vol": 0.0,
                 }
                 self._derived_state[key] = st
-            if st["day_ts"] != day_ts:
-                st["base_vol"] += st["day_vol"]   # 上日累计量结转，防当日量重复叠加
-                st["day_ts"] = day_ts
-            st["day_vol"] = float(day_bar.get("volume") or 0)
-            st["high"] = max(st["high"], float(day_bar["high"]))
-            st["low"] = min(st["low"], float(day_bar["low"]))
-            st["close"] = float(day_bar["close"])
+            if st["day_ts"] != base_ts:
+                st["base_vol"] += st["day_vol"]   # 上一基础 bar 累计量结转，防同 bar 量重复叠加
+                st["day_ts"] = base_ts
+            st["day_vol"] = float(base_bar.get("volume") or 0)
+            st["high"] = max(st["high"], float(base_bar["high"]))
+            st["low"] = min(st["low"], float(base_bar["low"]))
+            st["close"] = float(base_bar["close"])
             bar = {
                 "timestamp": label,
                 "open": st["open"], "high": st["high"], "low": st["low"], "close": st["close"],
