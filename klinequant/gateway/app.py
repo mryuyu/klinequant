@@ -28,7 +28,7 @@ load_env()  # 凭证等环境变量从仓库根 .env（PROJECT_ROOT/.env）加�
 
 from klinequant.gateway.errors import register_error_handlers
 from klinequant.gateway.market_sources import bootstrap_sources, market_manager
-from klinequant.gateway.routers import alert, backtest, backtest_fx, indicator, market, risk, strategy, system, trade
+from klinequant.gateway.routers import alert, backtest, backtest_fx, indicator, market, risk, strategy, system, template, trade
 from klinequant.gateway.ws import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -96,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(backtest_fx.router)
     app.include_router(alert.router)
     app.include_router(risk.router)
+    app.include_router(template.router)
 
     # WebSocket 端点
     @app.websocket("/ws")

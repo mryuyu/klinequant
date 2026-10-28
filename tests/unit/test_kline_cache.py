@@ -15,9 +15,14 @@ def bar(ts, close=1.0):
             "close": close, "volume": 1.0}
 
 
+H4, H1 = 14_400_000, 3_600_000   # v9.170 串周期测试：4H/1H 跨度(ms)
+
+
 class FakeSource:
     """固定数据集源：按 end_time 过滤后返回最新 limit 根（升序），记录调用"""
     name = "fake"
+    # 4h 原生直供（全局 NATIVE 集不含 4h，v9.170 串周期测试需原生跨度）
+    supported_timeframes = {"1m", "1h", "4h", "1d"}
 
     def __init__(self, bars):
         self.data = sorted(bars, key=lambda b: b["timestamp"])
@@ -165,7 +170,7 @@ def test_terminal_source_deep_paging_crosses_weekend_gap():
     e.exhausted_at = 0.0                           # 冷却已过 → 允许重试
     out = run(kc.cached_klines(src, "S", "1d", 1200))
     assert len(out) == 1200                        # 跨过空洞补齐到上周段
-    assert out[0]["timestamp"] == 1300             # 已触及上周数据（上周段 1300~1999 + 本周段 500 根）
+    assert out[0]["timestamp"] == 1300             # 已触及上周段（1300~1999 + 本周 500 根）
 
 
 def test_lru_eviction(monkeypatch):
@@ -223,7 +228,7 @@ def test_interior_gap_repaired_with_end_time_paging():
 
 def test_legit_gap_empty_source_not_refetched_within_cooldown(monkeypatch):
     """源确无数据的合法空洞：补拉返空后缺口保留，冷却内二次请求不再拉源补洞"""
-    monkeypatch.setattr(kc, "_TAIL_REFRESH_TTL", 0.0)   # 隔离 TTL：本测验证冷却内仅尾刷 1 次、不重复补洞
+    monkeypatch.setattr(kc, "_TAIL_REFRESH_TTL", 0.0)   # 隔离 TTL：冷却内仅尾刷 1 次、不重复补洞
     data = [bar(i * 60_000) for i in range(40)] + [bar(i * 60_000) for i in range(60, 100)]
     src = FakeSource(data)                                # 源本身就带洞（周末式）
     e = kc._entry(("fake", "S2", "1m"))
@@ -260,3 +265,45 @@ def test_interval_ms_and_derived_gate():
     ths_like = _Src({"1m", "5m", "1h", "1d"})
     assert kc._interval_ms("4h", binance_like) == 14_400_000
     assert kc._interval_ms("4h", ths_like) is None
+
+
+def test_subinterval_contaminants_dropped_on_merge():
+    """v9.170 串周期污染防火墙：4H 序列混入 1H bar 合入时剔除，真 bar 全保留。
+    基线带时区偏移（ts%4h≡1h，实测 MT5 形态）证明口径是间距而非网格对齐"""
+    base = 1_760_000_000_000 - (1_760_000_000_000 % H4) + H1
+    clean = [bar(base + i * H4) for i in range(40)]
+    polluted = list(clean)
+    for i in range(20, 30):                      # 污染段：10 根真 bar 后各插 3 根 1H
+        for k in (1, 2, 3):
+            polluted.append(bar(base + i * H4 + k * H1))
+    src = FakeSource(polluted)
+    out = run(kc.cached_klines(src, "S", "4h", 100))
+    assert [b["timestamp"] for b in out] == [b["timestamp"] for b in clean]
+
+
+def test_polluted_entry_self_heals_on_next_request():
+    """v9.170：存量污染缓存下次请求自愈（合入后整表统一收口剔除子间隔 bar）"""
+    base = 1_760_100_000_000 - (1_760_100_000_000 % H4)
+    clean = [bar(base + i * H4) for i in range(40)]
+    src = FakeSource(clean)
+    e = kc._entry(("fake", "S3", "4h"))
+    polluted = list(clean)
+    for i in range(20, 30):
+        for k in (1, 2, 3):
+            polluted.append(bar(base + i * H4 + k * H1))
+    e.bars = sorted(polluted, key=lambda b: b["timestamp"])
+    out = run(kc.cached_klines(src, "S3", "4h", 100))
+    assert [b["timestamp"] for b in out] == [b["timestamp"] for b in clean]
+
+
+def test_subinterval_filter_keeps_legit_gaps_and_majority_guard():
+    """v9.170 防火墙边界：合法缺口（周末 52h，间距只更大）不误剔；
+    序列自身子间隔（整页污染/合成时间戳）多数护栏豁免不过滤"""
+    base = 1_760_000_000_000
+    ts_list = [base + i * H4 for i in range(20)] + [base + 33 * H4 + i * H4 for i in range(20)]
+    src = FakeSource([bar(t) for t in ts_list])
+    out = run(kc.cached_klines(src, "S2", "4h", 100))
+    assert [b["timestamp"] for b in out] == ts_list
+    dense = [bar(base + i * 3_600_000) for i in range(40)]   # 整页 1H：剔除将过半 → 原样返回
+    assert kc._filter_subinterval(dense, H4) == dense
+    assert kc._filter_subinterval(dense, None) == dense     # 派生档 interval_ms=None 不过滤

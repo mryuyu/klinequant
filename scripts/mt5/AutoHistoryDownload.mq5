@@ -11,8 +11,14 @@
 //|  - 挂上图表即自动开始下载，无需每次手工运行脚本；                |
 //|  - 下载循环按"品种×周期"切片，每个 Timer tick 只处理一片，       |
 //|    不阻塞终端事件线程；                                          |
-//|  - 每个品种×周期开钻前先做一次深度探测（ProbeFirst）：终端缓存已 |
-//|    触底则直接跳过，因此反复挂载/重启终端不会重复拉历史；          |
+//|  - 每个品种×周期开钻前先检查历史数据情况（ProbeFirst 二分探边）： |
+//|    先定位已有数据的最早时间作为断点（宽窗容节假日空洞，纯读本地 |
+//|    瞬时返回），已覆盖到回溯起点则整周期跳过，否则游标落在断点 |
+//|    之前——只补没下过的部分（增量下载），不重翻已下好的区域；    |
+//|  - 品种 tick 闸门（TickTimeoutSec，默认 30s）：进入新品种后先等首 |
+//|    个新 tick，超时无 tick（无报价品种如过期 CFD）则整品种跳过，     |
+//|    避免其历史请求无响应把事件线程堵死在同步调用里；周末/休市     |
+//|    挂机下载需把 TickTimeoutSec 置 0，否则全市场无 tick 会被误跳；  |
 //|  - 全部跑完打印 DONE 后默认保留在图表上空转（已无动作，重启终端 |
 //|    自动重挂也只会探测秒过）；若希望跑完自动从图表卸载，把       |
 //|    AutoDetach 置 true（借图表重载实现，MQL5 无直接移除 EA 的 API，|
@@ -34,7 +40,7 @@
 //|  否则超出 TERMINAL_MAXBARS 的历史不会下载。                      |
 //+------------------------------------------------------------------+
 #property copyright "KlineQuant"
-#property version   "2.00"
+#property version   "2.30"
 
 //--- 输入参数
 input int      MaxYears      = 10;      // 最大回溯年数（超出则停在源尽头）
@@ -43,6 +49,8 @@ input string   SymbolsFilter = "";      // 品种名前缀过滤（空=市场观
 input int      PauseMs       = 300;     // 每次轮询间隔毫秒（给后台同步留时间；稳定会提前结束）
 input int      Retries       = 40;      // 单片同步未稳定的最大轮询次数（约 40×300ms=12s 上限）
 input bool     ProbeFirst    = true;    // 启动先探测缓存深度，已够深则不重复下载
+input int      TickTimeoutSec = 30;     // 新品种入场 tick 等待上限秒（超时无新 tick → 整品种跳过；0=关闭闸门）
+                                                          // ⚠ 周末/休市全市场无 tick，挂机下载请置 0，否则所有品种会被跳
 input bool     AutoDetach    = false;   // 跑完自动从图表卸载（刷一次图表；模板内 EA 需手工移）
 
 //--- 下载状态（跨 Timer tick 保持，按 品种→周期→分片 游标推进）
@@ -59,6 +67,9 @@ bool      g_started    = false;         // 首个 tick 已初始化
 bool      g_done       = false;         // 全部完成 / 无需下载（空转）
 bool      g_pending_dl = false;         // InitDownload 成功但尚未开跑
 bool      g_probe      = false;         // 当前品种×周期待深度探测
+bool      g_wait_tick  = false;         // 品种 tick 闸门：等待首个新 tick 中
+long      g_tick_base  = 0;             // 入场时品种最后 tick 毫秒时间（变化即视为有新 tick）
+datetime  g_tick_dead  = 0;             // 闸门超时截止（TimeLocal 基准）
 int       g_last_sym   = -1, g_last_tf = -1; // 上次 Comment 刷新时的进度位置
 
 //--- 周期字符串 -> ENUM（新增周期在此扩表）
@@ -108,29 +119,115 @@ int StepFor(ENUM_TIMEFRAMES tf)
 }
 
 //+------------------------------------------------------------------+
-//| 深度探测（当前品种×周期）：回溯起点处的最老缓存 bar 是否已触底 |
-//| 够深 → true（跳过本周期）；不够/无数据 → false（开始深钻，此调用 |
-//| 顺便把最深一片先拉下来）。按组合逐个探测，不在 OnInit 里循环阻塞 |
+//| 检查当前品种×周期的历史数据情况：二分探边定位最早已有数据时间 |
+//| （v2.20 旧法只读缓存最老一根：未开过图表的周期内存聚合缓存常 |
+//|  只保留浅层一段，断点报浅 → 已下好的深区被重翻（重复下载）；   |
+//|  v2.30 改为主动探边：宽窗吞节假日空洞，探到有数据的最深窗，   |
+//|  取窗内首根为断点）                                           |
+//| 返回：断点时间（最早已有 bar）；0 = 本品种×周期完全无数据         |
+//+------------------------------------------------------------------+
+datetime FindCachedBoundary()
+{
+   string          sym    = g_syms[g_sym_i];
+   ENUM_TIMEFRAMES tf     = (ENUM_TIMEFRAMES)g_tf_int[g_tf_i];
+   int             secs   = TfSeconds(tf);
+   // 探边窗：日内周期 7 天（跨周末 48h 空洞）；日线以上取整片跨度
+   int             win    = (secs < 86400) ? 7 * 86400 : StepFor(tf);
+   MqlRates        r[];
+
+   //--- 先确认近期有数据（无=坏品种/未同步，交调用方全量开钻）
+   if(CopyRates(sym, tf, TimeCurrent() - win, TimeCurrent(), r) < 1)
+      return 0;
+
+   //--- 二分探边：P(t)=窗[t,t+win)内有数据；缓存连续 [D,now] ⇒ P 对 t 单调
+   datetime lo = g_floor, hi = TimeCurrent();
+   while(hi - lo > win)
+   {
+      datetime mid = lo + (hi - lo) / 2;
+      if(CopyRates(sym, tf, mid, mid + win, r) >= 1) hi = mid;   // 更深也有 → 继续向深探
+      else                                           lo = mid;   // 空洞/尽头在更浅侧
+   }
+
+   //--- 最深有数据窗内取最老一根为断点（lo 窗已证空 ⇒ 断点前无遗漏 bar）
+   if(CopyRates(sym, tf, hi, hi + win, r) < 1)
+      return 0;
+   return r[0].time;
+}
+
+//+------------------------------------------------------------------+
+//| 增量探测（当前品种×周期）：先检查历史数据情况，再决定跳过/断点  |
+//| 已覆盖到回溯起点 → true（跳过本周期）；否则游标放到断点之前     |
+//| 只补更深处，返回 false；无数据则保持 TimeCurrent() 全量开钻     |
 //+------------------------------------------------------------------+
 bool ProbeCurrentPair()
 {
-   string          sym     = g_syms[g_sym_i];
-   string          tfname  = g_tfs[g_tf_i];
-   ENUM_TIMEFRAMES tf      = (ENUM_TIMEFRAMES)g_tf_int[g_tf_i];
-   int             span    = 3 * StepFor(tf);
-   datetime        probe_from = g_floor;
-   datetime        probe_to   = probe_from + span;
-   if(probe_to > TimeCurrent()) probe_to = TimeCurrent();
+   string          sym    = g_syms[g_sym_i];
+   string          tfname = g_tfs[g_tf_i];
+   ENUM_TIMEFRAMES tf     = (ENUM_TIMEFRAMES)g_tf_int[g_tf_i];
+   int             secs   = TfSeconds(tf);
+   int             win    = (secs < 86400) ? 7 * 86400 : StepFor(tf);
 
-   MqlRates rates[];
-   int copied = CopyRates(sym, tf, probe_from, probe_to, rates);
-   bool deep = false;
-   if(copied >= 2 && rates[0].time <= g_floor + span / 2)
-      deep = true;                        // 起点窗内有多根且贴近起点 → 已触底
-   if(deep)
-      PrintFormat("[%s] %s 探测：缓存已触底（起点附近 %d 根），跳过下载",
-                  sym, tfname, copied);
-   return deep;
+   datetime boundary = FindCachedBoundary();
+   if(boundary == 0)
+   {
+      PrintFormat("[%s] %s 历史检查：本地无数据，全量下载", sym, tfname);
+      return false;   // g_cursor 保持调用方预设的 TimeCurrent()
+   }
+   if(boundary <= g_floor + win)   // 探边精度到窗粒度，允许一个窗的余量
+   {
+      PrintFormat("[%s] %s 历史检查：已覆盖到回溯起点（最老 %s），跳过",
+                  sym, tfname, TimeToString(boundary, TIME_DATE));
+      return true;
+   }
+   g_cursor = boundary - 1;        // 断点续补：不重翻 boundary 之后已下好的区域
+   PrintFormat("[%s] %s 历史检查：已有数据最早 %s，只需增量补 %s ~ %s（约 %d 根）",
+               sym, tfname, TimeToString(boundary, TIME_DATE|TIME_MINUTES),
+               TimeToString(g_floor, TIME_DATE), TimeToString(boundary, TIME_DATE|TIME_MINUTES),
+               (int)((boundary > g_floor ? boundary - g_floor : 0) / secs));
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| 品种最后 tick 毫秒时间（SymbolInfoTick 对任意品种可查，含 out    |
+//| 报价；取不到（无效品种/未同步）返回 0）                        |
+//+------------------------------------------------------------------+
+long LastTickMs(string sym)
+{
+   MqlTick t;
+   if(!SymbolInfoTick(sym, t) || t.time_msc <= 0) return 0;
+   return t.time_msc;
+}
+
+//+------------------------------------------------------------------+
+//| 开启品种 tick 闸门：进入新品种后等首个新 tick，超时整品种跳过    |
+//| （无报价品种如过期 CFD 合约：历史请求多半无响应会把事件线程堵死 |
+//|  在同步调用里，tick 闸门在不碰历史调用的前提下提前识别并跳过） |
+//| TickTimeoutSec<=0 关闭闸门（周末/休市挂机下载场景）             |
+//+------------------------------------------------------------------+
+void BeginTickCheck()
+{
+   if(TickTimeoutSec <= 0) return;
+   g_wait_tick = true;
+   g_tick_base = LastTickMs(g_syms[g_sym_i]);
+   g_tick_dead = TimeLocal() + TickTimeoutSec;
+}
+
+//+------------------------------------------------------------------+
+//| 无 tick 跳过整品种：直接移到下一品种（不打印“全部周期完成”）   |
+//+------------------------------------------------------------------+
+void SkipSymbol()
+{
+   g_wait_tick = false;
+   g_sym_i++;
+   g_tf_i = 0;
+   if(g_sym_i >= g_sym_n) { FinishAll(); return; }
+   SymbolSelect(g_syms[g_sym_i], true);
+   PrintFormat("--- (%d/%d) %s ---", g_sym_i + 1, g_sym_n, g_syms[g_sym_i]);
+   g_bars_total = 0;
+   g_empty      = 0;
+   g_probe      = ProbeFirst;
+   g_cursor     = TimeCurrent();
+   BeginTickCheck();
 }
 
 //+------------------------------------------------------------------+
@@ -195,6 +292,7 @@ bool InitDownload()
 
    SymbolSelect(g_syms[0], true);       // 已在市场观察仍显式确认一次，防部分服务器不响应历史
    g_cursor = TimeCurrent();
+   BeginTickCheck();                     // 首个品种同样过 tick 闸门
 
    PrintFormat("=== AutoHistoryDownload EA start: 市场观察 %d 个品种%s 范围 %s ~ %s 周期 %s",
                g_sym_n,
@@ -306,6 +404,7 @@ void AdvanceState()
    g_empty      = 0;
    g_probe      = ProbeFirst;
    g_cursor     = TimeCurrent();
+   BeginTickCheck();                     // 新品种入场先过 tick 闸门
 }
 
 //+------------------------------------------------------------------+
@@ -390,6 +489,26 @@ void OnTimer()
    {
       if(!g_pending_dl) return;           // InitDownload 失败后不再重试
       g_started = true;
+   }
+
+   //--- tick 闸门等待中：收到新 tick 即放行；超时则整品种跳过；期间不碰任何历史调用
+   if(g_wait_tick)
+   {
+      string wsym = g_syms[g_sym_i];
+      long lt = LastTickMs(wsym);
+      if(lt > 0 && lt != g_tick_base)
+      {
+         g_wait_tick = false;             // 品种有报价，进入正常探测/下载
+         PrintFormat("[%s] 已收到新 tick，开始下载", wsym);
+      }
+      else if(TimeLocal() >= g_tick_dead)
+      {
+         PrintFormat("[%s] 超过 %d 秒无新 tick（无报价，历史多半不可用），跳过该品种全部周期",
+                     wsym, TickTimeoutSec);
+         SkipSymbol();
+         return;
+      }
+      return;                             // 等待窗口内，本 tick 不处理历史
    }
 
    //--- 探测阶段：本品种×周期缓存已触底 → 直接移到下一组合，不重复下载

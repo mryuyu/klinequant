@@ -370,6 +370,19 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 #draw-style-modal input.draw-color-custom { width:34px; height:22px; padding:0; border:1px solid var(--border); border-radius:4px; background:none; cursor:pointer; flex:none; }
 .draw-style-preview { margin-top:12px; height:26px; border-radius:6px; background:var(--bg-base); display:flex; align-items:center; overflow:hidden; }
 .draw-style-preview > div { width:100%; }
+/* 模版管理弹窗：已存模版列表（名称+摘要 / 应用 / 删除）+ 底部「另存当前配置」输入行 */
+.tpl-list { max-height:46vh; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding-right:4px; }
+.tpl-item { display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--bg-base); border:1px solid var(--border); border-radius:8px; }
+.tpl-info { flex:1; min-width:0; }
+.tpl-name { font-size:13px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tpl-sub { font-size:11px; color:var(--text-sub); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tpl-btn { flex:none; padding:4px 10px; border-radius:5px; border:1px solid var(--border); background:var(--bg-elevated); color:var(--text); font-size:12px; cursor:pointer; }
+.tpl-btn:hover { border-color:var(--accent); color:var(--accent); }
+.tpl-btn.del:hover { border-color:var(--down); color:var(--down); }
+.tpl-save-row { display:flex; gap:8px; margin-top:12px; }
+.tpl-save-row input { flex:1; min-width:0; }
+.tpl-save-row button { flex:none; padding:8px 16px; border-radius:6px; border:none; background:var(--accent); color:#0b0e14; font-weight:700; font-size:13px; cursor:pointer; }
+.tpl-empty { font-size:12px; color:var(--text-sub); text-align:center; padding:14px 0; }
 /* 斐波那契级别编辑器：比例两列排布（同 TV：比例+线色，行尾 × 删除），线宽/线型为整组全局设置置于列表上方；
    控件定宽 flex:none（比例输入框 flex:1 吃列宽）——弹窗全局 .modal input{width:100%} 曾把控件撑满，定宽后免疫 */
 #draw-style-modal .fib-wrap { max-height:332px; overflow-y:auto; padding-right:2px; }
@@ -658,6 +671,24 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
     </div>
   </div>
 
+  <!-- 模版管理弹窗（右键菜单「模版管理…」触发：保存/应用/删除图表模版，只含布局/指标/配色，不含品种周期与画线） -->
+  <div class="modal-mask" id="tpl-modal">
+    <div class="modal" style="width:360px">
+      <div class="sr-head" style="padding:0 0 14px">
+        <span class="sr-title">模版管理</span>
+        <button class="sr-close" id="tpl-close" title="关闭">✕</button>
+      </div>
+      <div class="tpl-list" id="tpl-list"></div>
+      <div class="tpl-save-row">
+        <input id="tpl-name" placeholder="模版名称（同名覆盖）" maxlength="24" autocomplete="off">
+        <button id="tpl-save">保存当前</button>
+      </div>
+      <div class="modal-btns">
+        <button class="m-cancel" id="tpl-cancel">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 品种搜索弹窗（顶栏品种按钮 / 右栏 ＋ 打开：市场分类页签 + 地区筛选） -->
   <div class="modal-mask" id="sr-modal">
     <div class="modal sr-modal">
@@ -684,7 +715,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
 
 <div class="ctx-menu" id="ctx-menu">
   <div class="ctx-row ctx-action" id="ctx-reset"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg><span>重置图表</span></div>
-  <div class="ctx-row ctx-action" id="ctx-save-layout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg><span>保存图表布局</span></div>
+  <div class="ctx-row ctx-action" id="ctx-template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5"/><path d="M12 12v9"/><path d="M12 12L4 7.5"/></svg><span>模版管理…</span></div>
   <div class="ctx-sep"></div>
   <div class="ctx-row"><span>首屏K线</span><input id="ctx-ps" class="ctx-input" type="number" min="100" max="30000" step="100"></div>
   <div class="ctx-row"><span>顶部</span><span class="ctx-field"><input id="ctx-mt" class="ctx-input" type="number" min="0" max="60" step="1"><em>%</em></span></div>
@@ -747,12 +778,16 @@ let tzShiftS = 8 * 3600;                 // 渲染实际应用的偏移秒（fmt
 try { const _m = localStorage.getItem('kq-tz-mode'); if (_m === 'bj' || _m === 'exch') tzMode = _m; } catch (e) {}
 function refreshTzShift() { tzShiftS = (tzMode === 'exch') ? exchTzS : 8 * 3600; }
 refreshTzShift();
-let firstScreenBars = 1000;     // 首屏 K 线数量（右键菜单可调，默认 1000，localStorage 持久化）
+let firstScreenBars = 1000;     // 首屏「加载/抓取」K 线根数（右键菜单可调，默认 1000，localStorage 持久化）；决定拉取量与左滑续载起点，可见根数另由 RESET_VIEW_BARS 决定
 const PRELOAD_PAGE_SIZE = 5000; // 左滑按需加载页大小（后端已支持大页；源插件内部分页）
-let curRightOffset = 20;        // 图表右侧预留空 K 线数：可调，默认 20
+/* 系统默认视图（与「重置图表」同一出厂值）：首次加载铺 RESET_VIEW_BARS 根 + 右侧留白 RESET_RIGHT_OFFSET 根；
+   切换品种/周期保持当前缩放（见 finalizeLoad 非首屏分支），模版不保存缩放（可见根数）。 */
+const RESET_VIEW_BARS = 300;      // 系统默认：可见 K 线根数（缩放比例）
+const RESET_RIGHT_OFFSET = 21;    // 系统默认：右侧留白根数
+let curRightOffset = RESET_RIGHT_OFFSET;   // 图表右侧预留空 K 线数：可调，默认取系统默认 21（savedLayout.rightOffset 存在则覆盖）
 let scaleTopPct = 10;           // 主图上方留白 %（scaleMargins.top）：右键菜单可调，持久化，默认 10
 let scaleBottomPct = 22;        // 主图下方留白 %（scaleMargins.bottom，成交量显示时）：隐藏成交量时收敛到 ≤5%
-const SPAN_FLOOR = 10;          // 切视图保持跨度的下限：小于此值视为异常残留（残页加载/极缩误触），回退默认首屏根数
+const SPAN_FLOOR = 10;          // 切视图保持跨度的下限：小于此值视为异常残留（残页加载/极缩误触），回退系统默认可见根数
 let showVol = true;             // 成交量显示开关（右键菜单切换，持久化）
 let showPriceLine = true;       // 最新价格线显示开关（右键菜单切换，持久化）
 let priceLineAuto = true;       // 价格线颜色随涨跌自动着色（关则用 priceLineColor 固定色）
@@ -886,27 +921,6 @@ function saveLayout() {
       scaleBottom: scaleBottomPct,
     }));
   } catch (e) {}
-}
-/* 图表布局快照（右键「保存图表布局」显式保存、「重置图表」优先读回）：与自动持久化的 kq-layout-live
-   （面板尺寸/周期/品种/指标等）分离——快照只记 reset 需还原的视图态：当前缩放取景（可见逻辑区间宽度 span
-   + 右缘相对末根 K 线的偏移 toOff）与各窗格像素高 paneH。toOff/span 相对末根记录，新增 K 线后还原仍右对齐 */
-const LS_SNAPSHOT = 'kq-chart-layout-snapshot';
-function saveChartLayoutSnapshot() {
-  try {
-    const lvr = chart.timeScale().getVisibleLogicalRange();
-    const snap = {};
-    /* 仅当每个窗格都为正高时才记录 paneH：未渲染/hidden 态 getHeight 会回 [主高,0,0]（副图报 0），
-       一旦存下会让「重置图表」把副图压成 2px 细条。此时省略 paneH，reset 只还原取景、窗格高保持不动——
-       宁可不还原也不还原错值（折叠副图是 ~3px 正值、不受此 >0 判据误伤）。 */
-    const paneH = chart.panes().map(p => p.getHeight());
-    if (paneH.length && paneH.every(h => Number.isFinite(h) && h > 0)) snap.paneH = paneH;
-    if (lvr && lvr.to - lvr.from > 0) { snap.span = lvr.to - lvr.from; snap.toOff = lvr.to - (klines.length - 1); }
-    localStorage.setItem(LS_SNAPSHOT, JSON.stringify(snap));
-    return true;
-  } catch (e) { return false; }
-}
-function loadChartLayoutSnapshot() {
-  try { return JSON.parse(localStorage.getItem(LS_SNAPSHOT) || 'null'); } catch (e) { return null; }
 }
 /* 展示码（路由码→纯数字交易所码）：后端 catalog 的 code 字段下发，前端只缓存不推导。
    须在布局恢复块（模块执行期立即调用 dispOf）之前声明，否则 TDZ 中断整个脚本 */
@@ -2671,6 +2685,30 @@ function detectPrecision(bars) {
   }
   return Math.max(1, maxD);
 }
+/* v9.170 串周期污染防火墙：剔除与前一根保留 bar 间距不足一个周期的「子间隔 bar」。
+   历史实证（2026-10-29）：MT5 源故障窗口（10/09→10/16）1H bar 混入 4H 序列，合并链路
+   按时间戳只增/覆盖不删除，污染长期驻留前端数组与视图缓存——蜡烛缩成点、指标同区畸变。
+   口径用间距而非网格对齐：MT5 高周期 bar 时间戳带服务器时区偏移（实测 4h 档 ts%4h≡1h），
+   对齐会误杀；合法缺口（周末/DST）只产生更大间距、永不更小，故「间距<0.9×周期」唯一指向
+   混入/重复 bar。0.9 阈值兼容日线 DST 切换日 23h 的最小合法间距；月/季/年无稳定间距口径不过滤。 */
+function sanitizeSec(tf) {
+  const m = /^(\d+)([mhdw])$/.exec(tf || '');
+  return m ? (+m[1]) * { m: 60, h: 3600, d: 86400, w: 604800 }[m[2]] : 0;
+}
+function sanitizeKlines(arr, tf) {
+  const thr = sanitizeSec(tf) * 0.9;
+  if (!thr || !arr || arr.length < 2) return arr;
+  const out = [arr[0]];
+  let lastT = arr[0].time;
+  for (let i = 1; i < arr.length; i++) {
+    if (arr[i].time - lastT >= thr) { out.push(arr[i]); lastT = arr[i].time; }
+  }
+  /* 多数护栏：单遍剔除过半 ⇒ 序列自身即为子间隔（周期假设不成立/整页污染）不过滤——
+     此时「抽稀 1/4」会产出间距均匀但 OHLC 错误的假 bar，不如保留可见破绽 */
+  if ((arr.length - out.length) * 2 >= arr.length) return arr;
+  if (out.length < arr.length) console.warn(`sanitizeKlines[${tf}] 剔除 ${arr.length - out.length} 根子间隔 bar（串周期污染防火墙）`);
+  return out;
+}
 async function load() {
   loadGen++;                // 作废进行中的翻页请求
   markChartLoading();       // 开启首屏加载窗口：周期性辅助 REST 让路，不与此处的 klines/指标抢公网源串行代理
@@ -2692,7 +2730,7 @@ async function load() {
   const key = viewKey(curExchange, curSymbol, curTf);
   const cached = vcGet(key);
   if (cached && cached.klines && cached.klines.length) {
-    klines = cached.klines.slice();
+    klines = sanitizeKlines(cached.klines.slice(), curTf);   // v9.170 防火墙：缓存快照若带污染顺带愈合
     noMoreData = !!cached.noMoreData;
     activeIndCache = cached.ind || {};
     setSb(`◉ ${curSymbol} ${tfLabel(curTf)}（缓存秒开，后台对账…）`);
@@ -2725,7 +2763,7 @@ async function load() {
       await new Promise(r => setTimeout(r, 4000));
       if (gen !== loadGen) return;
     }
-    klines = firstPage ? firstPage.bars : [];
+    klines = firstPage ? sanitizeKlines(firstPage.bars, curTf) : [];   // v9.170 串周期污染防火墙
     if (!klines.length) { setSb('✕ 未返回 K 线数据（数据源可能暂不可用，稍后切换品种/周期重试）'); return; }
     if (klines.length < need) noMoreData = true;
     /* Y 轴/十字线精度：消费后端按订阅价格推导的精度（前端只渲染不推导），
@@ -2762,22 +2800,22 @@ function finalizeLoad(gen, prec) {
   reloadDrawingsForView();   // 切视图后重载该 exchange:symbol:tf 的画线
   if (!panesSized) { panesSized = true; setTimeout(() => { applyPaneHeights(); applyCollapsedPanes(); }, 200); }   // 首屏就绪后应用副图高度（等 autoSize 布局稳定；折叠窗格随即压细条）
   const isFirst = firstFit;
-  if (isFirst) {   // 首屏：默认间距铺首屏K线数量 + 右侧留白（与「重置图表」同一口径）；此后切换保持原比例 + 最新 K 线右对齐
+  if (isFirst) {   // 首屏：铺系统默认可见根数 RESET_VIEW_BARS + 右侧留白（与「重置图表」同一出厂视图）；此后切换保持原比例 + 最新 K 线右对齐
     firstFit = false;
     const to = klines.length - 1 + effRightOffset();
-    /* from 恒按 firstScreenBars 口径（不取 min(len)）：残页（源劣化只回几根）时旧写法
+    /* from 恒按 RESET_VIEW_BARS 口径（不取 min(len)）：残页（源劣化只回几根）时旧写法
        会让几根 K 线拉满全屏成「最大缩放」态，且该极小 span 会经切换保持污染后续视图 */
-    chart.timeScale().setVisibleLogicalRange({ from: klines.length - firstScreenBars - 0.5, to });
+    chart.timeScale().setVisibleLogicalRange({ from: klines.length - RESET_VIEW_BARS - 0.5, to });
   }
   initialLoaded = true;   // 首屏就绪，开始接收 WS 增量
   if (!isFirst) {   // 非首屏：显示根数不变（即缩放比例不变），最新 K 线对齐右侧留白
     const off = effRightOffset();
     const to = klines.length - 1 + off;
     /* span 下限护栏：极小 span 只来自残页/极缩残留，跨视图携带表现为「切周期后 K 线
-       缩到最大」（2026-10-18 实证）；此时回退默认首屏根数，正常缩放原样保持。
+       缩到最大」（2026-10-18 实证）；此时回退系统默认可见根数，正常缩放原样保持。
        v9.143 上限护栏：旧视图的放大态 span 超过新视图数据全量（切到少根视图）时携带过去
        表现为单侧大片空白的「布局打乱」；封顶「新数据全量 + 右侧留白」 */
-    const keep = Math.min(span >= SPAN_FLOOR ? span : firstScreenBars, klines.length - 1 + off + 1);
+    const keep = Math.min(span >= SPAN_FLOOR ? span : RESET_VIEW_BARS, klines.length - 1 + off + 1);
     chart.timeScale().setVisibleLogicalRange({ from: to - keep, to });
   }
   lastPrices[curSymbol] = klines[klines.length - 1].close;
@@ -2800,12 +2838,12 @@ async function reconcileTail(gen, key) {
        边缘、抹掉 finalizeLoad 刚设好的右侧留白（切缓存品种后留白丢失实证）。记缩放宽度
        span0，合并后按“新右缘 + 留白”重新对齐（缩放比例不变）。 */
     const lvr0 = chart.timeScale().getVisibleLogicalRange();
-    let span0 = lvr0 ? lvr0.to - lvr0.from : firstScreenBars;
-    if (!(span0 >= SPAN_FLOOR)) span0 = firstScreenBars;   // 同 finalizeLoad 下限护栏，愈合残留极小跨度
+    let span0 = lvr0 ? lvr0.to - lvr0.from : RESET_VIEW_BARS;
+    if (!(span0 >= SPAN_FLOOR)) span0 = RESET_VIEW_BARS;   // 同 finalizeLoad 下限护栏，愈合残留极小跨度
     if (fresh.bars[0].time > cachedLastT) {
       // 缓存过旧、与最新一屏之间存在缺口 → 整屏替换，指标联网重拉（清空防陈旧残留）
       activeIndCache = null; curIndData = {};
-      klines = fresh.bars;
+      klines = sanitizeKlines(fresh.bars, curTf);   // v9.170 防火墙
       noMoreData = fresh.bars.length < firstScreenBars;
       renderChart(true);
     } else {
@@ -2819,7 +2857,7 @@ async function reconcileTail(gen, key) {
         }
       }
       if (!changed) return;   // 缓存已最新：finalizeLoad 设的视图（含右侧留白）原样保留，不动视口
-      klines = [...map.values()].sort((a, b) => a.time - b.time);
+      klines = sanitizeKlines([...map.values()].sort((a, b) => a.time - b.time), curTf);   // v9.170：合并后顺带愈合缓存快照残留污染
       activeIndCache = null; curIndData = {};   // 指标联网刷新最新段（不清空、原子替换）
       renderChart(false);
     }
@@ -2854,6 +2892,7 @@ async function pullOlderPage(gen) {
   page = page.filter(k => k.time < anchorTime);                          // 防时间戳重叠
   if (!page.length) { noMoreData = true; return 0; }
   if (page.length < need) noMoreData = true;
+  page = sanitizeKlines(page, tf);   // v9.170 防火墙（noMoreData 按原始页长判定，防剔除收缩误判尽头）
   const vtr = chart.timeScale().getVisibleRange();   // 时间区间锚点：补根后按时间还原视图（比逻辑坐标平移稳，不受 prepend 后库内部左缘重定位影响）
   klines = page.concat(klines);
   renderChart();
@@ -2959,38 +2998,18 @@ tfCustomInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyCus
 document.addEventListener('pointerdown', e => {
   if (!tfCustomPop.contains(e.target) && e.target.id !== 'tf-custom-btn') tfCustomPop.style.display = 'none';
 }, true);
-/* 保存图表布局（右键菜单动作）：把当前取景（可见逻辑区间 span/toOff）与各窗格像素高写入快照；
-   「重置图表」优先读回该快照，未保存过则回退首屏默认。保存成功短暂回显菜单文案 */
-document.getElementById('ctx-save-layout').addEventListener('click', () => {
-  ctxMenu.classList.remove('show');
-  const ok = saveChartLayoutSnapshot();
-  const sp = document.querySelector('#ctx-save-layout span');
-  if (sp) { const t = sp.textContent; sp.textContent = ok ? '已保存布局' : '保存失败'; setTimeout(() => { sp.textContent = t; }, 1200); }
-});
-/* 重置图表（右键菜单动作）：优先读回「保存图表布局」的快照（取景+窗格高），无快照回退首屏默认视窗；
-   不用裸 fitContent()（它不尊重 curRightOffset/自定义根数），改用 setVisibleLogicalRange 确定性重建视窗 */
+/* 重置图表（右键菜单动作）：把缩放比例与右侧留白恢复到系统默认（固定出厂值 RESET_VIEW_BARS/RESET_RIGHT_OFFSET，
+   常量定义见顶部 firstScreenBars 附近），与用户「首屏K线/右侧留白」自定义设置及模版均无关
+   （旧「保存图表布局」快照机制已移除，v9.165）。不用裸 fitContent()（它不尊重右侧留白），
+   改用 setVisibleLogicalRange 确定性重建视窗。 */
 document.getElementById('ctx-reset').addEventListener('click', () => {
   ctxMenu.classList.remove('show');
   if (!klines.length) return;
-  const snap = loadChartLayoutSnapshot();
-  if (snap && snap.span > 0) {
-    /* 有快照：span/toOff 相对末根 K 线记录，新增 K 线后仍右对齐；窗格高按快照比例还原。
-       v9.143：toOff/span 同 finalizeLoad 口径钳制——快照记于多根视图、读回于少根视图时防空白反客为主 */
-    const toOff = clampRightOffset(typeof snap.toOff === 'number' ? snap.toOff : curRightOffset);
-    const span = Math.min(snap.span, klines.length - 1 + toOff + 1);
-    const to = klines.length - 1 + toOff;
-    chart.timeScale().setVisibleLogicalRange({ from: to - span, to });
-    if (Array.isArray(snap.paneH) && snap.paneH.length) applyPaneStretch((i, total) => {
-      const h = snap.paneH[i];
-      if (Number.isFinite(h) && h > 0) return h;   // 健康快照：原样按快照高还原
-      /* 治愈旧污染快照（本次修复前存下的 [926,0,0]）：0/无效高不再走 ?? （它不拦 0）而被 setStretchFactor(max(1,0))=1 压成细条——
-         主图回退到「总高减各副图默认高」的余额（同 applyPaneHeights 口径），副图回退默认高 SUB_PANE_H */
-      return i === 0 ? Math.max(60, total - (snap.paneH.length - 1) * SUB_PANE_H) : SUB_PANE_H;
-    });
-  } else {
-    const to = klines.length - 1 + effRightOffset();
-    chart.timeScale().setVisibleLogicalRange({ from: klines.length - firstScreenBars - 0.5, to });   // 与首屏同口径（残页留左空白不拉满）
-  }
+  curRightOffset = RESET_RIGHT_OFFSET;   // 右侧留白回系统默认（同步持久化，菜单下次打开显示 21）
+  chart.timeScale().applyOptions({ rightOffset: effRightOffset() });
+  const to = klines.length - 1 + effRightOffset();
+  chart.timeScale().setVisibleLogicalRange({ from: klines.length - RESET_VIEW_BARS - 0.5, to });   // 缩放回默认可见根数（残页留左空白不拉满）
+  saveLayout();
   /* 副图价格轴竖向缩放复位：拖拽价格轴会关 autoScale 并写死固定区间，之后无法自回原比例；
      重置时逐副图恢复自适应（与 lwc 双击价格轴复位同口径：autoScale:true）；主图价格轴/折叠/最大化不动 */
   for (const inst of indInstances) {
@@ -3059,11 +3078,11 @@ document.getElementById('chart').addEventListener('contextmenu', e => {
   swSet(document.getElementById('ctx-pl-auto'), priceLineAuto);
   document.getElementById('ctx-plc').value = priceLineColor;
   ctxMenu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
-  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 350) + 'px';   // 底部钳制随新增「最新价格线」两行下调，避免菜单溢出视口
+  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 350) + 'px';   // 底部钳制随「模版管理」行调入/「保存图表布局」行移除调整，避免菜单溢出视口
   ctxMenu.classList.add('show');
 });
 document.addEventListener('click', e => { if (!ctxMenu.contains(e.target)) ctxMenu.classList.remove('show'); });
-window.addEventListener('keydown', e => { if (e.key === 'Escape') { ctxMenu.classList.remove('show'); indModal.classList.remove('show'); indPicker.classList.remove('show'); } });
+window.addEventListener('keydown', e => { if (e.key === 'Escape') { ctxMenu.classList.remove('show'); indModal.classList.remove('show'); indPicker.classList.remove('show'); tplModal.classList.remove('show'); } });
 document.getElementById('ctx-vol').addEventListener('click', () => {
   showVol = swToggle(document.getElementById('ctx-vol'));
   applyVolVisibility();
@@ -3125,6 +3144,191 @@ ctxPs.addEventListener('change', () => {
   firstFit = true;   // 变更首屏根数 = 重置为新的初始视图（而非沿用旧缩放比例）
   load();
 });
+
+/* ═══ 图表模版（右键「模版管理…」）：保存/应用/删除布局+指标+配色组合。
+   持久化到后端文件（GET/PUT /api/chart-templates → data/state/chart_templates.json），
+   取代旧的浏览器 localStorage（重装浏览器/换设备即丢失）。前端持内存镜像 tplCache，
+   弹窗打开时拉取，保存/删除后提交完整列表（服务端整体覆盖，语义同旧 localStorage）。
+   只收录与「当前看什么」无关的配置：指标实例列表 indLayout（含参数/线条样式 styleUI/隐藏 off/折叠 collapsed）、
+   K 线涨跌配色、最新价格线、成交量显隐、上下留白、右侧留白；
+   不收录：品种/周期/交易所（属于视图选择）、首屏 K 线数（数据量偏好随 kq-layout-live 自动持久化）、
+   画线（按品种存储）、缩放取景/窗格像素高快照（原「保存图表布局」已移除，「重置图表」恒回首屏默认视窗）。
+   fieldHidden（逐线/柱隐藏）与刷新恢复同口径：仅会话内有效，不入模版。 ═══ */
+const TPL_API = `${API}/api/chart-templates`;
+const LS_TPL = 'kq-templates';   // 旧 localStorage 键：仅用于一次性迁移到后端
+const tplModal = document.getElementById('tpl-modal');
+let tplCache = [];               // 后端模版数组的内存镜像（renderTplList 同步渲染源）
+let tplMigrated = false;         // 旧 localStorage 迁移只做一次
+/* 拉取后端模版；返回 null 表示后端不可达（区别于空数组） */
+async function fetchTemplates() {
+  try { const j = await (await fetch(TPL_API)).json(); return Array.isArray(j.templates) ? j.templates : []; }
+  catch (e) { return null; }
+}
+/* 整体覆盖写入后端；返回是否成功 */
+async function persistTemplates(list) {
+  try {
+    const r = await fetch(TPL_API, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ templates: list }) });
+    return r.ok;
+  } catch (e) { return false; }
+}
+/* 刷新镜像：拉后端；首次若后端为空且旧 localStorage 有数据则迁移上云（一次性，迁移后清本地键） */
+async function refreshTemplates() {
+  let list = await fetchTemplates();
+  if (list === null) return false;   // 后端不可达
+  if (!tplMigrated) {
+    tplMigrated = true;
+    if (!list.length) {
+      try {
+        const old = JSON.parse(localStorage.getItem(LS_TPL) || '[]');
+        if (Array.isArray(old) && old.length && await persistTemplates(old)) { list = old; }
+      } catch (e) {}
+    }
+    try { localStorage.removeItem(LS_TPL); } catch (e) {}   // 无论迁移与否，旧键作废（后端已权威）
+  }
+  tplCache = list;
+  return true;
+}
+/* 采集当前配置为模版数据（indLayout 深拷贝过 JSON，fieldHidden 显式置 null 不携带）；
+   画线全量打包（v9.169）：drawings 按品种桶深拷贝并剔除 __xy 等运行时缓存（同 saveDrawings 口径），
+   drawPref 样式偏好 + fibLevels 自定义级别模板一并收录——各归各品种，应用时坐标不错位 */
+function currentTemplateData() {
+  return {
+    indLayout: indLayout.map(x => x.type === 'custom'
+      ? { type: 'custom', name: x.name, params: { ...x.params }, styleUI: x.styleUI ?? null, off: !!x.off, collapsed: !!x.collapsed }
+      : { type: x.type, params: { ...x.params }, styleUI: x.styleUI ?? null, off: !!x.off, collapsed: !!x.collapsed }),
+    colors: { up: CS.up, down: CS.down },
+    showVol, showPriceLine, priceLineAuto, priceLineColor,
+    scaleTop: scaleTopPct, scaleBottom: scaleBottomPct,
+    rightOffset: curRightOffset,
+    drawings: JSON.parse(JSON.stringify(drawingsByKey, (k, v) => k.startsWith('__') ? undefined : v)),
+    drawPref: JSON.parse(JSON.stringify(drawPref)),
+    fibLevels: fibSavedLevels(),
+  };
+}
+/* 模版 indLayout → 运行时条目：与刷新恢复（savedLayout.indLayout 映射）同口径归一化；
+   未知类型（后端已下线的 custom 指标）整份拒绝应用，宁可不应用也不半应用 */
+function tplNormIndLayout(arr) {
+  if (!Array.isArray(arr) || !arr.every(x => IND_CATALOG[x.type] || (x.type === 'custom' && x.name))) return null;
+  return arr.map(x => x.type === 'custom'
+    ? { type: 'custom', name: x.name, params: { ...x.params }, styleUI: x.styleUI ?? null, fieldHidden: null, off: !!x.off, collapsed: !!x.collapsed }
+    : { type: x.type, params: { ...IND_CATALOG[x.type].defaults, ...x.params }, styleUI: x.styleUI ?? null, fieldHidden: null, off: !!x.off, collapsed: !!x.collapsed });
+}
+function applyTemplate(d) {
+  const il = tplNormIndLayout(d && d.indLayout);
+  if (!il) return false;
+  indLayout.length = 0; indLayout.push(...il);   // 保持数组引用不变（saveLayout/各消费方持同一引用）
+  const c = d.colors;
+  if (c && HEX6.test(c.up || '') && HEX6.test(c.down || '')) applyKlineColors(c.up, c.down);   // 全局改色+重绘+持久化，右键菜单色块同步
+  if (typeof d.showVol === 'boolean' && d.showVol !== showVol) { showVol = d.showVol; applyVolVisibility(); }
+  if (typeof d.showPriceLine === 'boolean') showPriceLine = d.showPriceLine;
+  if (typeof d.priceLineAuto === 'boolean') priceLineAuto = d.priceLineAuto;
+  if (typeof d.priceLineColor === 'string') priceLineColor = d.priceLineColor;
+  syncPriceLine(); updatePriceTag();
+  if (typeof d.scaleTop === 'number') scaleTopPct = Math.min(60, Math.max(0, d.scaleTop));
+  if (typeof d.scaleBottom === 'number') scaleBottomPct = Math.min(60, Math.max(0, d.scaleBottom));
+  applyScaleMargins();
+  if (typeof d.rightOffset === 'number') {
+    curRightOffset = Math.min(100, Math.max(0, d.rightOffset));
+    chart.timeScale().applyOptions({ rightOffset: effRightOffset() });
+  }
+  /* 画线全量恢复（覆盖语义，v9.169）：模版 drawings 按品种桶整体替换，每条画线回到自己的品种
+     （坐标绑定绝对 time/price 故不错位）；补齐 id/tfAll 防旧存档，落 localStorage 后重载当前品种桶重绘 */
+  if (d.drawings && typeof d.drawings === 'object') {
+    const nb = {};
+    for (const k of Object.keys(d.drawings)) {
+      const arr = d.drawings[k];
+      if (!Array.isArray(arr)) continue;
+      nb[k] = arr.filter(sh => sh && typeof sh === 'object').map(sh => {
+        if (!sh.id) sh.id = genDrawId();
+        if (typeof sh.tfAll !== 'boolean') sh.tfAll = true;
+        return sh;
+      });
+    }
+    drawingsByKey = nb; saveDrawings(); reloadDrawingsForView();
+  }
+  /* 画线样式偏好恢复：默认样式 + 按工具记忆样式 + 磁吸/连续绘制开关（缺字段回落出厂，防旧模版 undefined） */
+  if (d.drawPref && typeof d.drawPref === 'object') {
+    const p = d.drawPref;
+    drawPref.defaultStyle = Object.assign({ color: DRAW_COLOR, lineWidth: 1, lineStyle: 0 }, p.defaultStyle);
+    if (typeof p.magnetOn === 'boolean') drawPref.magnetOn = p.magnetOn;
+    if (typeof p.continuousDraw === 'boolean') drawPref.continuousDraw = p.continuousDraw;
+    drawPref.toolStyles = (p.toolStyles && typeof p.toolStyles === 'object') ? p.toolStyles : {};
+    saveDrawPref(); syncToolUI();
+  }
+  if (Array.isArray(d.fibLevels) && d.fibLevels.length) saveFibLevels(d.fibLevels);   // fib 级别模板（仅有自定义时收录/恢复）
+  /* 指标集合变更 → 视图缓存里的旧指标序列作废（subKey 随参数/样式变），清空转联网重拉 */
+  viewCache.clear(); activeIndCache = null; curIndData = {};
+  rebuildIndicators();
+  saveLayout();
+  return true;
+}
+/* 模版摘要行：指标数 + K 线涨跌色小色块 + 画线条数（跨所有品种桶合计） */
+function tplSummary(d) {
+  const n = Array.isArray(d && d.indLayout) ? d.indLayout.length : 0;
+  const dn = (d && d.drawings) ? Object.values(d.drawings).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0) : 0;
+  return `${n} 个指标${d && d.colors ? ` · K线 ${d.colors.up}/${d.colors.down}` : ''}${dn ? ` · ${dn} 条画线` : ''}`;
+}
+/* 渲染内存镜像 tplCache（同步）；offline=true 时提示后端不可达 */
+function renderTplList(offline) {
+  const box = document.getElementById('tpl-list');
+  box.innerHTML = '';
+  if (offline) { box.innerHTML = '<div class="tpl-empty">后端不可达，无法读写模版（请确认 gateway 已启动）</div>'; return; }
+  if (!tplCache.length) { box.innerHTML = '<div class="tpl-empty">暂无模版：在下方输入名称，点「保存当前」把当前布局/指标/配色存为模版</div>'; return; }
+  for (const t of tplCache) {
+    const item = document.createElement('div');
+    item.className = 'tpl-item';
+    const info = document.createElement('div');
+    info.className = 'tpl-info';
+    const nm = document.createElement('div');
+    nm.className = 'tpl-name';
+    nm.textContent = t.name;
+    const sub = document.createElement('div');
+    sub.className = 'tpl-sub';
+    sub.textContent = `${tplSummary(t.data)}${t.ts ? ` · ${new Date(t.ts).toLocaleDateString('zh-CN')}` : ''}`;
+    info.append(nm, sub);
+    const apply = document.createElement('button');
+    apply.className = 'tpl-btn';
+    apply.textContent = '应用';
+    apply.addEventListener('click', () => {
+      const ok = applyTemplate(t.data);
+      apply.textContent = ok ? '已应用' : '应用失败';
+      setTimeout(() => { apply.textContent = '应用'; }, 1200);
+    });
+    const del = document.createElement('button');
+    del.className = 'tpl-btn del';
+    del.textContent = '删除';
+    del.addEventListener('click', async () => {
+      const next = tplCache.filter(x => x.name !== t.name);
+      if (await persistTemplates(next)) { tplCache = next; renderTplList(); }
+      else { del.textContent = '删除失败'; setTimeout(() => { del.textContent = '删除'; }, 1200); }
+    });
+    item.append(info, apply, del);
+    box.appendChild(item);
+  }
+}
+document.getElementById('ctx-template').addEventListener('click', async () => {
+  ctxMenu.classList.remove('show');
+  tplModal.classList.add('show');
+  renderTplList();   // 先用现有镜像占位（首次为空态），拉取回来后刷新
+  const ok = await refreshTemplates();
+  renderTplList(!ok);
+  setTimeout(() => document.getElementById('tpl-name').focus(), 0);
+});
+document.getElementById('tpl-save').addEventListener('click', async () => {
+  const inp = document.getElementById('tpl-name');
+  const name = inp.value.trim();
+  if (!name) { inp.focus(); return; }
+  const btn = document.getElementById('tpl-save');
+  btn.disabled = true;
+  const next = [{ name, ts: Date.now(), data: currentTemplateData() }, ...tplCache.filter(t => t.name !== name)];   // 同名覆盖
+  if (await persistTemplates(next)) { tplCache = next; inp.value = ''; renderTplList(); }
+  else { btn.textContent = '保存失败'; setTimeout(() => { btn.textContent = '保存当前'; }, 1200); }
+  btn.disabled = false;
+});
+document.getElementById('tpl-name').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('tpl-save').click(); });
+document.getElementById('tpl-close').addEventListener('click', () => tplModal.classList.remove('show'));
+document.getElementById('tpl-cancel').addEventListener('click', () => tplModal.classList.remove('show'));
+tplModal.addEventListener('click', e => { if (e.target === tplModal) tplModal.classList.remove('show'); });
 
 /* ═══ 指标参数调整弹窗（齿轮图标 → 参数表单 → 移除/取消/确认，基于实例 id） ═══ */
 const GEAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33 1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82 1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';
@@ -3923,7 +4127,12 @@ function applyBar(b) {
   const bar = { time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume };
   const last = klines[klines.length - 1];
   if (last && t === last.time) klines[klines.length - 1] = bar;
-  else if (!last || t > last.time) { klines.push(bar); }   // 按需加载：新根只追加不裁剪（已加载深度不受影响）
+  else if (!last || t > last.time) {
+    /* v9.170 防火墙：追加新根与末根间距须≥0.9×周期（子间隔=串周期污染推送）；同 bar 更新走上分支不受限 */
+    const sec = sanitizeSec(curTf);
+    if (last && sec && t - last.time < sec * 0.9) { console.warn(`applyBar 剔除子间隔推送: ${t}（末根 ${last.time}）`); return; }
+    klines.push(bar);   // 按需加载：新根只追加不裁剪（已加载深度不受影响）
+  }
   else return;
   candleSeries.update(bar);
   volumeSeries.update({ time: t, value: bar.volume, color: volColor(bar.close, bar.open) });

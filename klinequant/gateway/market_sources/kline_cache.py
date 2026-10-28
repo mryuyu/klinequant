@@ -60,7 +60,7 @@ class _Entry:
     last_tail_at: float = 0.0                        # 上次尾刷时刻(monotonic)；TTL 内跳过重复尾刷
 
 
-_cache: "OrderedDict[tuple, _Entry]" = OrderedDict()
+_cache: OrderedDict[tuple, _Entry] = OrderedDict()
 _locks: dict[tuple, asyncio.Lock] = {}
 
 
@@ -134,6 +134,35 @@ def _merge_tail(entry: _Entry, page: list[dict]) -> None:
     entry.bars.sort(key=lambda b: int(b["timestamp"]))
 
 
+def _filter_subinterval(bars: list[dict], interval_ms: int | None) -> list[dict]:
+    """v9.170 串周期污染防火墙：剔除与前一根保留 bar
+    间距 <0.9×interval 的 bar（混入的他周期/重复 bar）
+
+    口径用间距而非网格对齐：部分源（MT5）高周期 bar 时间戳带服务器时区偏移网格
+    （实测 4h 档 ts%4h≡1h），对齐会误杀；合法缺口（周末/DST）只产生更大间距、永不更小。
+    派生/月季年档 interval_ms=None 不过滤（无稳定间距口径）。
+    """
+    if not interval_ms or not bars:
+        return bars
+    thr = interval_ms * 0.9
+    out: list[dict] = []
+    last = None
+    for b in bars:
+        ts = int(b["timestamp"])
+        if last is None or ts - last >= thr:
+            out.append(b)
+            last = ts
+    # 多数护栏：单遍剔除过半 ⇒ 序列自身即为子间隔（周期假设不成立/整页污染）不过滤——
+    # 「抽稀」会产出间距均匀但 OHLC 错误的假 bar，不如保留可见破绽（合成时间戳单测亦由此豁免）
+    if (len(bars) - len(out)) * 2 >= len(bars):
+        return bars
+    if len(out) < len(bars):
+        logger.warning(
+            f"kline sanitize dropped {len(bars) - len(out)} sub-interval bars (iv={interval_ms}ms)"
+        )
+    return out
+
+
 def _interval_ms(timeframe: str, source=None) -> int | None:
     """周期 → 单根跨度(ms)。实际走派生聚合的档返回 None（聚合窗口语义由派生层自管）；
     源原生直供的档（含格式可解析的 2h/4h 等，如币安）按原生跨度参与缺口自愈/尽头判定。"""
@@ -204,7 +233,9 @@ async def cached_klines(
 
         # 窗口含最新端时做尾部小额刷新（未收盘 bar 不陈旧）；首拉空缓存也走此路顺带建底。
         # 注意：exhausted 只表示“无更早数据”，最新端仍会变，不受它影响。
-        touches_latest = end_time is None or (bool(e.bars) and end_time >= int(e.bars[-1]["timestamp"]))
+        touches_latest = end_time is None or (
+            bool(e.bars) and end_time >= int(e.bars[-1]["timestamp"])
+        )
         # 尾刷 TTL：已有存量且距上次尾刷 < TTL 时跳过（冷启动无存量必拉，不受限）。
         # 收敛切换 burst 内 REST K 线 + 多个指标预热对同键的重复公网尾刷往返。
         skip_tail = bool(e.bars) and (time.monotonic() - e.last_tail_at) < _TAIL_REFRESH_TTL
@@ -243,7 +274,9 @@ async def cached_klines(
             try:
                 page = await _fetch_page(source, symbol, timeframe, take, anchor)
             except Exception as ex:
-                logger.warning(f"kline cache fill failed [{source.name}] {symbol}/{timeframe}: {ex}")
+                logger.warning(
+                    f"kline cache fill failed [{source.name}] {symbol}/{timeframe}: {ex}"
+                )
                 break   # 保留已有数据退回；不标尽头，源恢复后下次请求可继续补拉
             if not page:
                 e.exhausted = True
@@ -271,6 +304,9 @@ async def cached_klines(
             except Exception as ex:
                 logger.warning(f"gap repair skipped [{source.name}] {symbol}/{timeframe}: {ex}")
 
+        # v9.170 串周期污染防火墙：尾刷/前补/补洞合入后统一收口剔除子间隔 bar
+        # （顺带愈合存量污染缓存）
+        e.bars = _filter_subinterval(e.bars, interval_ms)
         out = [b for b in e.bars if end_time is None or int(b["timestamp"]) <= end_time]
         return out[-limit:]
 
