@@ -1044,21 +1044,26 @@ function backendSubs(inst) {
   return [];
 }
 function macdHistColor(v, prev, colors) { return histColor(v, prev, colors); }
-/* 序列中段空洞检测：返回缺失的 ms 时间戳（相邻点间隔 > 周期即洞）；上限 8 防异常序列爆算 */
+/* 序列中段空洞检测：返回缺失的 ms 时间戳（相邻点间隔 > 周期即洞）；上限 8 防异常序列爆算。
+   从最新端往前扫：增量漏放的真洞总在实时边缘，优先占用采集额度——旧版从最旧端扫，
+   采集上限会被远处（更旧）的合法休市停盘洞占满（XAUUSD 每日 21:00~21:45 停盘），
+   近端真洞反而进不了列表，配合下面的 some 判据即漏检 */
 function seriesMissingTs(data) {
   const barMs = tfDurSec(curTf) * 1000;
   const out = [];
-  for (let i = 0; i < data.length - 1 && out.length < 8; i++) {
+  for (let i = data.length - 2; i >= 0 && out.length < 8; i--) {
     const dt = data[i + 1].timestamp - data[i].timestamp;
-    if (dt > barMs) for (let t = data[i].timestamp + barMs; t < data[i + 1].timestamp && out.length < 8; t += barMs) out.push(t);
+    if (dt > barMs) for (let t = data[i + 1].timestamp - barMs; t > data[i].timestamp && out.length < 8; t -= barMs) out.push(t);
   }
   return out;
 }
-/* 空洞是否可自愈：缺失 ts 均已在 K 线中（非源侧真缺口）⇒ 后端序列陈旧，强制重预热可补 */
+/* 空洞是否可自愈：存在「缺失且已在 K 线中」的 ts ⇒ 后端序列陈旧漏放（非源侧真缺），refresh=1 重预热可补。
+   合法休市停盘洞不在 K 线中，不计入。旧版用 every（要求所有缺失点都在 K 线中）会被停盘洞整体否决，
+   致 XAUUSD 等有日内清算窗的品种的单 bar 真洞永不自愈（强刷也无效，2026-10-30 实证） */
 function gapHealable(missing) {
   if (!missing.length) return false;
   const kset = new Set(klines.map(k => k.time * 1000));
-  return missing.every(t => kset.has(t));
+  return missing.some(t => kset.has(t));
 }
 async function fetchIndSeries(indicator, params, gen) {
   const subKey = indSubKey(indicator, params);
