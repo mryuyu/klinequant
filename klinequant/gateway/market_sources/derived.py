@@ -207,8 +207,19 @@ def base_need(tf: str, limit: int, paging: bool = False) -> int:
 daily_need = base_need
 
 
+async def _fetch_base_direct(source, symbol: str, base_tf: str, limit: int, end_time: int | None):
+    """基础周期默认取数器：直连源插件（不经进程缓存）。
+
+    仅在 fetch_derived_klines 被独立调用（单测/无缓存上下文）时兜底；生产路径由
+    kline_cache._fetch_page 注入 cached_klines 作为 base_fetch，令基础 K 与 REST 行情、
+    指标预热共享存量（否则每个派生请求都冷拉一遍基础 K，公网源上极慢）。
+    """
+    return await source.fetch_klines(symbol, base_tf, limit=limit, end_time=end_time)
+
+
 async def fetch_derived_klines(
     source, symbol: str, tf: str, limit: int, end_time: int | None = None,
+    *, base_fetch=None,
 ) -> list[dict]:
     """派生周期历史 K 线：拉基础周期聚合（/klines 路由与指标预热共用入口）
 
@@ -216,7 +227,14 @@ async def fetch_derived_klines(
     （对基础 K 区间查询后聚合，桶标签 <= end_time 过滤）。
     基础 K 单批受封顶约束时内部自动续拉更早批次，直到凑满 limit 根或数据源见底，
     保证老品种月/季/年线一次请求即覆盖上市日（前端 noMoreData 语义不被首批封顶误导）。
+
+    base_fetch：基础 K 取数器，签名 (source, symbol, base_tf, limit, end_time) -> bars。
+    缓存层（kline_cache）注入 cached_klines，使基础 K 走进程级缓存并被 REST 行情与
+    多个指标预热共享——同一份基础 K 聚合出的桶数通常远超单次显示需求（如 20000 根 1m
+    可聚 ~238 个 84m 桶），故 K 线路由拉过一次后，指标预热加深即可零网络命中，
+    消除「派生周期指标各自冷拉基础 K 致 30s 超时不显示」。缺省 None 时直连源插件。
     """
+    fetch_base = base_fetch or _fetch_base_direct
     base_tf = base_tf_for(tf)
     intraday = base_tf == "1m"
     dailies: list[dict] = []
@@ -226,7 +244,7 @@ async def fetch_derived_klines(
         cap = FETCH_INTRADAY_CAP if intraday else FETCH_DAILY_CAP
         need = min(base_need(tf, limit, paging=True), cap * 4) if cursor is not None \
             else min(base_need(tf, limit), cap)
-        page = await source.fetch_klines(symbol, base_tf, limit=need, end_time=cursor)
+        page = await fetch_base(source, symbol, base_tf, need, cursor)
         if not page:
             break
         dailies = page + dailies

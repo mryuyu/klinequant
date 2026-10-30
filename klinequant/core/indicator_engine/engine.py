@@ -370,6 +370,17 @@ class IndicatorEngine:
 
         # 增量计算所有关联指标
         df = self._kline_cache[key]
+        # 近收盘判定（v9.172）：实时 forming bar 距收盘 ≤3s 时视同收盘评估 ZIGZAG 条件，
+        # 降低翻转滞后；仅作用于未收盘的实时 bar，历史/回测路径 is_closed=True 不受影响。
+        near_close = False
+        if not kline.is_closed:
+            try:
+                from klinequant.core.market_engine.normalizer import timeframe_to_ms
+                interval_ms = timeframe_to_ms(kline.timeframe)
+                remaining = (kline.timestamp + interval_ms) - int(time.time() * 1000)
+                near_close = 0 <= remaining <= 3000
+            except Exception:
+                near_close = False
         row = {
             "timestamp": kline.timestamp,
             "open": float(kline.open),
@@ -377,6 +388,7 @@ class IndicatorEngine:
             "low": float(kline.low),
             "close": float(kline.close),
             "volume": float(kline.volume),
+            "_near_close": near_close,
         }
         for indicator in self._indicators.get(key, []):
             if indicator.supports_incremental:

@@ -22,10 +22,16 @@
 
 增量语义对齐 IND-101 快照法：同 ts 重复推送（forming bar）先恢复快照再应用，
 幂等可重放；回测批量路径与实盘增量路径同一实现。
-forming bar（is_closed=False）与收盘 bar 同口径评估条件——与条件线 dirline 的
-forming 段变色时刻逐 tick 同步（v9.145 回退 v9.144 仅收盘口径：该口径与 forming
-段变色脱节，致「条件成立（已变色）却不绘段」）；盘内瞬翻瞬回由同 ts 快照法 +
-v9.142 修补链路同步回退，不留鬼腿。
+条件判定口径（v9.172）：翻转条件**仅在收盘 bar**（is_closed=True）或实时近收盘
+≤3s 窗（near_close=True，由引擎实时路径按 时间戳+周期时长−墙钟 计算注入）判定；
+未收盘 bar 无法确定条件是否成立，延续既有方向只跟踪 pending 极值、不判翻转——
+ZZ_LINE 可能因实时价看着变色，收盘未成立则由同 ts 快照法 + v9.142 修补链路回退，
+不留鬼腿。（此为 v9.145 forming 逐 tick 同口径评估的反转：旧口径盘内瞬翻产生
+不稳定极值，用户定稿改为收盘判定。）
+方向延续（v9.173）：反方向条件未成立的 bar——未收盘 forming / 坐标中间带（bull、
+bear 皆 False）/ 交叉间隙 / 走平——一律**延续既有方向** `_bullish` 继续跟踪 pending
+极值，不翻转也不冻结（ZLINE 同理，用户定稿「反方向条件未成立时延续原方向更新」，
+反转 v9.172 的坐标中间带冻结）；仅预热期尚未定向（`_bullish` 仍为 None）时冻结等待。
 """
 from __future__ import annotations
 
@@ -1160,7 +1166,8 @@ class ZigZagCore:
         self._snap: Optional[Any] = None
         # 范围搜索 bar 窗（idx, ts, high, low；仅 search_mode=range 维护）：翻转时回搜
         # [上一个 zz 点, 本 bar] 极值用；头部按最近确认点裁剪，界内即全部候选 bar
-        # （回搜窗恒为 [刚确认点 B, 翻转 bar A]，无范围参数，见 _flip）
+        # （回搜窗为 [刚确认点 B, 翻转 bar A]；B 非翻转 bar 且其反向极值不构成
+        # 突破结构尖峰时下界收紧为 B+1，见 _flip）
         self._win: Deque[Tuple[int, int, Any, Any]] = deque()
 
     # ─── 配置元信息 ───
@@ -1175,7 +1182,9 @@ class ZigZagCore:
 
     # ─── 增量推进 ───
 
-    def update_bar(self, bar: Dict[str, Any], is_closed: bool = True) -> None:
+    def update_bar(
+        self, bar: Dict[str, Any], is_closed: bool = True, near_close: bool = False
+    ) -> None:
         ts = int(bar["timestamp"])
         if self._last_ts is not None and ts < self._last_ts:
             return  # 乱序历史 bar：增量路径不处理
@@ -1196,22 +1205,36 @@ class ZigZagCore:
             else:
                 self._win.append((idx, ts, bar.get("high"), bar.get("low")))
 
-        # forming bar 与收盘 bar 同口径评估：与条件线 dirline forming 段变色逐 tick 同步
-        # （v9.145：v9.144 仅收盘口径致「ZLINE 已变色却不绘段」）；盘内瞬翻瞬回由
-        # 同 ts 快照法回退 + v9.142 修补链路达前端同步回退，不留鬼腿
+        # 交叉事件入队（时间窗修正的证据链）——每 bar 都入队，与旧行为一致
         tol = self.tolerance
-        bull = self._bull_tree.evaluate(self._series, tol)
-        bear = self._bear_tree.evaluate(self._series, tol) if self._bear_tree is not None else None
-
-        # 交叉事件入队（时间窗修正的证据链）
         for ev in self._series.detect_crosses(ts, tol):
             self._events.append(ev)
 
-        state = self._decide(bull, bear, idx)
+        # 条件判定仅在收盘 bar（或实时近收盘 ≤3s 窗，near_close 由引擎实时路径传入）
+        # 进行：未收盘无法确定条件是否成立——ZZ_LINE 可能因实时价变化看着变色，但收盘
+        # 时未成立会回退（v9.172 反转 v9.145 的 forming 逐 tick 同口径评估）。
+        # 未收盘 bar 延续既有方向 _bullish，只跟踪 pending 极值、不判翻转（Q-B）。
         high = bar.get("high")
         low = bar.get("low")
+        evaluable = bool(is_closed) or bool(near_close)
+        if evaluable:
+            bull = self._bull_tree.evaluate(self._series, tol)
+            bear = (
+                self._bear_tree.evaluate(self._series, tol)
+                if self._bear_tree is not None else None
+            )
+            state = self._decide(bull, bear, idx)
+        else:
+            state = None  # 未收盘：条件不判定（下方统一回退延续既有方向）
+
         if state is None:
-            return  # 预热未定 / 无翻转：状态保持
+            # 反方向条件未成立（未收盘 forming / 坐标中间带 bull、bear 皆 False /
+            # 交叉间隙 / 走平）→ 延续既有方向跟踪 pending 极值，不翻转不冻结
+            # （ZLINE 原理，v9.173 用户定稿：「反方向条件未成立时延续原方向更新」）；
+            # 预热期 _bullish 仍为 None（尚未定向）→ 保持 None → 下方 return 冻结。
+            state = self._bullish
+        if state is None:
+            return  # 预热未定：尚未建立方向，无从延续
         if self._bullish is None:
             self._set_initial(state, idx, ts, high, low)
         elif state != self._bullish:
@@ -1276,13 +1299,15 @@ class ZigZagCore:
         # 退化 leg（1 根 bar 即再翻转）允许与刚确认点同 idx，形成垂直段，
         # 两极值均为真实价格；同向不可能相邻（翻转必先确认反向 pending）
         if self.search_mode == "range" and self._pivots:
-            # 范围搜索（用户定稿算法 v9.155）：翻转 bar=A，刚确认极值点=B，
-            # 回搜窗恒为 [B, A]（区间固定，无需任何范围参数）：取窗内本方向
-            # 极值播种新 pending（极值下标可早于条件成立 bar、不早于 B）；
-            # 窗内无有效极值（high/low 全 None）回退本 bar 极值播种，与条件搜索同构。
-            # 含 B 本 bar 可捕捉大振幅 bar 的同 bar 反向尖峰（用户确认接受偶发
-            # 同 bar 垂直腿）；但若该 bar 已承载前一反向枢轴（垂直腿已成立），
-            # 再纳入会把同 bar 低/高往返堆叠成 L-H-L 三连针 → 下界取次 bar。
+            # 范围搜索（用户定义）：上一个极值点=A（conf，刚确认枢轴）、条件成立 bar=B
+            # （idx，翻转 bar），在 [A, B] **闭区间**（含 A 含 B）搜一次本方向极值
+            # （多头→最高 High / 空头→最低 Low）播种新 pending。因条件成立（B）常滞后
+            # 于极值真实发生时刻，故回搜补偿滞后；窗内无有效极值（high/low 全 None）
+            # 回退本 bar 极值播种，与条件搜索同构。
+            # 极值**允许落在 A 同一根 bar**（同 bar 垂直腿是合法结果，用户明确接受），
+            # 故 v9.171 的“突破 pivots[-2] 才保留”精准守卫已移除，回归纯 [A,B] 取最值。
+            # 仅保留往返守卫：A 本身已是垂直腿（pivots[-2] 与 A 同 bar）时下界取 A+1，
+            # 避免同一 bar 堆叠第三个枢轴（L-H-L 三连针退化）。
             conf = self._pivots[-1]
             lo = conf.index
             if len(self._pivots) >= 2 and self._pivots[-2].index == conf.index:

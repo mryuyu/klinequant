@@ -167,6 +167,13 @@ body { background:var(--bg-base); color:var(--text); font-family:var(--font-ui);
 /* 图例数值悬停提示浮层：图例行 pointer-events:none（保十字光标穿透）致原生 title 失效，用自定义浮层恢复“悬停显示参数名” */
 .lg-tip { position:fixed; z-index:9999; display:none; padding:4px 8px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:4px; font-size:11px; color:var(--text); white-space:nowrap; pointer-events:none; box-shadow:0 2px 10px rgba(0,0,0,0.35); }
 .lg-tip.show { display:block; }
+/* custom 指标未注册提示条：indLayout 里的指标名在后端目录查不到时给出可见反馈（不再静默画空线），自动收起 */
+.ind-unreg-bar { position:fixed; left:calc(50% - 28px); bottom:calc(var(--pos-h, 150px) + 14px); transform:translateX(-50%); z-index:9000; display:none; align-items:center; gap:8px; max-width:min(640px, 70vw); padding:6px 12px; background:var(--bg-elevated); border:1px solid var(--warning); border-radius:6px; font-size:12px; color:var(--text); box-shadow:0 4px 16px rgba(0,0,0,0.4); }
+.ind-unreg-bar.show { display:flex; }
+.ind-unreg-bar .iu-icon { color:var(--warning); flex:none; }
+.ind-unreg-bar .iu-text { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ind-unreg-bar .iu-close { margin-left:auto; flex:none; color:var(--text-sub); cursor:pointer; font-size:14px; line-height:1; }
+.ind-unreg-bar .iu-close:hover { color:var(--text); }
 /* 指标弹窗：线条样式区（色板 + 线型选择，逐线配置） */
 .ind-style-sec { margin-top:2px; }
 .ind-style-row { display:flex; align-items:center; gap:8px; padding:4px 0; flex-wrap:wrap; }
@@ -544,6 +551,7 @@ td { padding:7px 12px; border-top:1px solid var(--border); }
           <div id="lg-main-items"></div>
         </div>
         <div id="ind-legends"></div>
+        <div class="ind-unreg-bar" id="ind-unreg-bar"><span class="iu-icon">&#9888;</span><span class="iu-text"></span><span class="iu-close" title="关闭">&times;</span></div>
         <div class="price-tag" id="price-tag"><span class="pt-price"></span><span class="pt-cd"></span></div>
         <div class="time-tag" id="time-tag"></div>
         <button class="tz-btn" id="tz-btn" title="时区：北京时间 UTC+8（点击切换）">UTC+8</button>
@@ -971,10 +979,12 @@ function fieldMax(f) { return f.max === 'kline' ? Math.max(klines.length, 2) : f
 
 /* ═══ IND-110：后端 def 式指标目录（/api/indicator/meta 驱动，后端注册新指标前端自动发现） ═══ */
 let BACKEND_META = {};   // name -> {min_periods, display_meta, default_params}
+let backendMetaOk = false;   // 目录是否成功拉到：拉失败时不做「未注册」过滤，防断连把 custom 指标全判成未注册
 async function fetchBackendMeta() {
   try {
     const json = await (await fetch(`${API}/api/indicator/meta`)).json();
     for (const it of json.indicators || []) BACKEND_META[it.name] = it;
+    if (Array.isArray(json.indicators)) backendMetaOk = true;   // 空数组也算成功（后端确实没注册 custom 指标）
   } catch (e) { /* 后端未连时自定义指标组为空，内置指标占位等待 */ }
 }
 /* 已有专属渲染通路的内置指标（计算统一走后端引擎，不列入自定义组） */
@@ -994,6 +1004,29 @@ function customCatalog() {
   }
   return out;
 }
+/* custom 条目是否仍在后端目录里（注册名由指标文件内 @pyindicator(name=) 决定，与文件名无关）：
+   目录拉到后查不到 = 指标已改名/下线，旧存档的名字取不到数（后端列名按 {name}_{field} 拼），
+   走 catOf 兜底只会画一条无数据的空线，故构建前摘除并提示；目录未拉到（后端未连）时不过滤 */
+function customRegistered(name) { return !backendMetaOk || !!BACKEND_META[name]; }
+/* 未注册提示条：同一批名字每次页面会话只提示一次（rebuildIndicators 在增删/改参/应用模板时反复走） */
+const unregWarned = new Set();
+let unregBarTimer = null;
+function warnUnregistered(names) {
+  const fresh = [...new Set(names)].filter(n => !unregWarned.has(n));
+  if (!fresh.length) return;
+  fresh.forEach(n => unregWarned.add(n));
+  const bar = document.getElementById('ind-unreg-bar');
+  if (!bar) return;
+  bar.querySelector('.iu-text').textContent =
+    `指标未在后端注册，已跳过：${fresh.join('、')}（布局存档保留，指标重新注册后自动回来）`;
+  bar.classList.add('show');
+  clearTimeout(unregBarTimer);
+  unregBarTimer = setTimeout(() => bar.classList.remove('show'), 8000);
+}
+document.getElementById('ind-unreg-bar')?.querySelector('.iu-close')?.addEventListener('click', () => {
+  clearTimeout(unregBarTimer);
+  document.getElementById('ind-unreg-bar').classList.remove('show');
+});
 /* 默认布局（与旧版固定集合一致） */
 const IND_LAYOUT_DEFAULT = [
   { type: 'ma',   params: { short: 7, long: 25 } },
@@ -1510,6 +1543,8 @@ class DirLinePrimitive {
     this._series = null; this._chart = null; this._invalidate = null; this._drawErrLogged = false;
     this._marks = null;   // v9.157 同 bar 垂直腿标记表（time -> {h,l}）：draw 时同 x 插第二点补垂直段
     this._visible = true;   // 同 StepLinePrimitive：primitive 自绘不受 series.visible 控制
+    this._showInfo = false;   // 极值点信息标签显隐（ZIGZAG 专属，默认关；见 setShowInfo）
+    this._infoCount = 1;   // 极值点信息标签显示数量（默认 1：最近 1 高 H1 + 1 低 L1；见 setInfoCount）
     this._renderer = {
       draw: target => {
         try { this._draw(target); }
@@ -1523,6 +1558,8 @@ class DirLinePrimitive {
   applyOptions(opts) { Object.assign(this._opts, opts); if (this._invalidate) this._invalidate(); }
   setVisible(v) { this._visible = !!v; if (this._invalidate) this._invalidate(); }
   setMarks(m) { this._marks = m || null; if (this._invalidate) this._invalidate(); }
+  setShowInfo(v) { this._showInfo = !!v; if (this._invalidate) this._invalidate(); }   // 极值点信息标签开关（默认关）
+  setInfoCount(n) { const v = parseInt(n, 10); this._infoCount = (isFinite(v) && v >= 1) ? Math.min(99, v) : 1; if (this._invalidate) this._invalidate(); }   // 显示数量（最近 N 高 + N 低，默认 1）
   paneViews() { return this._paneViews; }
   _draw(target) {
     const s = this._series;
@@ -1544,6 +1581,8 @@ class DirLinePrimitive {
     target.useBitmapCoordinateSpace(scope => {
       const ctx = scope.context, hpr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
       const half = Math.max(1, Math.floor(hpr)) % 2 / 2;   // 奇数像素线宽半像素对齐
+      const W = scope.bitmapSize.width, H = scope.bitmapSize.height;   // bitmap 坐标系画布尺寸（信息卡越界翻转用）
+      const pts = this._showInfo ? [] : null;   // 开启信息标签时收集折线顶点（含垂直腿第二点），拐点即极值点
       ctx.save();
       ctx.lineWidth = Math.max(1, Math.floor(this._opts.lineWidth * hpr));
       ctx.setLineDash(stepDash(this._opts.lineStyle, hpr));
@@ -1555,7 +1594,7 @@ class DirLinePrimitive {
         const pt = data[i];
         const x = ts.timeToCoordinate(pt.time);
         const y = pt.value == null ? null : s.priceToCoordinate(pt.value);
-        if (x == null || y == null) { flush(); prev = null; continue; }
+        if (x == null || y == null) { flush(); prev = null; if (pts) pts.push(null); continue; }
         const xr = Math.round(x * hpr) + half, yr = Math.round(y * vpr) + half;
         if (prev) {
           const col = this._opts.colors[pt.value >= prev.value ? 0 : 1];
@@ -1566,6 +1605,7 @@ class DirLinePrimitive {
           ctx.lineTo(xr, yr);
         }
         prev = { x: xr, y: yr, value: pt.value };
+        if (pts) pts.push({ x: xr, y: yr, value: pt.value, time: pt.time });
         /* v9.157 同 bar 垂直腿：该 bar 有 ZZ_HIGH/ZZ_LOW 双标记时，series 单值只承载入侧端点，
            在此同 x 插第二点（出侧端点）补一段真同 bar 垂直线，折线同时触到垂直腿上下两端点
           （否则另一端点浮到相邻 bar，V 底/Λ 顶不触真极值，用户截图 1m 00:55/02:43 案例） */
@@ -1580,13 +1620,43 @@ class DirLinePrimitive {
               if (colV !== curColor) { flush(); curColor = colV; ctx.strokeStyle = colV; ctx.beginPath(); ctx.moveTo(xr, yr); }
               ctx.lineTo(xr, yOr);
               prev = { x: xr, y: yOr, value: vOut };
+              if (pts) pts.push({ x: xr, y: yOr, value: vOut, time: pt.time });
             }
           }
         }
       }
       flush();
       ctx.restore();
+      if (pts) this._drawInfoLabels(ctx, pts, W, H, hpr, vpr);   // 顶点收集完，逐拐点画极值点信息卡
     });
+  }
+  /* 极值点信息标签（ZIGZAG 专属，setShowInfo 开启）：pts 为折线顶点序列（null=断点），
+     拐点=相邻两段方向反号处（即极值点）；每拐点画一张信息卡，内容=上一极值点→当前极值点（zzLegStats 口径同信息线）。
+     显示数量 _infoCount（默认 1，setInfoCount/styleUI.zzInfoCount 控制）：仅显最近 N 个高点(H1..HN) + N 个低点(L1..LN)。
+     多级 ZIGZAG 时仅最大级别实例开启（由 buildInstance/applyInstStyles 依 styleUI.zzInfo 控制）。 */
+  _drawInfoLabels(ctx, pts, W, H, hpr, vpr) {
+    const corners = [];   // 拐点（极值点）：{k: pts 下标, hi: 高点 H / 低点 L}
+    for (let k = 1; k < pts.length - 1; k++) {
+      const a = pts[k - 1], b = pts[k], c = pts[k + 1];
+      if (!a || !b || !c) continue;   // 断点相邻不参与拐点判定
+      const d1 = b.value - a.value, d2 = c.value - b.value;
+      if (d1 === 0 || d2 === 0 || (d1 > 0) === (d2 > 0)) continue;   // 同向/水平：非拐点
+      corners.push({ k, hi: d1 > 0 });   // d1>0&d2<0=高点 H；d1<0&d2>0=低点 L
+    }
+    /* 数量控制（_infoCount，默认 1）：自最新端取最近 N 个高点(H1..HN) + 最近 N 个低点(L1..LN)，
+       仅在这些拐点画卡；卡片跨「上一拐点→当前拐点」（zzLegStats 口径同信息线）。 */
+    const n = Math.max(1, this._infoCount | 0);
+    const keep = new Set();
+    let nh = 0, nl = 0;
+    for (let j = corners.length - 1; j >= 0 && (nh < n || nl < n); j--) {
+      if (corners[j].hi) { if (nh < n) { keep.add(j); nh++; } }
+      else if (nl < n) { keep.add(j); nl++; }
+    }
+    for (let j = 1; j < corners.length; j++) {   // 自第 2 个拐点起：每卡跨「上一拐点→当前拐点」
+      if (!keep.has(j)) continue;   // 数量控制：非最近 N 高/N 低的拐点不画卡
+      const p0 = pts[corners[j - 1].k], p1 = pts[corners[j].k];
+      drawInfoCardStats(ctx, zzLegStats(p0, p1), p1.x, p1.y, W, H, hpr, vpr);
+    }
   }
 }
 /* 指标基础名（不含参数）：图例常驻显示这个，参数改由 title 悬停提示（见 indParams） */
@@ -1693,6 +1763,7 @@ function buildInstance(it, styleUI, opts = {}) {
         s.attachPrimitive(prim);
         inst.series.push(s);
         (inst.dirPrims ||= [])[i] = prim;
+        if (isZZInst(inst)) { prim.setShowInfo(!!inst.styleUI?.zzInfo); prim.setInfoCount(inst.styleUI?.zzInfoCount ?? 1); }   // ZIGZAG：按 styleUI.zzInfo/zzInfoCount 恢复极值点信息标签显隐与数量
         parts.push({ key: f, label: f, color: dc[0] });
         return;
       }
@@ -1951,12 +2022,25 @@ function indStyleUI(inst) {
       lines.map(reflRowHtml).join('') +
       `<button type="button" class="refl-add">＋ 添加参考线</button></div>`;
   }
-  return `<div class="ind-style-sec" id="ind-style-ui">${rows}</div>${reflSec}`;
+  /* ZIGZAG 专属：极值点信息标签开关（默认关；套用信息线卡片视觉，见 DirLinePrimitive._drawInfoLabels）。
+     多级 ZIGZAG 时每实例独立开关，仅最大级别开启即只显最大级别（当前单级） */
+  let zzInfoSec = '';
+  if (isZZInst(inst)) {
+    const zc = inst.styleUI?.zzInfoCount ?? 1;
+    zzInfoSec = `<div class="refl-sec" id="zz-info-sec"><div class="refl-title">极值点信息</div>` +
+      `<div class="ind-style-row">${swHtml(!!inst.styleUI?.zzInfo, 'zz-info-chk', 'id="zz-info-sw"')}<span class="ind-style-name">显示极值点信息标签</span></div>` +
+      `<div class="ind-style-row"><span class="ind-style-name">显示数量</span>` +
+      `<input class="refl-val" id="zz-info-count" type="number" min="1" max="99" step="1" value="${zc}" title="最近 N 个高点 + N 个低点（H1..HN / L1..LN）" style="width:56px">` +
+      `<span class="muted" style="font-size:10px">最近 N 高 + N 低（默认 1）</span></div></div>`;
+  }
+  return `<div class="ind-style-sec" id="ind-style-ui">${rows}</div>${reflSec}${zzInfoSec}`;
 }
 /* 色板点击：即时切换选中态（确认时读取 .active）；样式行渲染在 #ind-style-wrap，委托须绑在该容器 */
 document.getElementById('ind-style-wrap').addEventListener('click', e => {
   const fv = e.target.closest('.ind-fvis-chk');
   if (fv) { swToggle(fv); return; }   // 逐线/柱显隐开关：就地翻转，确认时采集关闭态索引入 fieldHidden
+  const zi = e.target.closest('.zz-info-chk');
+  if (zi) { swToggle(zi); return; }   // ZIGZAG 极值点信息标签开关：就地翻转，确认时采集为 styleUI.zzInfo
   const fo = e.target.closest('.ind-follow');
   if (fo) {   // 柱字段“跟随涨跌”开关：激活后忽略同槽自定义色块（collectIndStyles 据此采 null）
     fo.classList.add('active');
@@ -2060,8 +2144,16 @@ function collectIndStyles(inst) {
     if (out) out.refLines = rl;
     else if (rl.length) return { refLines: rl };
   }
+  const zzSec = document.getElementById('zz-info-sec');
+  if (zzSec) {   // ZIGZAG 极值点信息：开关 styleUI.zzInfo（默认关）+ 数量 styleUI.zzInfoCount（默认 1，仅 ≠1 时存）
+    const on = document.getElementById('zz-info-sw')?.classList.contains('on') || false;
+    const cRaw = parseInt(document.getElementById('zz-info-count')?.value, 10);
+    const cnt = (isFinite(cRaw) && cRaw >= 1) ? Math.min(99, cRaw) : 1;
+    if (out) { out.zzInfo = on; if (cnt !== 1) out.zzInfoCount = cnt; }
+    else if (on || cnt !== 1) return { zzInfo: on, ...(cnt !== 1 ? { zzInfoCount: cnt } : {}) };
+  }
   if (!out) return null;
-  const changed = Object.keys(out).some(k => k !== 'refLines' && out[k] && (out[k].color || out[k].lineStyle != null || out[k].lineWidth != null || out[k].histColors || out[k].dirColors)) || out.refLines;
+  const changed = Object.keys(out).some(k => k !== 'refLines' && k !== 'zzInfo' && k !== 'zzInfoCount' && out[k] && (out[k].color || out[k].lineStyle != null || out[k].lineWidth != null || out[k].histColors || out[k].dirColors)) || out.refLines || out.zzInfo || out.zzInfoCount;
   return changed ? out : null;
 }
 /* 仅样式变化（参数未变）：就地应用不重建，避免后端指标重新拉取与窗格高度动画重跑 */
@@ -2086,6 +2178,7 @@ function applyInstStyles(inst, styleUI) {
     s.applyOptions({ color: (prim || dprim) ? 'transparent' : st.color, ...st.opt });
     if (prim) prim.applyOptions({ color: st.color, lineStyle: st.opt.lineStyle ?? 0, lineWidth: st.opt.lineWidth ?? 1 });
     if (dprim) dprim.applyOptions({ colors: fieldDirColors(inst, i), lineStyle: st.opt.lineStyle ?? 0, lineWidth: st.opt.lineWidth ?? 1 });
+    if (dprim && isZZInst(inst)) { dprim.setShowInfo(!!inst.styleUI?.zzInfo); dprim.setInfoCount(inst.styleUI?.zzInfoCount ?? 1); }   // ZIGZAG 极值点信息标签：就地切换显隐与数量（styleUI.zzInfo/zzInfoCount，默认关/1）
     if (keys[i]) inst.legendVals[keys[i]].parentElement.style.color = dprim ? fieldDirColors(inst, i)[0] : st.color;
   });
   applyRefLines(inst);   // 参考线自选变化：就地重建（默认→自选→清空均可）
@@ -2146,11 +2239,15 @@ function rebuildIndicators() {
   document.getElementById('ind-legends').innerHTML = '';
   cleanupEmptyPanes();   // 先清理旧空窗格，再建新实例（否则新 pane 索引错位）
   const subPending = [];
+  const unregistered = [];
   for (const it of indLayout) {
+    /* 未注册的 custom 条目：不建实例（否则 catOf 兜底生成 fields:[name] 的空线），但保留在 indLayout 里 */
+    if (it.type === 'custom' && !customRegistered(it.name)) { unregistered.push(it.name); continue; }
     const inst = buildInstance(it, it.styleUI);
     indInstances.push(inst);
     if (inst.pane > 0) subPending.push({ pane: inst.pane, h: catOf(inst).h || SUB_PANE_H });
   }
+  if (unregistered.length) warnUnregistered(unregistered);
   /* 新副图窗格应用目标高度（首屏未就绪时留给 applyPaneHeights 统一处理） */
   subPaneTargets = subPending;
   if (panesSized && subPending.length) setTimeout(() => { applyCollapsedPanes(); }, 50);   // 副图高度按折叠态应用（折叠窗格压到细条，其余回目标高）
@@ -3417,6 +3514,14 @@ function zzParseCond(inst) {
     const a = zzParseIndic(ms[1]);
     if (a) return { mode: ZZ_MODE_SINGLE, name: a.name, fields: [a.field], params: a.params };
   }
+  const mc = b.match(/^(indic\(.*\))\s*>=\s*(-?\d+(?:\.\d+)?)$/);   // 坐标：indic(...) >= N
+  if (mc) {
+    const a = zzParseIndic(mc[1]);
+    if (a) return {
+      mode: ZZ_MODE_CROSS, coord: true, name: a.name, fields: [a.field], params: a.params,
+      coord_x: +(inst.params?.coord_x || 0) || 51,
+    };
+  }
   if (b.startsWith('cross_up(') && b.endsWith(')')) {   // 交叉：cross_up(indic(...), indic(...))
     const inner = b.slice('cross_up('.length, -1);
     const sep = inner.indexOf('), indic(');
@@ -3438,7 +3543,9 @@ function zzSnapshot() {
     if (el) params[k] = el.dataset.str === '1' ? el.value : parseFloat(el.value);
   }
   const fields = [document.getElementById('zz-f1')?.value, document.getElementById('zz-f2')?.value].filter(Boolean);
-  return { mode: zzCurMode(), name, fields, params };
+  const coord = document.getElementById('zz-coord')?.classList.contains('on') || false;
+  const coord_x = parseFloat(document.getElementById('zz-coord-x')?.value) || 0;
+  return { mode: zzCurMode(), name, fields, params, coord, coord_x };
 }
 /* 构建器骨架 HTML：极值搜索方式列表 + 转折模式开关（单线/交叉，互斥）+ 条件指标下拉 + 动态体容器（zzRenderCondBody 填充） */
 function zzCondUI(st, inst) {
@@ -3483,18 +3590,47 @@ function zzRenderCondBody(st) {
   const sameInd = !!(st && st.name === name);
   const curFields = sameInd ? (st.fields || []) : [];
   const cross = mode === ZZ_MODE_CROSS;
+  /* 坐标开关：仅「交叉模式 + 0-100 区间指标（bounded_0_100，如 MR_Y_CYCLE 随机族）」可用。
+     开启后转折形态由「两字段金叉死叉」切换为「单字段 × 坐标阈值」：指标值(向下取整)与
+     由坐标 x 折叠出的多空阈值比较判多空（多头≥max(51,x,100-x) / 空头<min(50,min(x,100-x)+1)），
+     中间带既不满足多头也不满足空头 → 核心层 _decide 返回 None 冻结（用户："中间态不用处理"）。
+     MACD 等 zero_symmetric 指标无 0-100 坐标语义，不显示该开关。 */
+  const bounded = BACKEND_META[name]?.display_meta?.range === 'bounded_0_100';
+  const coordAvail = cross && bounded;
+  const coordOn = coordAvail && !!(st && st.coord);
+  const coordX = (sameInd && st.coord_x) ? st.coord_x : 51;
+  const coordRow = coordAvail ? `
+    <div class="field">
+      <div class="field-label"><span>坐标</span><span class="muted">开=单字段×坐标阈值（${name} 为 0-100 指标）/ 关=两字段金叉死叉</span></div>
+      <div class="zz-modes">
+        <span class="zz-mode">${swHtml(coordOn, '', 'id="zz-coord"')}坐标模式</span>
+      </div>
+    </div>` : '';
   const fieldRows = [];
-  for (let fi = 0; fi < (cross ? 2 : 1); fi++) {
+  const nFields = (cross && !coordOn) ? 2 : 1;   // 坐标模式只用单字段（与坐标阈值比较）
+  for (let fi = 0; fi < nFields; fi++) {
     const cur = curFields[fi] || fields[fi] || fields[0] || '';
     const fopts = fields.map(f => `<option value="${f}"${f === cur ? ' selected' : ''}>${f}</option>`).join('');
-    const label = cross ? (fi === 0 ? '快线字段' : '慢线字段') : '转折字段';
-    const hint = cross ? (fi === 0 ? '上穿慢线判多头' : '被快线上穿判空头') : '方向转折（新值 vs 前值）';
+    const label = coordOn ? '坐标字段' : (cross ? (fi === 0 ? '快线字段' : '慢线字段') : '转折字段');
+    const hint = coordOn ? '指标值(取整)与坐标阈值比较判多空' : (cross ? (fi === 0 ? '上穿慢线判多头' : '被快线上穿判空头') : '方向转折（新值 vs 前值）');
     fieldRows.push(`
     <div class="field">
       <div class="field-label"><span>${label}</span><span class="muted">${hint}</span></div>
       <select id="zz-f${fi + 1}">${fopts}</select>
     </div>`);
   }
+  /* 坐标 x 数值框（仅坐标模式）：1~99 整数，向下取整不四舍五入 */
+  const coordXRow = coordOn ? `
+    <div class="field">
+      <div class="field-label"><span>坐标 x</span><span class="muted">1~99 整数（51→多头≥51/空头≤49；30→多头≥70/空头≤30）</span></div>
+      <div class="input-box">
+        <input id="zz-coord-x" type="number" min="1" max="99" step="1" data-decimals="0" value="${coordX}">
+        <span class="step-col">
+          <button type="button" class="step-btn" data-dir="1" data-target="zz-coord-x" tabindex="-1" title="增加">▲</button>
+          <button type="button" class="step-btn" data-dir="-1" data-target="zz-coord-x" tabindex="-1" title="减少">▼</button>
+        </span>
+      </div>
+    </div>` : '';
   const curParams = sameInd ? (st.params || {}) : {};
   const paramRows = Object.entries(defs).map(([k, dv]) => {
     const v = curParams[k] != null ? curParams[k] : dv;
@@ -3521,11 +3657,21 @@ function zzRenderCondBody(st) {
   const paramHead = paramRows
     ? `<div class="field-label" style="margin:6px 0 4px"><span>指标参数</span><span class="muted">${name}</span></div>`
     : '';
-  /* 交叉模式需 ≥2 个输出字段：单字段指标（如 DEMA/TRIX/ZLINE）选交叉时两下拉锁同一字段、确认必失败，明示引导改单线或换多字段指标 */
-  const crossWarn = (cross && fields.length < 2)
-    ? `<div class="field-label" style="color:var(--down);margin:2px 0 6px"><span>交叉模式需指标含 ≥2 个输出字段（${name} 仅 ${fields.length} 个）：请改用单线模式，或选多字段指标（如 MACD_MULTI/MR_Y_MAIN）</span></div>`
+  /* 交叉模式（非坐标）需 ≥2 个输出字段：单字段指标（如 DEMA/TRIX/ZLINE）选交叉时两下拉锁同一字段、确认必失败，明示引导改单线/坐标或换多字段指标 */
+  const crossWarn = (cross && !coordOn && fields.length < 2)
+    ? `<div class="field-label" style="color:var(--down);margin:2px 0 6px"><span>交叉模式需指标含 ≥2 个输出字段（${name} 仅 ${fields.length} 个）：请改用单线模式${bounded ? '或开启坐标' : ''}，或选多字段指标（如 MACD_MULTI/MR_Y_MAIN）</span></div>`
     : '';
-  box.innerHTML = crossWarn + fieldRows.join('') + paramHead + paramRows;
+  box.innerHTML = coordRow + crossWarn + fieldRows.join('') + coordXRow + paramHead + paramRows;
+  /* 坐标开关绑定（在动态体内，须每次渲染后重绑；innerHTML 已销毁旧节点及其监听，无累积）：
+     切换 → 快照保留已填 x → 覆写 coord → 重渲染（单/双字段形态随之切换） */
+  const coordEl = document.getElementById('zz-coord');
+  coordEl?.closest('.zz-mode')?.addEventListener('click', () => {
+    const next = !coordEl.classList.contains('on');
+    zzParamsDirty = true;   // 坐标属参数页交互：标 dirty 防确认时保留旧条件
+    const snap = zzSnapshot() || { mode, name, fields: [], params: {} };
+    snap.coord = next;
+    zzRenderCondBody(snap);
+  });
 }
 /* 采集构建器 → 合成 ZIGZAG 参数；校验失败返回 null（已聚焦错误框）。cross_type/tolerance 沿用现值；
    search_mode 独立于转折条件从 DOM 采集（两分支均经 base 携带）：只改搜索方式不标 dirty，
@@ -3541,11 +3687,15 @@ function zzCollectCond(inst) {
   /* 未改动参数页（仅编辑样式）：原样保留当前 bull_cond/bear_cond，避免样式编辑把转折条件重写为构建器
      回退的目录指标（默认条件 cross_up(ma,ema) 等内置原子无法被反解析，会被误替换致 ZigZag 形状突变） */
   if (!zzParamsDirty) {
-    return { bull_cond: inst.params?.bull_cond ?? '', bear_cond: inst.params?.bear_cond ?? '', ...base };
+    return { bull_cond: inst.params?.bull_cond ?? '', bear_cond: inst.params?.bear_cond ?? '', coord_x: inst.params?.coord_x ?? 0, ...base };
   }
   const name = document.getElementById('zz-cond-ind')?.value;
   if (!name) return null;
   const mode = zzCurMode();
+  /* 坐标模式：交叉 + 0-100 指标 + 坐标开关开；此时转折由单字段与折叠阈值比较合成 */
+  const bounded = BACKEND_META[name]?.display_meta?.range === 'bounded_0_100';
+  const coordOn = mode === ZZ_MODE_CROSS && bounded
+    && (document.getElementById('zz-coord')?.classList.contains('on') || false);
   const params = {};
   for (const k of Object.keys(zzIndDefaults(name))) {
     const el = document.getElementById('zz-ip-' + k);
@@ -3558,8 +3708,21 @@ function zzCollectCond(inst) {
   }
   const f1 = document.getElementById('zz-f1')?.value;
   if (!f1) return null;
-  let bull, bear;
-  if (mode === ZZ_MODE_CROSS) {
+  let bull, bear, coord_x = 0;
+  if (coordOn) {
+    /* 坐标 x（1~99 整数）→ 折叠阈值：多头 = 指标值 ≥ max(51, x, 100-x)，
+       空头 = 指标值 < min(50, min(x,100-x)+1)。等价于「floor(v)>50 且 floor(v)≥hi」/
+       「floor(v)<50 且 floor(v)≤lo」，故无需后端 floor 函数，直接发比较表达式。
+       中间带（lo<v<hi）两条件皆不成立 → 核心层延续既有方向跟踪 pending 极值
+       （v9.173 用户定稿：和 ZLINE 同理，反方向条件未成立时不翻转不冻结）。 */
+    const xv = parseInt(document.getElementById('zz-coord-x')?.value, 10);
+    if (!isFinite(xv) || xv < 1 || xv > 99) { document.getElementById('zz-coord-x')?.focus(); return null; }
+    const hi = Math.max(xv, 100 - xv), lo = Math.min(xv, 100 - xv);
+    const a = zzIndicStr(name, f1, params);
+    bull = `${a} >= ${Math.max(51, hi)}`;
+    bear = `${a} < ${Math.min(50, lo + 1)}`;
+    coord_x = xv;
+  } else if (mode === ZZ_MODE_CROSS) {
     const f2 = document.getElementById('zz-f2')?.value;
     if (!f2 || f1 === f2) { document.getElementById('zz-f2')?.focus(); return null; }   // 交叉需两个不同字段
     const a = zzIndicStr(name, f1, params), b = zzIndicStr(name, f2, params);
@@ -3570,7 +3733,7 @@ function zzCollectCond(inst) {
     bull = `rising(${a})`;
     bear = `falling(${a})`;
   }
-  return { bull_cond: bull, bear_cond: bear, ...base };
+  return { bull_cond: bull, bear_cond: bear, coord_x, ...base };
 }
 /* 弹窗页签切换：参数 / 样式；两个页签 DOM 同时存在（确认时跨页签采集） */
 function indTabTo(which) {
@@ -3606,7 +3769,7 @@ function openIndModal(id) {
     });
     bindZZSearch('zz-search-cond', 'zz-search-range');
     bindZZSearch('zz-search-range', 'zz-search-cond');
-    document.getElementById('zz-cond-ind')?.addEventListener('change', () => zzRenderCondBody());
+    document.getElementById('zz-cond-ind')?.addEventListener('change', () => zzRenderCondBody(zzSnapshot()));   // 传快照：换指标保留坐标开关态（新指标非 bounded 时 zzRenderCondBody 自动隐藏）
   } else {
     const meta = indModalMeta(inst);
     document.getElementById('ind-fields').innerHTML = meta.fields.map(f => {
@@ -4908,6 +5071,69 @@ function infoStats(sh) {   // 信息线统计：返回卡片两行文案（行1 
     line2: bars != null ? `${bars}根K线 (${dur})` : dur,
   };
 }
+/* ZIGZAG 极值点信息卡文案（口径同 infoStats）：p0→p1 为相邻两拐点（上一极值点→当前极值点），
+   value=价格、time=真实 bar time（无需 resolveAnchorTime）；返回 {line1:价差+涨跌%, line2:bar数+时长} */
+function zzLegStats(p0, p1) {
+  const dp = p1.value - p0.value, pct = p0.value ? (dp / p0.value) * 100 : 0;
+  const li0 = logicalIndexOfTime(p0.time), li1 = logicalIndexOfTime(p1.time);
+  const bars = (li0 != null && li1 != null) ? Math.round(Math.abs(li1 - li0)) : null;
+  const sgn = dp >= 0 ? '+' : '';
+  const prec = (typeof curPrec === 'number' && curPrec > 0) ? curPrec : 2;
+  const dur = fmtDurSec(p1.time - p0.time);
+  return { line1: `${sgn}${dp.toFixed(prec)} (${sgn}${pct.toFixed(2)}%)`, line2: bars != null ? `${bars}根K线 (${dur})` : dur };
+}
+/* TV 式信息卡片（standalone，供信息线 _drawInfoCard 与 ZIGZAG 极值点标签 _drawInfoLabels 共用绘制）：
+   圆角灰底两行（图标+文案），锚定 (ax,ay)，越界自动翻转；st={line1,line2} 由调用方给出（infoStats / zzLegStats） */
+function drawInfoCardStats(ctx, st, ax, ay, W, H, hpr, vpr) {
+  ctx.save(); ctx.setLineDash([]);
+  const fs = Math.round(12 * vpr);
+  ctx.font = `${fs}px sans-serif`;
+  const padX = Math.round(8 * hpr), iconW = Math.round(20 * hpr), rowH = Math.round(24 * vpr), padY = Math.round(5 * vpr);
+  const tw = Math.max(ctx.measureText(st.line1).width, ctx.measureText(st.line2).width);
+  const cw = padX * 2 + iconW + tw, ch = padY * 2 + rowH * 2;
+  let lx = ax + 12 * hpr, ly = ay - ch - 12 * vpr;
+  if (lx + cw > W) lx = ax - cw - 12 * hpr;   // 右侧越界：翻到锚点左边
+  if (lx < 0) lx = 0;
+  if (ly < 0) ly = ay + 12 * vpr;             // 上方越界：翻到锚点下边
+  if (ly + ch > H) ly = Math.max(0, H - ch);
+  const r = 6 * Math.max(hpr, vpr);
+  ctx.fillStyle = 'rgba(62,65,72,0.95)';
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') ctx.roundRect(lx, ly, cw, ch, r); else ctx.rect(lx, ly, cw, ch);
+  ctx.fill();
+  ctx.textBaseline = 'middle';
+  const rows = [st.line1, st.line2];
+  for (let i = 0; i < 2; i++) {
+    const cy = ly + padY + rowH * i + rowH / 2;
+    drawInfoIcon(ctx, i, lx + padX + iconW / 2, cy, rowH * 0.58, hpr, vpr);
+    ctx.fillStyle = '#d1d4dc';
+    ctx.fillText(rows[i], lx + padX + iconW, cy);
+  }
+  ctx.restore();
+}
+/* 卡片行图标（standalone）：0=价差（上下横杠+竖直双向箭头）1=bar 数（左右竖杠+水平双向箭头） */
+function drawInfoIcon(ctx, idx, ix, cy, s, hpr, vpr) {
+  ctx.save();
+  ctx.strokeStyle = '#d1d4dc';
+  ctx.lineWidth = Math.max(1, Math.floor(1.2 * vpr));
+  ctx.beginPath();
+  const a = s * 0.18;
+  if (idx === 0) {
+    ctx.moveTo(ix - s * 0.42, cy - s * 0.5); ctx.lineTo(ix + s * 0.42, cy - s * 0.5);
+    ctx.moveTo(ix - s * 0.42, cy + s * 0.5); ctx.lineTo(ix + s * 0.42, cy + s * 0.5);
+    ctx.moveTo(ix, cy - s * 0.3); ctx.lineTo(ix, cy + s * 0.3);
+    ctx.moveTo(ix - a, cy - s * 0.3 + a); ctx.lineTo(ix, cy - s * 0.3); ctx.lineTo(ix + a, cy - s * 0.3 + a);
+    ctx.moveTo(ix - a, cy + s * 0.3 - a); ctx.lineTo(ix, cy + s * 0.3); ctx.lineTo(ix + a, cy + s * 0.3 - a);
+  } else {
+    ctx.moveTo(ix - s * 0.5, cy - s * 0.42); ctx.lineTo(ix - s * 0.5, cy + s * 0.42);
+    ctx.moveTo(ix + s * 0.5, cy - s * 0.42); ctx.lineTo(ix + s * 0.5, cy + s * 0.42);
+    ctx.moveTo(ix - s * 0.3, cy); ctx.lineTo(ix + s * 0.3, cy);
+    ctx.moveTo(ix - s * 0.3 + a, cy - a); ctx.lineTo(ix - s * 0.3, cy); ctx.lineTo(ix - s * 0.3 + a, cy + a);
+    ctx.moveTo(ix + s * 0.3 - a, cy - a); ctx.lineTo(ix + s * 0.3, cy); ctx.lineTo(ix + s * 0.3 - a, cy + a);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
 
 /* 斐波那契级别：每级 {ratio,color}（线头标签文本直接用比例，线型为整组全局设置）；价格 = p1 + (p0-p1)*ratio（0=终点/第二锚点，1=起点/第一锚点，>1 越起点延伸；
    即低点拉高点时高点为 0、低点为 1，同 TV 回撤读法）。默认级别取 TV 常用回调/延伸位；存档缺 levels 的旧 fib 图形回落默认表（防御）。 */
@@ -5117,55 +5343,8 @@ class DrawingPrimitive {
     }
     if (sh.type === 'info' && emph && x1 != null && y1 != null) this._drawInfoCard(ctx, sh, x1, y1, W, H, hpr, vpr);   // 信息卡片：选中/悬停(激活)/绘制预览三态均显示（emph=选中‖悬停‖preview）；最后画保证盖在锚点方块上层
   }
-  _drawInfoCard(ctx, sh, ax, ay, W, H, hpr, vpr) {   // TV 式信息卡片：圆角灰底两行（图标+文案），锚定第二锚点，越界自动翻转
-    const st = infoStats(sh);
-    ctx.save(); ctx.setLineDash([]);
-    const fs = Math.round(12 * vpr);
-    ctx.font = `${fs}px sans-serif`;
-    const padX = Math.round(8 * hpr), iconW = Math.round(20 * hpr), rowH = Math.round(24 * vpr), padY = Math.round(5 * vpr);
-    const tw = Math.max(ctx.measureText(st.line1).width, ctx.measureText(st.line2).width);
-    const cw = padX * 2 + iconW + tw, ch = padY * 2 + rowH * 2;
-    let lx = ax + 12 * hpr, ly = ay - ch - 12 * vpr;
-    if (lx + cw > W) lx = ax - cw - 12 * hpr;   // 右侧越界：翻到锚点左边
-    if (lx < 0) lx = 0;
-    if (ly < 0) ly = ay + 12 * vpr;             // 上方越界：翻到锚点下边
-    if (ly + ch > H) ly = Math.max(0, H - ch);
-    const r = 6 * Math.max(hpr, vpr);
-    ctx.fillStyle = 'rgba(62,65,72,0.95)';
-    ctx.beginPath();
-    if (typeof ctx.roundRect === 'function') ctx.roundRect(lx, ly, cw, ch, r); else ctx.rect(lx, ly, cw, ch);
-    ctx.fill();
-    ctx.textBaseline = 'middle';
-    const rows = [st.line1, st.line2];
-    for (let i = 0; i < 2; i++) {
-      const cy = ly + padY + rowH * i + rowH / 2;
-      this._drawInfoIcon(ctx, i, lx + padX + iconW / 2, cy, rowH * 0.58, hpr, vpr);
-      ctx.fillStyle = '#d1d4dc';
-      ctx.fillText(rows[i], lx + padX + iconW, cy);
-    }
-    ctx.restore();
-  }
-  _drawInfoIcon(ctx, idx, ix, cy, s, hpr, vpr) {   // 卡片行图标：0=价差（上下横杠+竖直双向箭头）1=bar 数（左右竖杠+水平双向箭头）
-    ctx.save();
-    ctx.strokeStyle = '#d1d4dc';
-    ctx.lineWidth = Math.max(1, Math.floor(1.2 * vpr));
-    ctx.beginPath();
-    const a = s * 0.18;
-    if (idx === 0) {
-      ctx.moveTo(ix - s * 0.42, cy - s * 0.5); ctx.lineTo(ix + s * 0.42, cy - s * 0.5);
-      ctx.moveTo(ix - s * 0.42, cy + s * 0.5); ctx.lineTo(ix + s * 0.42, cy + s * 0.5);
-      ctx.moveTo(ix, cy - s * 0.3); ctx.lineTo(ix, cy + s * 0.3);
-      ctx.moveTo(ix - a, cy - s * 0.3 + a); ctx.lineTo(ix, cy - s * 0.3); ctx.lineTo(ix + a, cy - s * 0.3 + a);
-      ctx.moveTo(ix - a, cy + s * 0.3 - a); ctx.lineTo(ix, cy + s * 0.3); ctx.lineTo(ix + a, cy + s * 0.3 - a);
-    } else {
-      ctx.moveTo(ix - s * 0.5, cy - s * 0.42); ctx.lineTo(ix - s * 0.5, cy + s * 0.42);
-      ctx.moveTo(ix + s * 0.5, cy - s * 0.42); ctx.lineTo(ix + s * 0.5, cy + s * 0.42);
-      ctx.moveTo(ix - s * 0.3, cy); ctx.lineTo(ix + s * 0.3, cy);
-      ctx.moveTo(ix - s * 0.3 + a, cy - a); ctx.lineTo(ix - s * 0.3, cy); ctx.lineTo(ix - s * 0.3 + a, cy + a);
-      ctx.moveTo(ix + s * 0.3 - a, cy - a); ctx.lineTo(ix + s * 0.3, cy); ctx.lineTo(ix + s * 0.3 - a, cy + a);
-    }
-    ctx.stroke();
-    ctx.restore();
+  _drawInfoCard(ctx, sh, ax, ay, W, H, hpr, vpr) {   // TV 式信息卡片：委托 standalone drawInfoCardStats（与 ZIGZAG 极值点标签共用绘制/图标）
+    drawInfoCardStats(ctx, infoStats(sh), ax, ay, W, H, hpr, vpr);
   }
   _drawSnap(ctx, snap, W, H, ts, s, hpr, vpr) {   // 吸附目标引导：竖虚线=时间吸附 bar（十字线自由模式不吸 bar，自绘补足）；strong（磁吸/Ctrl）=琥珀横线+实心点，weak（仅工具态）=空心点
     const sy0 = s.priceToCoordinate(snap.price);
@@ -5310,6 +5489,45 @@ function refreshDrawView() {   // 按当前周期重建可见视图数组（增�
   drawPrim.setShapes(drawings);
   drawPrim.setSelected(selectedId);
 }
+/* 垂直线时间标签：与十字线时间标签完全同款（直接复用 .time-tag 样式类 + 同一底部时间轴位置、水平居中于线）。
+   每条可见垂直线一个 DOM 标签（元素池复用），rAF 逐帧按需重定位（位置/文本/显隐变化才写 DOM，代价极低）。
+   置于底部时间轴（全窗格共享），故副图最大化/主图隐藏时仍显示，且不与顶部图例重叠（与 updateTimeTag 同口径）。 */
+const vlineTagHost = timeTag.parentNode;   // 与 #time-tag 同一 .chart-wrap 定位上下文
+let vlineTagPool = [];
+function updateVLineTags() {
+  let n = 0;
+  for (const sh of drawings) if (sh.type === 'vline') n++;
+  if (n === 0) {   // 无垂直线（常态）：隐藏残留标签即返回，不分配数组、不访问图表
+    if (vlineTagPool.length) for (const el of vlineTagPool) if (el.style.display !== 'none') el.style.display = 'none';
+    return;
+  }
+  const vl = drawings.filter(sh => sh.type === 'vline');
+  const ts = chart.timeScale();
+  const tsH = (ts.height && ts.height()) || 26;
+  const plotW = container.clientWidth - (chart.priceScale('right').width() || 0);   // 右侧价格轴以外不可放标签
+  const topPx = (container.clientHeight - tsH / 2) + 'px';   // 垂直居中于底部时间轴（同 updateTimeTag）
+  while (vlineTagPool.length < vl.length) {
+    const el = document.createElement('div');
+    el.className = 'time-tag';   // 与十字线时间标签同款样式（.time-tag：#2a2e39 底/白字/13px/translate(-50%,-50%)）
+    vlineTagHost.appendChild(el);
+    vlineTagPool.push(el);
+  }
+  for (let i = 0; i < vlineTagPool.length; i++) {
+    const el = vlineTagPool[i], sh = vl[i];
+    if (!sh) { if (el.style.display !== 'none') el.style.display = 'none'; continue; }
+    const p0 = (sh.points || [])[0];
+    const t = p0 ? resolveAnchorTime(sh, p0.time) : null;
+    const x = (t != null) ? anchorXCoord(ts, t) : null;
+    if (t == null || x == null || x < 0 || x > plotW) { if (el.style.display !== 'none') el.style.display = 'none'; continue; }
+    const txt = fmtTimeCn(t, tfIsDateOnly(curTf));
+    if (el.__t !== txt) { el.textContent = txt; el.__t = txt; }
+    const lp = x + 'px';
+    if (el.__l !== lp) { el.style.left = lp; el.__l = lp; }
+    if (el.__tp !== topPx) { el.style.top = topPx; el.__tp = topPx; }
+    if (el.style.display !== 'block') el.style.display = 'block';
+  }
+}
+(function vlineTagLoop() { updateVLineTags(); requestAnimationFrame(vlineTagLoop); })();
 function reloadDrawingsForView() {
   const k = drawViewKey();
   if (!Array.isArray(drawingsByKey[k])) drawingsByKey[k] = [];
@@ -5372,6 +5590,26 @@ function pointToAnchor(pt, timeHint) {   // 面板媒体坐标 → {time(锁定�
     if (cands.length) price = cands.reduce((a, b) => Math.abs(b - price) < Math.abs(a - price) ? b : a);
   }
   return { time, price };
+}
+/* 副图窗格落锚：垂直线仅需时间（时间轴跨窗格共享 x，price 无关其满高渲染）。
+   时间口径与 pointToAnchor 一致（含最右空白区外推虚拟时间）；price 取末根收盘价作可视参考，
+   保证选中方块/锚点命中落在主图价格范围内（与主图落锚的垂直线行为一致）。 */
+function anchorTimeOnly(x, timeHint) {
+  if (x == null || !klines.length) return null;
+  const ts = chart.timeScale();
+  const last = klines[klines.length - 1];
+  const refPrice = (last && typeof last.close === 'number') ? last.close : 0;
+  const lg = ts.coordinateToLogical(x);
+  if (lg != null && lg > klines.length - 1) {   // 最右空白区：外推虚拟时间
+    return { time: last.time + (lg - (klines.length - 1)) * tfDurSecFull(curTf), price: refPrice };
+  }
+  let time = (timeHint != null) ? timeHint : ts.coordinateToTime(x);
+  if (time == null) {
+    if (lg == null) return null;
+    const ci = Math.max(0, Math.min(klines.length - 1, Math.round(lg)));
+    time = klines[ci].time;
+  }
+  return { time, price: refPrice };
 }
 function updateSnapGuide() {   // 工具激活或磁吸激活且有光标位置时显示吸附目标引导：strong=磁吸/Ctrl（横线+实心点），weak=仅工具态（竖线+空心点，预告锚点将落的 bar）
   if (cursorPt && (activeTool || magnetActive())) drawPrim.setSnap(pointToAnchor(cursorPt, cursorTime), magnetActive());
@@ -5657,11 +5895,14 @@ container.addEventListener('dblclick', e => {
   }
   openStyleModal(hid);
 });
-/* 图表点击：仅工具激活时落锚点（文本走浮层）；选择/拖拽已迁至 pointerdown */
+/* 图表点击：仅工具激活时落锚点（文本走浮层）；选择/拖拽已迁至 pointerdown。
+   垂直线为时间轴工具（跨窗格共享 x），允许在副图窗格落锚；其余工具需主图价格坐标，仅主图落锚。 */
 chart.subscribeClick(e => {
-  if (e.paneIndex != null && e.paneIndex !== 0) return;
   if (!activeTool || !e.point) return;
-  const a = pointToAnchor(e.point, e.time); if (!a) return;
+  const inMain = (e.paneIndex == null || e.paneIndex === 0);
+  if (!inMain && activeTool !== 'vline') return;   // 副图仅支持垂直线（其余工具价格坐标只在主图有效）
+  const a = inMain ? pointToAnchor(e.point, e.time) : anchorTimeOnly(e.point.x, e.time);
+  if (!a) return;
   if (activeTool === 'text') { placePts = []; promptText(a); return; }
   placePts.push(a);
   if (placePts.length >= (TOOL_ANCHORS[activeTool] || 1)) commitShape();
@@ -5677,7 +5918,15 @@ chart.subscribeCrosshairMove(e => {
   updateTimeTag();
   updateSnapGuide();
   if (dragState) { drawPrim.setPreview(null); drawPrim.setHover(null); return; }   // 拖拽中不做预览/悬停
-  if (!inMain) { drawPrim.setPreview(null); drawPrim.setHover(null); hoverKind = null; updateCursor(); return; }
+  if (!inMain) {
+    /* 副图窗格：仅垂直线工具做橡皮筋预览（时间轴跨窗格共享，x 一致，预览线由 VSpanPrimitive 贯穿渲染）；
+       其余工具与悬停/选中不在副图响应（价格坐标仅主图有效） */
+    if (activeTool === 'vline' && e.point) {
+      const a = anchorTimeOnly(e.point.x, e.time);
+      if (a) { const ds = defaultStyleFor('vline'); drawPrim.setPreview({ type: 'vline', points: [a], style: { color: ds.color, lineWidth: ds.lineWidth, lineStyle: 2, fontSize: ds.fontSize } }); hoverKind = null; updateCursor(); return; }
+    }
+    drawPrim.setPreview(null); drawPrim.setHover(null); hoverKind = null; updateCursor(); return;
+  }
   if (activeTool && activeTool !== 'text' && e.point) {
     const need = TOOL_ANCHORS[activeTool] || 1, a = pointToAnchor(e.point, e.time);
     if (a) {

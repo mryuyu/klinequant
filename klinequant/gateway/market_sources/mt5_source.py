@@ -41,7 +41,9 @@ RECONNECT_COOLDOWN = 8.0
 # symbol_info_tick 的 time 字段是「服务器墙钟当 UTC 编码」的 epoch，直接当真实 UTC 用
 # 会让前端（按北京时间渲染）比真实时刻快 2~3 小时。此处动态探测偏移并在 _to_bar 归一到
 # 真实 UTC，与币安/ths 口径一致；偏移随夏令时变化，故按 TTL 重探、休市陈旧 tick 由合理窗拒绝。
-_OFFSET_PROBE_TTL = 3600.0        # 探测缓存秒：一年两次夏令时切换最多滞后 1h 自动校准
+_OFFSET_PROBE_TTL = 3600.0        # 已校正后的重探间隔：一年两次夏令时切换最多滞后 1h 自动校准
+_OFFSET_RETRY_TTL = 60.0          # 尚未校正成功时的重试退避：一次失败（无 tick/delta 出窗）
+                                  # 不得占用整个 1h 窗口，否则期间全部 bar 以服务器墙钟入库
 _OFFSET_SANE_MIN_S = 0            # 合理服务器时区窗（外汇 UTC+0~+3，留余量）；休市陈旧
 _OFFSET_SANE_MAX_S = 5 * 3600     # tick 的 delta 为大负数落在窗外被拒，沿用旧偏移
 
@@ -91,7 +93,13 @@ class Mt5Source(MarketSource):
         #: 经纪商服务器时区偏移秒（server_time = 真实 UTC + offset）；None=未探测（不校正）。
         #: 可用 MT5_SERVER_UTC_OFFSET_H 配置兜底值（休市冷启动无法探测时用），交易时段探测覆盖。
         self._server_offset_s: int | None = self._configured_offset_s()
-        self._offset_probed_at = 0.0   # 上次探测尝试时刻(monotonic)，TTL 内不重复探测
+        #: 上次探测尝试时刻(monotonic)，TTL 内不重复探测。初值必须为 -inf：Windows 上
+        #: time.monotonic() 从系统开机计时，用 0.0 哨兵会让开机后第一个 TTL 窗内
+        #: `now - 0.0 < TTL` 恒真、首探被静默跳过（实证：开机 15:25、进程 15:32 启动，
+        #: 偏移直到 16:25 才校正，期间整小时 bar 全部以服务器墙钟(+3h)入库）
+        self._offset_probed_at = float("-inf")
+        #: 时区口径代次：偏移值变化即 +1，供 kline_cache 识别新旧 epoch 混合并整条重建
+        self._tz_gen = 0
         if self.available:
             self._probe_symbols()
 
@@ -202,22 +210,29 @@ class Mt5Source(MarketSource):
     def _ensure_server_offset(self, sym: str) -> None:
         """探测经纪商服务器时区偏移（TTL 缓存）：最新 tick 的服务器时间 vs 真实 UTC。
         交易时段 tick 新鲜→delta≈偏移（合理窗内）被采纳；休市陈旧 tick→delta 为大负数
-        落在窗外被拒，沿用旧偏移。TTL 内不重复探测（含失败尝试），免休市频繁无效调用。"""
-        if time.monotonic() - self._offset_probed_at < _OFFSET_PROBE_TTL:
+        落在窗外被拒，沿用旧偏移。已校正成功按 _OFFSET_PROBE_TTL 重探（夏令时）；尚未
+        校正到值时按 _OFFSET_RETRY_TTL 短退避重试，不让一次失败锁死整个小时窗口。"""
+        ttl = _OFFSET_PROBE_TTL if self._server_offset_s is not None else _OFFSET_RETRY_TTL
+        now = time.monotonic()
+        if now - self._offset_probed_at < ttl:
             return
-        self._offset_probed_at = time.monotonic()
+        self._offset_probed_at = now
         tick = self._driver.symbol_info_tick(sym)
         ts = int(tick["time"]) if tick and tick.get("time") else 0
         if ts > 0:
             self._calibrate_offset(ts)
 
     def _calibrate_offset(self, server_ts: int) -> None:
-        """服务器时间戳 vs 真实 UTC → 整小时偏移；落在合理窗才采纳（否则视为休市陈旧）"""
+        """服务器时间戳 vs 真实 UTC → 整小时偏移；落在合理窗才采纳（否则视为休市陈旧）。
+        采纳与旧值不同的偏移时递增 _tz_gen：bar epoch 口径随之整体平移，缓存里已入库的
+        旧口径 bar 会与新口径落到同一时间戳上（不同真实时刻的 OHLC 逐分钟交替），
+        kline_cache 据代次变化整条作废重建。"""
         offset = int(round((server_ts - time.time()) / 3600) * 3600)
         if _OFFSET_SANE_MIN_S <= offset <= _OFFSET_SANE_MAX_S:
             if self._server_offset_s != offset:
                 logger.info(f"MT5 server UTC offset calibrated: {offset // 3600:+d}h")
-            self._server_offset_s = offset
+                self._server_offset_s = offset
+                self._tz_gen += 1
 
     def _offset_ms(self) -> int:
         """当前服务器时区偏移（毫秒）；未探测到（None）时为 0（不校正，保持原始时间戳）"""
@@ -227,6 +242,12 @@ class Mt5Source(MarketSource):
         """交易所（经纪商服务器）时区偏移秒：前端「交易所时间」= 真实 UTC + 本值。
         返回动态探测的 _server_offset_s（与 _to_bar 校正所减去的偏移同源），未探测到时 0。"""
         return self._server_offset_s or 0
+
+    @property
+    def tz_gen(self) -> int:
+        """bar epoch 的时区口径代次（kline_cache 消费）：偏移每次被校正为不同值即 +1，
+        使缓存能识别「同一时间戳混两种真实时刻」的污染并整条作废重建。"""
+        return self._tz_gen
 
     def _klines_sync(self, sym, tf_const, timeframe, limit, dt_from, dt_to):
         self._prepare_sync(sym)

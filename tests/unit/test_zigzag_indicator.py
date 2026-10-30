@@ -837,6 +837,71 @@ def test_search_mode_range_fixed_window_backsearch():
     assert _no_round_trip(piv)
 
 
+# 范围搜索定稿回归（v9.172 移除 v9.171 守卫）：bear leg 内 bar3 为大上影动量 bar
+# （high 1.60 低于前一确认 H@0 的 1.80），bar6 翻多确认 L@3 后回搜窗 [A=L@3, B=6]
+# 最高 High 落 bar3 本 bar → 直接播种 H@3，与 L@3 形成同 bar 垂直腿（用户明确
+# 接受：极值允许落在上一极值点 A 同一根 bar）；bar8 翻空回搜窗 [A=H@3, B=8]，
+# H@3 已承载垂直腿（pivots[-2]=L@3 同 bar）→ 往返守卫下界推 4，最低 Low 命中 bar4(0.88)。
+_ND_SPEC = [
+    (1.20, 1.80, 1.15),   # 0  bull 初始 pending H@0(1.80)
+    (1.05, 1.70, 1.00),   # 1  bear 翻转：确认 H@0，播种 L@1
+    (0.95, 1.20, 0.90),   # 2  跟踪 L@2
+    (0.90, 1.60, 0.85),   # 3  大上影动量 bar：跟踪 L@3(0.85)；high 1.60 < 前 H 1.80
+    (0.95, 1.20, 0.88),   # 4
+    (1.00, 1.30, 0.95),   # 5
+    (1.20, 1.25, 1.05),   # 6  bull 翻转确认 L@3，回搜 [3,6] 最高 High 落 bar3 → H@3
+    (1.25, 1.28, 1.10),   # 7
+    (1.05, 1.20, 1.00),   # 8  bear 翻转确认 H@3，往返守卫下界推 4 → 播种 L@4
+]
+
+
+def test_search_mode_range_extremum_may_land_on_prev_pivot_bar():
+    """范围搜索 [A,B] 闭区间：回搜极值可落在上一极值点 A 同一根 bar，形成合法的
+    同 bar 垂直腿（v9.172 移除 v9.171 精准守卫后的定稿行为：极值允许 ≤ A 时间）。"""
+    bars = _sm_bars(_ND_SPEC)
+    core = ZigZagCore(**_SM_COND, search_mode="range")
+    _run(core, bars)
+    piv = core.pivots
+    assert [(p.direction, p.index) for p in piv] == [(1, 0), (-1, 3), (1, 3), (-1, 4)]
+    assert piv[1].price == pytest.approx(0.85)                      # L@3
+    assert piv[2].price == pytest.approx(1.60) and piv[2].confirmed  # H@3 同 bar 垂直腿
+    assert piv[3].pending and piv[3].price == pytest.approx(0.88)   # L@4
+    # 允许同 bar 垂直对，但不得三连针（往返守卫保障）
+    assert all(
+        not (piv[i].index == piv[i + 1].index == piv[i + 2].index)
+        for i in range(len(piv) - 2)
+    )
+
+
+# 范围搜索同 bar 垂直腿用例：bar6 为真 pin bar（下影 0.60 突破前一确认 L@4 的 0.70），
+# bar9 翻空回搜窗 [A=H@6, B=9] 最低 Low 落 bar6 本 bar → 播种 L@6，与 H@6 成同 bar
+# 垂直腿（[A,B] 闭区间含 A，极值可落 A 同 bar）。
+_PIN_SPEC = [
+    (1.20, 1.22, 0.98),   # 0  bull 初始 pending H@0
+    (1.05, 1.10, 0.96),   # 1  bear 翻转：确认 H@0，播种 L@1
+    (0.90, 0.94, 0.80),   # 2  跟踪 L@2
+    (0.80, 0.86, 0.72),   # 3  跟踪 L@3
+    (0.75, 0.82, 0.70),   # 4  跟踪 L@4(0.70)
+    (1.20, 1.30, 0.90),   # 5  bull 翻转：确认 L@4，播种 H@5
+    (1.18, 1.60, 0.60),   # 6  真 pin bar：跟踪 H@6(1.60)；low 0.60 突破 L@4
+    (1.15, 1.30, 0.90),   # 7
+    (1.12, 1.26, 0.92),   # 8
+    (1.05, 1.20, 0.94),   # 9  bear 翻转：确认 H@6，回搜含 B 播种 L@6 垂直腿
+]
+
+
+def test_search_mode_range_pin_spike_beyond_structure_kept():
+    """范围搜索 [A,B] 闭区间：回搜极值落在 A 本 bar（真 pin bar 尖峰）→ 保留，
+    与 A 形成同 bar 垂直腿（定稿语义）。"""
+    bars = _sm_bars(_PIN_SPEC)
+    core = ZigZagCore(**_SM_COND, search_mode="range")
+    _run(core, bars)
+    piv = core.pivots
+    assert [(p.direction, p.index) for p in piv] == [(1, 0), (-1, 4), (1, 6), (-1, 6)]
+    assert piv[2].price == pytest.approx(1.60) and piv[2].confirmed
+    assert piv[3].pending and piv[3].price == pytest.approx(0.60)
+
+
 def test_zz_line_vertical_bar_keeps_incoming_end():
     """v9.156 同 bar 垂直腿守卫：垂直对 (L@2,H@2) 之后末段前移为 (H@2,L@8)，
     ZZ_LINE@2 仍取入侧端点 L@2=0.70（真低触线），不被新末段插值起点 H@2=1.30
@@ -943,8 +1008,10 @@ def test_forming_tick_residual_absolute_sweep():
     场景：_SM_SPEC bars 0-10 收盘后 pivots=[L@3, H@4(pending,1.05)]；
     bar11 tick1 high=1.20 瞬移 pending→H@11(1.20)，改写 bars[3,11) 插值；
     bar11 close high=1.04/close=1.08 翻空：pending 不移动（H@4 确认），
-    固定回搜窗 [B=4, A=11] 最小低=bar4 0.85 → 同 bar 垂直腿 L@4 播种——
-    bars[5,11) 尾段 span=0 无值（None），tick1 插值残值应被清扫/回退清除。
+    v9.172 移除守卫后纯 [A=H@4, B=11] 回搜最低 Low=bar4 的 0.85 → 播种 L@4，
+    与 H@4 成同 bar 垂直腿（用户接受）——bars[5,11) 尾段外无值（None），
+    tick1 插值残值应被清扫/回退清除；bar4 的 ZZ_LINE/ZZ_HIGH 残值（tick1 瞬态
+    插值）应被绝对清扫覆盖回终值。
     """
     bars = _sm_bars()
     params = {**_SM_COND, "search_mode": "range"}
@@ -984,17 +1051,19 @@ def test_forming_tick_residual_absolute_sweep():
     assert engine[ts4]["ZZ_HIGH"] == pytest.approx(1.05), \
         f"bar4 ZZ_HIGH 残值未清扫: {engine[ts4]}"
 
-    # 验证：engine 中 bars 5-10 的 ZZ_LINE 全为 None（固定窗播种同 bar 垂直腿
-    # L@4，尾段 span=0 仅 bar4 有值）；tick1 瞬态插值残值不在这些 bar 冻结
+    # 验证：engine 中 bars 5-10 的 ZZ_LINE 全为 None（同 bar 垂直腿 H@4→L@4 止于 bar4）；
+    # tick1 瞬态插值残值不在这些 bar 冻结
     for i in range(5, 11):
         ts_i = int(bars[i]["timestamp"])
         assert engine[ts_i].get("ZZ_LINE") is None, \
             f"bar{i} ZZ_LINE 残值未清扫: {engine[ts_i]}"
 
-    # 验证：确认腿 L@3→H@4 端点 + 同 bar 垂直腿低点标记落地
+    # 验证：确认腿 L@3→H@4 端点 + 同 bar 垂直腿 H@4/L@4 落地（bar4 ZZ_LINE 被绝对
+    # 清扫覆盖回 1.05，清除 tick1 的 0.7625 残值；bar4 同时持有 H@4=1.05 与 L@4=0.85）
     assert engine[int(bars[3]["timestamp"])]["ZZ_LINE"] == pytest.approx(0.70)
     assert engine[ts4]["ZZ_LINE"] == pytest.approx(1.05)
     assert engine[ts4]["ZZ_LOW"] == pytest.approx(0.85)
+    assert engine[ts4]["ZZ_HIGH"] == pytest.approx(1.05)
 
     # 全量对比：engine 终态 vs 批量参考（bar11 用 tick2 值收盘）
     ref_bars = bars[:-1] + [tick2]
@@ -1015,3 +1084,70 @@ def test_forming_tick_residual_absolute_sweep():
                 assert actual is not None, f"bar{i} {fname}: engine=None, ref={expected}"
                 assert actual == pytest.approx(expected, rel=1e-9, abs=1e-9), \
                     f"bar{i} {fname}: engine={actual}, ref={expected}"
+
+
+# ════════════════════════════════════════════
+# v9.172：条件判定口径（仅收盘/近收盘）+ 坐标模式中间带
+# ════════════════════════════════════════════
+
+
+def test_condition_judged_only_on_closed_bar():
+    """v9.172：翻转条件仅在收盘 bar 判定——未收盘 bar 延续既有方向只跟踪极值、不翻转。"""
+    bars = _sm_bars()   # bars0-5 空头（close<1.1），bar6 close=1.12 多头
+    core = ZigZagCore(**_SM_COND)   # cond 模式
+    for b in bars[:6]:
+        core.update_bar(b, True)
+    # 建立空头态：pending L@3(0.70)
+    assert len(core.pivots) == 1 and core.pivots[-1].direction == -1
+    assert core.pivots[-1].index == 3 and core.pivots[-1].price == pytest.approx(0.70)
+
+    # bar6 以 forming 推送（未收盘）：条件不判定 → 不翻转，仍空头 pending
+    core.update_bar(bars[6], False)
+    assert len(core.pivots) == 1 and core.pivots[-1].direction == -1, \
+        "未收盘 bar 不应翻转"
+
+    # bar6 收盘：条件成立（close 1.12>1.1）→ 翻多，确认 L@3 + 播种 pending H
+    core.update_bar(bars[6], True)
+    assert len(core.pivots) == 2
+    assert core.pivots[0].direction == -1 and core.pivots[0].confirmed
+    assert core.pivots[1].direction == 1 and core.pivots[1].pending
+
+
+def test_near_close_forming_bar_evaluates_condition():
+    """v9.172：实时近收盘（near_close=True）的 forming bar 视同收盘评估条件 → 翻转生效。"""
+    bars = _sm_bars()
+    core = ZigZagCore(**_SM_COND)
+    for b in bars[:6]:
+        core.update_bar(b, True)
+    assert len(core.pivots) == 1   # 空头 pending L@3
+    # bar6 forming 但 near_close=True → 评估条件 → 翻多
+    core.update_bar(bars[6], False, near_close=True)
+    assert len(core.pivots) == 2
+    assert core.pivots[1].direction == 1 and core.pivots[1].pending
+
+
+# 坐标模式（bounded_0_100 指标）在后端等价于“带迟滞中间带的状态条件”：
+# bull=值≥hi、bear=值≤lo、中间带两者皆 False → _decide 返回 None → v9.173 用户定稿
+# 延续既有方向继续跟踪 pending 极值（ZLINE 同理，不翻转不冻结）。此处用价格尺度模拟。
+_BAND_COND = {"bull_cond": "close >= 1.20", "bear_cond": "close <= 0.80"}
+_BAND_SPEC = [
+    (1.30, 1.35, 1.25),   # 0 bull → 初始 pending H@0(1.35)
+    (1.25, 1.28, 1.20),   # 1 bull(≥1.20) → 跟踪，high 1.28<1.35 不更新
+    (1.00, 1.05, 0.95),   # 2 中间带 → 延续 bull 跟踪，high 1.05<1.35 不更新
+    (0.90, 0.95, 0.85),   # 3 中间带 → 延续 bull 跟踪，high 0.95<1.35 不更新
+    (1.10, 1.50, 1.05),   # 4 中间带（high 1.50 更高）→ 延续 bull 跟踪：pending 上移 H@4(1.50)
+    (0.75, 0.78, 0.70),   # 5 bear(≤0.80) → 翻转：确认 H@4(1.50)，播种 pending L@5(0.70)
+]
+
+
+def test_coordinate_band_continues_direction_tracks_extremum():
+    """v9.173：坐标中间带（lo<值<hi 两条件皆 False）延续既有方向继续跟踪 pending 极值
+    （ZLINE 同理，不翻转不冻结）——bar4 中间带 high 1.50 更高 → pending 上移 H@4，
+    bar5 空头成立翻转确认该 H@4(1.50)。（反转 v9.172 的中间带冻结语义。）"""
+    bars = _sm_bars(_BAND_SPEC)
+    core = ZigZagCore(**_BAND_COND)
+    _run(core, bars)
+    piv = core.pivots
+    assert [(p.direction, p.index) for p in piv] == [(1, 4), (-1, 5)]
+    assert piv[0].price == pytest.approx(1.50) and piv[0].confirmed  # 中间带延续多头 pending 上移
+    assert piv[1].pending and piv[1].price == pytest.approx(0.70)

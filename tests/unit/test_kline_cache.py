@@ -33,6 +33,9 @@ class FakeSource:
         rows = [b for b in self.data if end_time is None or b["timestamp"] <= end_time]
         return rows[-limit:]
 
+    def _track_prec(self, symbol, values):
+        pass   # 派生聚合末尾推精度（生产源在 MarketSource 基类实现），假源空实现即可
+
 
 @pytest.fixture(autouse=True)
 def _clean_cache():
@@ -267,6 +270,26 @@ def test_interval_ms_and_derived_gate():
     assert kc._interval_ms("4h", ths_like) is None
 
 
+def test_derived_populates_and_shares_base_cache():
+    """派生周期经缓存层时，基础 K 落入 kline_cache 并被后续请求零源复用（回归锁）
+
+    修复前 fetch_derived_klines 内部直连 source.fetch_klines 拉基础 K，不建
+    ("fake","S","1m") 缓存条目，致 K 线路由与每个指标预热各自冷拉一遍基础 K
+    （公网源经代理串行 → 派生周期指标 20s+ 突破前端 30s 超时不显示）。
+    修复后基础 K 经注入的 cached_klines 共享，20000 根 1m 拉一次即被多请求复用。
+    """
+    src = FakeSource([bar(i * 60_000) for i in range(300)])   # 300 根连续 1m（可聚 30 个 10m 桶）
+    out = run(kc.cached_klines(src, "S", "10m", 20))           # 派生档请求（K 线路由口径）
+    assert len(out) == 20 and all(b["timestamp"] % 600_000 == 0 for b in out)
+    # 基础 1m 已经注入的 cached_klines 落盘共享（修复前此条目不存在）
+    base = kc._cache.get(("fake", "S", "1m"))
+    assert base is not None and len(base.bars) == 300
+    # 后续对基础 1m 的请求命中共享存量：尾刷 TTL 内零新增源请求（证明基础 K 被复用）
+    n = len(src.calls)
+    out2 = run(kc.cached_klines(src, "S", "1m", 300))
+    assert len(out2) == 300 and len(src.calls) == n
+
+
 def test_subinterval_contaminants_dropped_on_merge():
     """v9.170 串周期污染防火墙：4H 序列混入 1H bar 合入时剔除，真 bar 全保留。
     基线带时区偏移（ts%4h≡1h，实测 MT5 形态）证明口径是间距而非网格对齐"""
@@ -307,3 +330,89 @@ def test_subinterval_filter_keeps_legit_gaps_and_majority_guard():
     dense = [bar(base + i * 3_600_000) for i in range(40)]   # 整页 1H：剔除将过半 → 原样返回
     assert kc._filter_subinterval(dense, H4) == dense
     assert kc._filter_subinterval(dense, None) == dense     # 派生档 interval_ms=None 不过滤
+
+
+# ─── 时区口径代次（MT5 会话中途校正服务器 UTC 偏移，同一时间戳落到两根不同真实时刻）───
+
+M1, SHIFT = 60_000, 3 * 3600 * 1000   # 1m 跨度 / 服务器 UTC+3 未校正时的 epoch 超前量（ms）
+
+
+class TzSource:
+    """带 tz_gen 代次的源：bars 按代次给不同数据集，模拟偏移校正前后同一时间戳换内容。
+
+    flip_after=N 时第 N 次 fetch 返回后递一代次（模拟请求处理中途探测生效）。
+    """
+    name = "tzfake"
+    supported_timeframes = {"1m", "1d"}
+
+    def __init__(self, bars_by_gen):
+        self.bars_by_gen = bars_by_gen
+        self.tz_gen = 0
+        self.calls: list[tuple] = []
+        self.flip_after = None
+
+    async def fetch_klines(self, symbol, timeframe, limit=200, end_time=None):
+        self.calls.append((limit, end_time))
+        if self.flip_after is not None and len(self.calls) == self.flip_after:
+            self.tz_gen += 1
+        rows = self.bars_by_gen.get(self.tz_gen, [])
+        rows = [b for b in rows if end_time is None or b["timestamp"] <= end_time]
+        return rows[-limit:]
+
+
+def _tz_data():
+    """gen0：未校正 epoch（墙钟口径）的 120 根 close=100；gen1：校正后同键区间的 60 根
+    close=200。两者键完全重叠（实证故障形态），代次护栏缺失时旧 60 根会与新 60 根交替共存"""
+    base = 1_760_000_000_000 - (1_760_000_000_000 % M1)
+    old = [bar(base + SHIFT + i * M1, 100.0) for i in range(120)]
+    new = [bar(base + SHIFT + i * M1, 200.0) for i in range(60)]
+    return old, new
+
+
+def test_tz_gen_change_drops_stale_epoch_bars():
+    """代次变化 → 旧口径整条作废重建，不得残留任何旧 epoch bar（按间隔判洞的自愈对此全盲）"""
+    old, new = _tz_data()
+    src = TzSource({0: old, 1: new})
+    out = run(kc.cached_klines(src, "S", "1m", 60))
+    assert all(b["close"] == 100.0 for b in out)      # 先按 gen0 建底
+    assert kc._entry(("tzfake", "S", "1m")).tz_gen == 0
+
+    src.tz_gen = 1
+    out2 = run(kc.cached_klines(src, "S", "1m", 120))
+    assert [b["close"] for b in out2] == [200.0] * 60   # 旧 120 根全部作废，只剩新口径
+    assert kc._entry(("tzfake", "S", "1m")).tz_gen == 1
+
+
+def test_tz_gen_shift_mid_request_restarts_once():
+    """请求中途代次变化：已合入 bar 混两种 epoch → 整条作废并重启一次取干净结果"""
+    old, new = _tz_data()
+    src = TzSource({0: old, 1: new})
+    src.flip_after = 1                                 # 首拉返回后才校正生效
+    out = run(kc.cached_klines(src, "S", "1m", 60))
+    assert len(src.calls) == 2                         # 污染请求被丢弃 + 重建
+    assert [b["close"] for b in out] == [200.0] * 60   # 不返混合结果
+
+
+def test_tz_gen_consecutive_shift_raises():
+    """二次仍变化（极端：连续夏令时抖动/配置错）不无限重启，上抛由各调用方兜底"""
+    _, new = _tz_data()
+    src = TzSource({})
+
+    async def _flip_every_call(symbol, timeframe, limit=200, end_time=None):
+        src.tz_gen += 1                       # 每次拉取都变代次 → 重启一次仍不收敛
+        return new
+
+    src.fetch_klines = _flip_every_call
+    with pytest.raises(kc._TzGenShiftError):
+        run(kc.cached_klines(src, "S", "1m", 60))
+
+
+def test_source_without_tz_gen_attr_unaffected():
+    """无偏移校正概念的源（币安/ths/测试桩）无 tz_gen 属性 → 恒代次 0，不触发任何作废"""
+    src = FakeSource([bar(i * M1) for i in range(100)])
+    assert not hasattr(src, "tz_gen")
+    out = run(kc.cached_klines(src, "S", "1m", 50))
+    assert len(out) == 50
+    assert kc._entry(("fake", "S", "1m")).tz_gen == 0
+    out2 = run(kc.cached_klines(src, "S", "1m", 50))
+    assert out2 == out

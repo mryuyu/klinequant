@@ -24,12 +24,22 @@ H1 确认并开启 pending L1（区间最低 Low），反之亦然；H/L 严格�
     tolerance    交叉/方向判定容差（抑制浮点抖动误判）
     time_window  时间窗修正根数（0 = 关闭）：严格条件未定时，窗内发生过
                  cross_type 交叉事件即认定翻转成立
-    search_mode  极值搜索方式：cond=条件搜索（leg 极值自条件成立 bar 起逐 bar
-                 增量跟踪，默认）/ range=范围搜索（用户定稿算法 v9.155：翻转
-                 bar=A、刚确认极值点=B，回搜窗恒为 [B, A] 取本方向极值播种，
-                 区间固定无需范围参数；含 B 本 bar 捕捉同 bar 反向尖峰，接受
-                 偶发同 bar 垂直腿；B 已有垂直腿时取次 bar 防往返堆叠；极值
-                 下标可早于条件成立 bar）；非法值归一为 cond
+    search_mode  极值搜索方式：cond=条件搜索（上一个极值点 A、条件成立 bar B，
+                 不回搜 A，B 成立即 A→B 连线、pending 自 B 起逐 bar 跟踪本方向极值，
+                 默认）/ range=范围搜索（用户定义：上一个极值点 A=刚确认枢轴、
+                 条件成立 bar B=翻转 bar，在 [A, B] 闭区间（含 A 含 B）搜一次本方向
+                 极值播种，极值允许落在 A 同 bar（同 bar 垂直腿合法）；A 已有垂直腿
+                 时下界取 A+1 防 L-H-L 三连针）；非法值归一为 cond
+    coord_x      坐标模式的坐标 x（前端构建器持久化用，1~99 整数，0=非坐标模式）：
+                 交叉模式开启「坐标」开关后，转折由单字段指标值(向下取整)与坐标阈值
+                 比较驱动，判据已折叠进 bull_cond/bear_cond 的比较阈值（多头 ≥
+                 max(51,x,100-x) / 空头 < min(50,min(x,100-x)+1)），核心层不直接读取
+
+条件判定口径（v9.172）：翻转条件仅在收盘 bar（is_closed）或实时近收盘 ≤3s 窗
+（引擎注入 _near_close）判定；未收盘 bar 延续既有方向只跟踪 pending 极值不判翻转。
+方向延续（v9.173）：反方向条件未成立的 bar（未收盘 / 坐标中间带 bull、bear 皆 False /
+交叉间隙 / 走平）延续既有方向继续跟踪 pending 极值，不翻转不冻结（ZLINE 同理，反转
+v9.172 坐标中间带冻结）；仅预热尚未定向时冻结等待。
 
 输出字段（sparse 稀疏语义，逐字段 null 透传）：
     ZZ_HIGH  极值高点（H 转折点所在 bar 输出价格，其余 null；plot:'scatter' 前端不建线）
@@ -97,6 +107,7 @@ class ZigZagIndicator(IndicatorBase):
             "tolerance": 0.0,
             "time_window": 0,
             "search_mode": "cond",
+            "coord_x": 0,
         }
 
     @property
@@ -169,7 +180,9 @@ class ZigZagIndicator(IndicatorBase):
         pre = self._core.raw_pivots
         pre_n = len(pre)
         pre_pend_idx = pre[-1].index if pre_n and pre[-1].pending else None
-        self._core.update_bar(bar, is_closed)
+        # near_close：引擎实时路径对“距收盘 ≤3s”的 forming bar 注入的标志，视同收盘评估条件
+        near_close = bool(bar.get("_near_close", False))
+        self._core.update_bar(bar, is_closed, near_close=near_close)
         flipped = pre_pend_idx is not None and len(self._core.raw_pivots) > pre_n
         self._rows.append({"timestamp": ts, "high": bar.get("high"), "low": bar.get("low")})
         idx = len(self._rows) - 1

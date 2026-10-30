@@ -9,6 +9,9 @@
       直至凑满或源尽头；补拉异常时保留已有数据退回（不标尽头，源恢复后可继续）。
     - LRU：条目上限 _MAX_ENTRIES，超限淘汰最久未用。
     - 并发：按键加锁，防同键并发深拉踩踏。
+    - 时区口径代次：源侧服务器时区偏移在会话中途校正（MT5 运行时探测）会让同一时间戳
+      落到两根不同真实时刻的 bar 上（网格连续、价格交替乱跳，按间隔判洞的自愈看不见）；
+      源以 tz_gen 标记口径变化，本层据其整条作废重建（无该属性的源恒视为代次 0）。
 进程重启即失效（设计如此，不落库）。
 """
 from __future__ import annotations
@@ -58,6 +61,20 @@ class _Entry:
     exhausted_at: float = 0.0                        # 尽头标记时刻(monotonic)，冷却过期可重试
     gap_attempts: dict = field(default_factory=dict)  # (a_ts,b_ts) -> monotonic，缺洞补拉冷却台账
     last_tail_at: float = 0.0                        # 上次尾刷时刻(monotonic)；TTL 内跳过重复尾刷
+    tz_gen: int = -1                                 # 入库时的源侧时区口径代次（-1=未初始化）
+
+
+class _TzGenShiftError(Exception):
+    """单次请求处理中途源侧时区口径代次变化：已合入的 bar 混有新旧两种 epoch，
+    不可对外返回 → 整条作废后由 cached_klines 重启一次请求重建。"""
+
+
+def _reset_entry(e: _Entry) -> None:
+    """整条作废：清 bar 与所有按旧 epoch 得出的判定（尽头/缺洞冷却台账）"""
+    e.bars = []
+    e.exhausted = False
+    e.exhausted_at = 0.0
+    e.gap_attempts.clear()
 
 
 _cache: OrderedDict[tuple, _Entry] = OrderedDict()
@@ -97,7 +114,12 @@ async def _fetch_page(source, symbol: str, tf: str, limit: int, end_time=None) -
     )
     native = getattr(source, "supported_timeframes", None) or NATIVE_TIMEFRAMES
     if tf not in native and tf != "1m" and parse_tf(tf) is not None:
-        return await fetch_derived_klines(source, symbol, tf, limit=limit, end_time=end_time)
+        # 基础 K 走本层缓存（注入 cached_klines 作 base_fetch）：与 REST 行情/指标预热
+        # 共享存量，避免每个派生请求都冷拉一遍基础 K（公网源经代理串行，冷拉极慢，
+        # 曾致派生周期指标各自 20s+ 冷拉基础 K 突破前端 30s 超时不显示）。
+        return await fetch_derived_klines(
+            source, symbol, tf, limit=limit, end_time=end_time, base_fetch=cached_klines
+        )
     return await source.fetch_klines(symbol, tf, limit=limit, end_time=end_time)
 
 
@@ -226,10 +248,46 @@ async def cached_klines(
     limit: int,
     end_time: int | None = None,
 ) -> list[dict]:
-    """带进程缓存的 K 线拉取（语义与源插件 fetch_klines 一致：返回 ≤end_time 的最新 limit 根）"""
+    """带进程缓存的 K 线拉取（语义与源插件 fetch_klines 一致：返回 ≤end_time 的最新 limit 根）
+
+    时区口径护栏：MT5 类源的 bar epoch 依赖运行时探测的服务器 UTC 偏移，偏移在会话中途
+    校正（首探被延后/夏令时切换）会让新旧两种口径的 bar 落到同一时间戳上——时间网格仍
+    连续、内容却是两个不同真实时刻的 OHLC，逐分钟交替表现为价格乱跳的「跳空」，而按间隔
+    判洞的中段自愈对此完全看不见。故代次变化即整条作废重建；本次请求中途变化的重启一次
+    取干净结果（探测已 TTL 退避不会连续变化，二次仍变化则向上抛由各调用方兜底）。
+    """
+    try:
+        return await _served_klines(source, symbol, timeframe, limit, end_time)
+    except _TzGenShiftError:
+        logger.warning(f"kline cache rebuilt on tz shift [{source.name}] {symbol}/{timeframe}")
+        return await _served_klines(source, symbol, timeframe, limit, end_time)
+
+
+async def _served_klines(
+    source,
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    end_time: int | None,
+) -> list[dict]:
+    """单次带缓存拉取（cached_klines 的实体，按键加锁）"""
     key = (source.name, symbol, timeframe)
     async with _lock(key):
         e = _entry(key)
+
+        # 口径代次校验：源侧偏移已变化 → 旧口径存量一律作废，本次按新口径重新建底与补拉
+        # （无偏移校正概念的源（币安/ths/测试桩）无 tz_gen 属性，恒 0 不触发）
+        gen = getattr(source, "tz_gen", 0)
+        if e.tz_gen != gen:
+            # tz_gen=-1 为未初始化哨兵（新建条目/外部直造条目）：只记代次不作废，
+            # 免把非本路径预置的 bars 误当污染清掉
+            if e.bars and e.tz_gen >= 0:
+                logger.warning(
+                    f"kline cache dropped {len(e.bars)} stale-tz bars "
+                    f"[{source.name}] {symbol}/{timeframe}: gen {e.tz_gen} -> {gen}"
+                )
+                _reset_entry(e)
+            e.tz_gen = gen
 
         # 窗口含最新端时做尾部小额刷新（未收盘 bar 不陈旧）；首拉空缓存也走此路顺带建底。
         # 注意：exhausted 只表示“无更早数据”，最新端仍会变，不受它影响。
@@ -303,6 +361,12 @@ async def cached_klines(
                 raise
             except Exception as ex:
                 logger.warning(f"gap repair skipped [{source.name}] {symbol}/{timeframe}: {ex}")
+
+        # 中途校正检测：本次请求的尾刷/前补/补拉在源侧触发了偏移探测，口径可能刚刚变化，
+        # 已合入的 bar 混有新旧 epoch → 整条作废并上抛，由 cached_klines 重启一次取干净结果
+        if getattr(source, "tz_gen", 0) != gen:
+            _reset_entry(e)
+            raise _TzGenShiftError(f"{source.name}/{symbol}/{timeframe}")
 
         # v9.170 串周期污染防火墙：尾刷/前补/补洞合入后统一收口剔除子间隔 bar
         # （顺带愈合存量污染缓存）

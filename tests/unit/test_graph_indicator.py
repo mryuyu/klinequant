@@ -165,10 +165,10 @@ def test_custom_indicator_fields_order_and_style_alignment():
     reg = get_registry()
     cycle_meta = reg.create("MR_Y_CYCLE", None).display_meta
     # fields = def 返回 dict 插入序；style 颜色按其位置对齐（顺序错位会致颜色旋转错配）
-    assert cycle_meta["fields"] == ["K_1X", "D_1X", "K_16X", "D_16X", "K_32X", "D_32X",
-                                    "K_64X", "D_64X", "K_256X", "D_256X", "K_1024X", "D_1024X"]
-    assert cycle_meta["style"][4]["color"] == "#d8a6d9"   # 32x K 色落在 32x 字段位
-    assert cycle_meta["style"][10]["color"] == "#e01b7a"   # 1024x K 色不被旋转错配
+    assert cycle_meta["fields"] == ["K_1X", "D_1X", "K_4X", "D_4X", "K_8X", "D_8X",
+                                    "K_16X", "D_16X", "K_64X", "D_64X", "K_256X", "D_256X"]
+    assert cycle_meta["style"][4]["color"] == "#d8a6d9"   # 8x K 色（原 32x）落在 8x 字段位
+    assert cycle_meta["style"][10]["color"] == "#e01b7a"  # 256x K 色（原 1024x）不被旋转错配
     assert "param_fields" not in cycle_meta   # 参数级显隐契约已废弃，不再下发
 
 

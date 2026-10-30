@@ -310,3 +310,36 @@ async def test_fetch_derived_intraday_limit_and_end_time():
     out2 = await fetch_derived_klines(src, "TEST", "10m", limit=10, end_time=t0 + 2_999_999)
     assert [b["timestamp"] for b in out2] == [t0, t0 + 600_000, t0 + 1_200_000,
                                               t0 + 1_800_000, t0 + 2_400_000]
+
+
+# ─── base_fetch 注入（缓存层共享基础 K 存量；缺省直连源插件） ───
+
+async def test_fetch_derived_uses_injected_base_fetch():
+    """注入 base_fetch 时基础 K 取数走注入器（生产为 cached_klines），不再直连源插件
+
+    回归锁：派生周期基础 K 必须可被缓存层接管，否则每个派生请求各自冷拉基础 K，
+    公网源经代理串行下 K 线路由 + 指标预热重复冷拉致指标突破前端 30s 超时不显示。
+    """
+    t0 = _bj_ms(2026, 10, 27)
+    mins = [_day(t0 + i * 60_000, 100 + i, 105 + i, 95 + i, 101 + i, 3) for i in range(25)]
+    src = _FakeSource(mins)
+    seen: list[tuple] = []
+
+    async def spy_base(source, symbol, base_tf, limit, end_time):
+        seen.append((source is src, symbol, base_tf, limit, end_time))
+        return await source.fetch_klines(symbol, base_tf, limit=limit, end_time=end_time)
+
+    out = await fetch_derived_klines(src, "TEST", "10m", limit=10, base_fetch=spy_base)
+    assert seen and all(s[0] for s in seen)          # 注入器被调用且透传 source
+    assert seen[0][2] == "1m"                        # 基础周期 = 1m（日内重采样）
+    assert [b["timestamp"] for b in out] == [t0, t0 + 600_000, t0 + 1_200_000]   # 聚合结果与直连一致
+
+
+async def test_fetch_derived_default_base_fetch_is_direct():
+    """缺省不注入 base_fetch 时直连源插件 fetch_klines（单测/无缓存上下文兜底路径）"""
+    t0 = _bj_ms(2026, 10, 27)
+    mins = [_day(t0 + i * 60_000, 1, 2, 0.5, 1.5, 1) for i in range(25)]
+    src = _FakeSource(mins)
+    out = await fetch_derived_klines(src, "TEST", "10m", limit=5)
+    assert src.calls and src.calls[0][1] == "1m"     # 直连源插件拉 1m 基础 K
+    assert len(out) == 3

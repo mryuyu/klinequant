@@ -335,3 +335,112 @@ async def test_paging_dt_to_restores_server_time(monkeypatch):
     # range 的 date_to = 真实 UTC + 偏移 = 服务器墙钟时间
     assert int(dt_to.timestamp()) == int(real_end_ms / 1000) + offset_s
 
+
+# ─── 偏移探测时序（实证故障：开机后整小时首探被静默跳过，期间 bar 以墙钟入库）───
+
+
+class _TickCountMt5(_FakeMt5):
+    """统计 symbol_info_tick 调用次数，验证 TTL 退避行为"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.tick_calls = 0
+
+    def symbol_info_tick(self, symbol):
+        self.tick_calls += 1
+        return self.tick
+
+
+class _FakeClock:
+    """可控 monotonic 时钟（默认模拟开机后的 Windows：小正值，非历史大值）"""
+
+    def __init__(self, t: float = 100.0):
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, s: float) -> None:
+        self.t += s
+
+
+async def test_first_offset_probe_not_suppressed_by_fresh_boot_clock(monkeypatch):
+    """根因回归：Windows 上 time.monotonic() 从系统开机计时，_offset_probed_at 曾用 0.0
+    哨兵 → 开机后首个 TTL 窗内 `now - 0.0 < 3600` 恒真，首探被静默跳过，整小时 bar
+    以服务器墙钟(+3h)入库，中途校正后新旧 epoch 同键碰撞→价格逐分钟交替乱跳。"""
+    import time as _t
+
+    from klinequant.gateway.market_sources import mt5_source as ms
+
+    clock = _FakeClock(100.0)                       # 开机后 100s，远小于 _OFFSET_PROBE_TTL
+    monkeypatch.setattr(ms.time, "monotonic", clock)
+    offset_s = 3 * 3600
+    drv = _TickCountMt5(tick={"bid": 1.15, "ask": 1.16, "time": int(_t.time()) + offset_s})
+    src = Mt5Source(driver=drv)
+    assert src._offset_probed_at == float("-inf")   # 哨兵不得为 0.0
+    assert src._server_offset_s is None
+
+    rows = [_row(int(_t.time()) + offset_s - (4 - i) * 60, 1.15) for i in range(5)]
+    drv.rows = rows
+    bars = await src.fetch_klines("EURUSD", "1m", limit=5)
+    assert drv.tick_calls == 1                      # 首拉必探测
+    assert src._server_offset_s == offset_s
+    assert bars[-1]["timestamp"] <= int(_t.time()) * 1000   # 已归一到真实 UTC，不再快 3h
+
+
+def test_offset_probe_failure_uses_short_retry_ttl(monkeypatch):
+    """一次探测失败（无 tick / delta 出合理窗）不得占用整个 1h 重探窗口：
+    按 _OFFSET_RETRY_TTL 短退避重试，否则未校正期间入库的全部 bar 都会被污染。"""
+    import time as _t
+
+    from klinequant.gateway.market_sources import mt5_source as ms
+
+    clock = _FakeClock(100.0)
+    monkeypatch.setattr(ms.time, "monotonic", clock)
+    stale_ts = int(_t.time()) - 48 * 3600           # 休市陈旧 tick → delta 出窗被拒
+    drv = _TickCountMt5(tick={"bid": 1.15, "ask": 1.16, "time": stale_ts})
+    src = Mt5Source(driver=drv)
+
+    src._ensure_server_offset("EURUSD")
+    assert drv.tick_calls == 1 and src._server_offset_s is None
+
+    clock.advance(5.0)                              # 退避未到：不重复探测（不拖慢每轮轮询）
+    src._ensure_server_offset("EURUSD")
+    assert drv.tick_calls == 1
+
+    drv.tick = {"bid": 1.15, "ask": 1.16, "time": int(_t.time()) + 3 * 3600}   # 开盘后新鲜 tick
+    clock.advance(ms._OFFSET_RETRY_TTL)             # 短退避到期→必须重试成功
+    src._ensure_server_offset("EURUSD")
+    assert drv.tick_calls == 2
+    assert src._server_offset_s == 3 * 3600
+    assert src.tz_gen == 1                          # 口径变化递代→ kline_cache 整条重建
+
+    clock.advance(ms._OFFSET_RETRY_TTL)             # 已校正成功→改按 1h 重探，不被频仍探测
+    src._ensure_server_offset("EURUSD")
+    assert drv.tick_calls == 2
+
+
+def test_tz_gen_bumps_only_when_offset_changes(monkeypatch):
+    """代次只在采纳与旧值不同的偏移时递增（同值重探不递代，免无谓重建缓存）：
+    模拟夏令时切换 +3h → +2h。"""
+    import time as _t
+
+    from klinequant.gateway.market_sources import mt5_source as ms
+
+    clock = _FakeClock(100.0)
+    monkeypatch.setattr(ms.time, "monotonic", clock)
+    drv = _TickCountMt5(tick={"bid": 1.15, "ask": 1.16, "time": int(_t.time()) + 3 * 3600})
+    src = Mt5Source(driver=drv)
+
+    src._ensure_server_offset("EURUSD")
+    assert (src._server_offset_s, src.tz_gen) == (3 * 3600, 1)
+
+    clock.advance(ms._OFFSET_PROBE_TTL)             # 同值重探：不递代
+    src._ensure_server_offset("EURUSD")
+    assert (src._server_offset_s, src.tz_gen) == (3 * 3600, 1)
+
+    drv.tick = {"bid": 1.15, "ask": 1.16, "time": int(_t.time()) + 2 * 3600}   # 夏令时结束
+    clock.advance(ms._OFFSET_PROBE_TTL)
+    src._ensure_server_offset("EURUSD")
+    assert (src._server_offset_s, src.tz_gen) == (2 * 3600, 2)
+

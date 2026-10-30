@@ -30,6 +30,12 @@ if not exist "%DIST%" (
   )
 )
 
+rem 启动前清理残留旧后端：占用/抢绑 :8000 的 webstack，或 start_all.ps1 的 uvicorn gateway 进程。
+rem 否则新实例抢不到 :8000，前端仍由旧代码服务（改了不生效）。按命令行精确匹配，不误伤无关 python。
+rem 注意：下面 powershell 内联命令须保持在顶层（勿移入 if/for 括号块，否则 ) 会提前闭合块）。
+echo [CLEAN] checking for stale KlineQuant backend on :8000 ...
+powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and ($_.CommandLine -like '*klinequant.webstack*' -or $_.CommandLine -like '*klinequant.gateway.app*') }; if ($p) { $p | ForEach-Object { Write-Host ('  killing stale PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force }; Start-Sleep -Milliseconds 600 } else { Write-Host '  none found' }"
+
 echo [START] KlineQuant dashboard + backtest on gateway :8000
 echo   index-live.html : http://127.0.0.1:8000/   (default)
 echo   Vue app      : http://127.0.0.1:8000/app/

@@ -1,21 +1,25 @@
 # ruff: noqa: E501, W291  # 底部 Pine 原版存档为逐字保留，豁免行长/尾随空格告警
 """Mister.Y cycle — 多倍数随机指标族（TradingView Pine v5 移植）
 
+倍数命名已顺移（相对旧版 MR_Y_CYCLE）：
+    16x→4x、32x→8x、64x→16x、256x→64x、1024x→256x（1x 组保持不变），
+    计算逻辑、参数默认值、颜色、字段输出顺序均与旧版一致。
+    旧版存档见 mr_y_cycle.py.bak。
 原版语义（Pine 见文件底部存档注释）：
-    6 组 Stochastics（1x/16x/32x/64x/256x/1024x），每组
+    6 组 Stochastics（1x/4x/8x/16x/64x/256x），每组
     k = ema(stoch(close,high,low,periodK), smoothK)、d = ema(k, periodD)；
     ta.stoch 手工组合：100*(close-rolling_min(low))/(rolling_max(high)-rolling_min(low))，
     分母为 0 时 polars 除法得 null，与 Pine 返回 na 语义一致。
-    细节保真：1x 组 smoothK 含 ×2 因子；32x 组周期直接用 bet_32x（不乘 n）。
+    细节保真：1x 组 smoothK 含 ×2 因子；8x 组（原 32x）周期直接用 bet_8x（不乘 n）。
 适配说明：
-    - show_1x / show_max 布尔开关移除，各线常显（1024x 组原版默认隐藏，迁移后常显）
+    - show_1x / show_max 布尔开关移除，各线常显（256x 组（原 1024x）原版默认隐藏，迁移后常显）
     - smooth_64x 参数与 show_16x 变量在原版为死代码（声明未用），丢弃
     - Pine 阶梯线（style_stepline）→ style.step=true，前端 primitive 自绘阶梯线还原
     - 带透明度颜色（#e01b7af6/#11cc0ef5/#c60eccf5、color.rgb(88,177,216,4)）
       契约只收 #RRGGBB，取实色
     - hline 的 linewidth 契约不支持，丢弃；线型保留（85/18 虚线，其余实线）
-    - Pine 原版 32x 组标题与 1x 重复（%K/%D），字段统一命名 K_32X/D_32X
-    - 字段输出顺序与 style 位置对齐（1x→16x→32x→64x→256x→1024x）；
+    - Pine 原版 32x 组标题与 1x 重复（%K/%D），字段统一命名 K_8X/D_8X
+    - 字段输出顺序与 style 位置对齐（1x→4x→8x→16x→64x→256x）；
       fields 取 def 返回 dict 插入序（dsl.py），顺序错位会致颜色映射旋转错配
 """
 from klinequant.core.indicator_engine.graph import (
@@ -35,20 +39,20 @@ def _stoch(close, high, low, period):
 
 @pyindicator(
     name="MR_Y_CYCLE", pane="sub", range="bounded_0_100",
-    desc="Mister.Y 多倍数随机指标族（1x/16x/32x/64x/256x/1024x 的 K/D）",
+    desc="Mister.Y 多倍数随机指标族（1x/4x/8x/16x/64x/256x 的 K/D）",
     style=[
         {"color": "#d5e29b", "step": True},   # K_1X
         {"color": "#d28732", "step": True},   # D_1X
-        {"color": "#0de8f3", "step": True},   # K_16X
-        {"color": "#0c53c5", "step": True},   # D_16X
-        {"color": "#d8a6d9", "step": True},   # K_32X
-        {"color": "#f10f1e", "step": True},   # D_32X
-        {"color": "#4ce11b", "step": True},   # K_64X
-        {"color": "#ffa500", "step": True},   # D_64X
-        {"color": "#aaa2c1", "step": True},   # K_256X
-        {"color": "#8a2be2", "step": True},   # D_256X
-        {"color": "#e01b7a", "step": True},   # K_1024X（Pine 原 #e01b7af6 取实色）
-        {"color": "#00ffff", "step": True},   # D_1024X
+        {"color": "#0de8f3", "step": True},   # K_4X（原 16x）
+        {"color": "#0c53c5", "step": True},   # D_4X（原 16x）
+        {"color": "#d8a6d9", "step": True},   # K_8X（原 32x）
+        {"color": "#f10f1e", "step": True},   # D_8X（原 32x）
+        {"color": "#4ce11b", "step": True},   # K_16X（原 64x）
+        {"color": "#ffa500", "step": True},   # D_16X（原 64x）
+        {"color": "#aaa2c1", "step": True},   # K_64X（原 256x）
+        {"color": "#8a2be2", "step": True},   # D_64X（原 256x）
+        {"color": "#e01b7a", "step": True},   # K_256X（原 1024x；Pine 原 #e01b7af6 取实色）
+        {"color": "#00ffff", "step": True},   # D_256X（原 1024x）
     ],
     price_lines=[
         {"price": 81, "color": "#ffff00", "line_style": 2},   # Highest（虚线）
@@ -63,23 +67,23 @@ def _stoch(close, high, low, period):
     ],
 )
 def mr_y_cycle(high, low, close, n1=1, n2=1, n3=1,
-               bet_1x=3, bet_16x=13, bet_32x=24, bet_64x=48,
-               bet_256x=192, bet_1024x=768):
+               bet_1x=3, bet_4x=12, bet_8x=24, bet_16x=48,
+               bet_64x=192, bet_256x=768):
     out = {}
     # 1x：smoothK 含 ×2 因子（原版 n2*bet_1x*2）
     k = ema(_stoch(close, high, low, n1 * bet_1x), n2 * bet_1x * 2)
     out["K_1X"] = k
     out["D_1X"] = ema(k, n3 * bet_1x)
-    # 16x：周期 = n × bet
-    k = ema(_stoch(close, high, low, n1 * bet_16x), n2 * bet_16x)
-    out["K_16X"] = k
-    out["D_16X"] = ema(k, n3 * bet_16x)
-    # 32x：周期直接用 bet_32x（原版不乘 n）；输出须插在 16x 与 64x 之间对齐 style
-    k = ema(_stoch(close, high, low, bet_32x), bet_32x)
-    out["K_32X"] = k
-    out["D_32X"] = ema(k, bet_32x)
-    # 64x / 256x / 1024x：周期 = n × bet
-    for bet, tag in ((bet_64x, "64X"), (bet_256x, "256X"), (bet_1024x, "1024X")):
+    # 4x（原 16x）：周期 = n × bet
+    k = ema(_stoch(close, high, low, n1 * bet_4x), n2 * bet_4x)
+    out["K_4X"] = k
+    out["D_4X"] = ema(k, n3 * bet_4x)
+    # 8x（原 32x）：周期直接用 bet_8x（原版不乘 n）；输出须插在 4x 与 16x 之间对齐 style
+    k = ema(_stoch(close, high, low, bet_8x), bet_8x)
+    out["K_8X"] = k
+    out["D_8X"] = ema(k, bet_8x)
+    # 16x（原 64x）/ 64x（原 256x）/ 256x（原 1024x）：周期 = n × bet
+    for bet, tag in ((bet_16x, "16X"), (bet_64x, "64X"), (bet_256x, "256X")):
         k = ema(_stoch(close, high, low, n1 * bet), n2 * bet)
         out[f"K_{tag}"] = k
         out[f"D_{tag}"] = ema(k, n3 * bet)
